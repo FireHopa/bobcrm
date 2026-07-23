@@ -1,0 +1,175 @@
+name: CRM CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install from lockfile
+        run: npm ci
+      - name: Scan repository for secrets
+        run: npm run security:scan
+      - name: Audit dependencies
+        run: npm run security:audit
+      - name: Run unit and wiring tests
+        run: npm test
+      - name: Build production assets
+        run: npm run build
+      - name: Validate Playwright discovery
+        run: npm run test:e2e:list
+      - name: Validate release allowlist
+        run: npm run release:check
+
+  mysql-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      MYSQL_TEST_HOST: 127.0.0.1
+      MYSQL_TEST_PORT: 3306
+      MYSQL_TEST_USER: root
+      MYSQL_TEST_PASSWORD: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: HTTP integration with disposable MySQL
+        run: npm run test:mysql
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      MYSQL_TEST_HOST: 127.0.0.1
+      MYSQL_TEST_PORT: 3306
+      MYSQL_TEST_USER: root
+      MYSQL_TEST_PASSWORD: ""
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ""
+      MYSQL_DATABASE: crm_phase6_e2e
+      SERVER_PORT: 3106
+      E2E_BASE_URL: http://127.0.0.1:3106
+      E2E_ADMIN_EMAIL: admin.phase6@example.test
+      E2E_ADMIN_PASSWORD: Phase6-Aa-${{ github.run_id }}!
+      CRM_ADMIN_EMAIL: admin.phase6@example.test
+      CRM_ADMIN_PASSWORD: Phase6-Aa-${{ github.run_id }}!
+      CRM_ADMIN_NAME: Administrador E2E
+      NODE_ENV: test
+      SESSION_COOKIE_SECURE: 0
+      SEARCH_INDEX_REBUILD_ON_START: 0
+      BACKUP_REQUIRE_EXTERNAL_STORAGE: 0
+      BACKUP_EXTERNAL_DIR: /tmp/crm-phase6-backups
+      JOB_ARTIFACT_DIR: /tmp/crm-phase6-jobs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - name: Generate ephemeral encryption key
+        run: echo "BACKUP_ENCRYPTION_KEY=$(node -e \"process.stdout.write(require('node:crypto').randomBytes(32).toString('base64'))\")" >> "$GITHUB_ENV"
+      - name: Prepare disposable database
+        run: node scripts/prepare-test-database.mjs
+      - name: Start CRM
+        run: |
+          npm start > /tmp/crm-phase6-server.log 2>&1 &
+          echo $! > /tmp/crm-phase6-server.pid
+          for attempt in $(seq 1 120); do
+            if curl --fail --silent http://127.0.0.1:3106/health/ready > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/crm-phase6-server.log
+          exit 1
+      - name: Run Playwright E2E
+        run: npm run test:e2e
+      - name: Upload Playwright report and server log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase6-playwright-report
+          path: |
+            playwright-report
+            test-results/playwright
+            /tmp/crm-phase6-server.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  load-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      MYSQL_TEST_HOST: 127.0.0.1
+      MYSQL_TEST_PORT: 3306
+      MYSQL_TEST_USER: root
+      MYSQL_TEST_PASSWORD: ""
+      RUN_LOAD_TEST: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Read and write load with at least 133 thousand leads
+        run: npm run test:load

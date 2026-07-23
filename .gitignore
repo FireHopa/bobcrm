@@ -1,0 +1,52 @@
+# Dependências e builds
+node_modules/
+dist/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+
+# Segredos e configurações locais
+.env
+.env.*
+!.env.example
+server/.env
+server/.env.*
+!server/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Bancos, backups e dados reais
+server/data/
+server/backups/
+*.sqlite
+*.sqlite3
+*.db
+*.bak
+*.dump
+
+# Logs e temporários
+*.log
+logs/
+coverage/
+.tmp/
+tmp/
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# Artefatos de release
+release/
+
+# Backups legados que compartilham pasta com o módulo de código
+server/backup/*.json
+server/backup/*.sqlite
+server/backup/*.sqlite3
+server/backup/*.cadbkp
+server/backup/*.tmp
+server/backup/*.partial

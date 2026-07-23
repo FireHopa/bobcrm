@@ -1,0 +1,530 @@
+/* Fase 5 · UX dos fluxos críticos, diálogos e responsividade */
+.crmDialogOverlayV5 {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  overflow: hidden;
+  background: rgba(7, 23, 47, 0.66);
+  backdrop-filter: blur(8px);
+}
+
+.crmDialog {
+  display: flex;
+  width: min(100%, 680px);
+  max-height: min(92dvh, 920px);
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 18px;
+  background: #ffffff;
+  color: var(--v37-text, #0f172a);
+  box-shadow: 0 34px 110px rgba(7, 23, 47, 0.42);
+}
+
+.crmDialog-small {
+  width: min(100%, 480px);
+}
+
+.crmDialog-large {
+  width: min(100%, 980px);
+}
+
+.crmDialog-danger {
+  border-top: 4px solid var(--v37-red, #dc2626);
+}
+
+.crmDialogHeader {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 20px 22px 17px;
+  border-bottom: 1px solid var(--v37-border, #e2e8f0);
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+
+.crmDialogHeader > div {
+  min-width: 0;
+}
+
+.crmDialogHeader h2 {
+  margin: 0;
+  color: var(--v37-text, #0f172a);
+  font-size: clamp(20px, 3vw, 26px);
+  line-height: 1.2;
+  letter-spacing: -0.025em;
+}
+
+.crmDialogHeader p {
+  margin: 6px 0 0;
+  color: var(--v37-secondary, #64748b);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.crmDialogClose {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  place-items: center;
+  border: 1px solid var(--v37-border, #e2e8f0);
+  border-radius: 10px;
+  background: #ffffff;
+  color: #475569;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.crmDialogClose:hover,
+.crmDialogClose:focus-visible {
+  border-color: rgba(0, 38, 255, 0.34);
+  background: #f4f7ff;
+  color: var(--v37-primary, #0026ff);
+  outline: none;
+}
+
+.crmDialogClose:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.crmDialogBody {
+  min-width: 0;
+  padding: 20px 22px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.crmDialogFooter {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 22px 18px;
+  border-top: 1px solid var(--v37-border, #e2e8f0);
+  background: rgba(255, 255, 255, 0.98);
+}
+
+.crmDialogFooter > button {
+  min-width: 120px;
+}
+
+.confirmationDialogCopy {
+  display: grid;
+  gap: 8px;
+}
+
+.confirmationDialogCopy > strong {
+  color: var(--v37-text, #0f172a);
+  font-size: 16px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.confirmationDialogCopy > p {
+  margin: 0;
+  color: var(--v37-secondary, #64748b);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.taskCompletionForm {
+  display: grid;
+  gap: 16px;
+}
+
+.taskCompletionForm .field > small {
+  color: var(--v37-secondary, #64748b);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.taskCompletionToggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 11px;
+  align-items: start;
+  padding: 13px 14px;
+  border: 1px solid var(--v37-border, #e2e8f0);
+  border-radius: 12px;
+  background: var(--v37-surface-soft, #f8fafc);
+  cursor: pointer;
+}
+
+.taskCompletionToggle input {
+  min-width: 18px;
+  min-height: 18px !important;
+  margin-top: 2px;
+}
+
+.taskCompletionToggle > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.taskCompletionToggle strong {
+  color: var(--v37-text, #0f172a);
+  font-size: 13px;
+}
+
+.taskCompletionToggle small {
+  color: var(--v37-secondary, #64748b);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.taskCompletionNextFields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 0.45fr);
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  background: #eff6ff;
+}
+
+.taskCompletionFullField {
+  grid-column: 1 / -1;
+}
+
+.formValidationSummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 13px;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.formValidationSummary strong {
+  font-size: 13px;
+}
+
+.formValidationSummary span {
+  font-size: 12px;
+}
+
+input[aria-invalid="true"],
+select[aria-invalid="true"],
+textarea[aria-invalid="true"] {
+  border-color: #dc2626 !important;
+  background: #fff7f7 !important;
+}
+
+.field > .fieldError {
+  display: block;
+  margin-top: 5px;
+  color: #b91c1c;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.kanbanModalDialogV5 .kanbanModalBody {
+  padding: 0;
+  overflow: visible;
+}
+
+.kanbanModalDialogV5 .kanbanModalFooter {
+  margin-right: 0;
+  margin-left: 0;
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.drawerActionButtonV5 {
+  min-height: 40px !important;
+}
+
+.leadDrawerFooter {
+  flex-wrap: wrap;
+}
+
+.leadDrawerFooter > * {
+  flex: 0 0 auto;
+}
+
+.leadDrawer,
+.crmDialog,
+.actionMenuPopover,
+.taskCardV42,
+.operationRoleGridV42,
+.taskComposerGridV42,
+.workspaceHeaderV37,
+.cockpitTopbarV37,
+.cockpitTopbarV37 > *,
+.leadFormV34,
+.leadFormTabPanelV34,
+.settingsWorkspaceV34,
+.opportunityWorkspace,
+.leadsWorkspace {
+  min-width: 0;
+}
+
+@media (max-width: 1024px) {
+  .workspaceHeaderV37 {
+    grid-template-columns: minmax(0, 1fr) !important;
+    align-items: start !important;
+  }
+
+  .workspaceStatsV32 {
+    width: 100%;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
+  .operationRoleGridV42 {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .crmDialogOverlayV5 {
+    place-items: end stretch;
+    padding: 0;
+  }
+
+  .crmDialog,
+  .crmDialog-small,
+  .crmDialog-large {
+    width: 100%;
+    max-height: 96dvh;
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 18px 18px 0 0;
+  }
+
+  .crmDialogHeader,
+  .crmDialogBody,
+  .crmDialogFooter {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .crmDialogFooter {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .crmDialogFooter > button {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .taskCompletionNextFields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .taskCompletionFullField {
+    grid-column: auto;
+  }
+
+  .cockpitTopbarV37 {
+    min-height: 0 !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    gap: 7px !important;
+    padding: 6px 8px !important;
+  }
+
+  .cockpitBrandV37 {
+    min-height: 34px;
+  }
+
+  .cockpitBrandLogoV34,
+  .cockpitBrandLogo {
+    width: 30px !important;
+    height: 30px !important;
+    flex-basis: 30px !important;
+  }
+
+  .cockpitBrandCopyV34 strong {
+    font-size: 13px !important;
+  }
+
+  .cockpitBrandCopyV34 span,
+  .cockpitStatusPillV37,
+  .userPillMeta span {
+    display: none !important;
+  }
+
+  .cockpitTopActions {
+    gap: 5px !important;
+  }
+
+  .cockpitUserPillV34 {
+    min-height: 34px !important;
+    padding: 2px 4px 2px 8px !important;
+  }
+
+  .userPillMeta strong {
+    max-width: 92px;
+    overflow: hidden;
+    font-size: 11px !important;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cockpitUserPillV34 .ghostButton {
+    min-height: 28px !important;
+    padding: 4px 7px !important;
+  }
+
+  .globalSearchFormV37 {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .globalSearchFormV37 input {
+    height: 36px !important;
+    min-height: 36px !important;
+    font-size: 12px !important;
+  }
+
+  .cockpitTabsV37 {
+    position: sticky;
+    top: 83px;
+    z-index: 45;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .cockpitTabsV37::-webkit-scrollbar {
+    display: none;
+  }
+
+  .cockpitTabsV37 .cockpitTab {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .workspaceHeaderV37 {
+    padding-top: 4px !important;
+  }
+
+  .workspaceHeaderV37 h1 {
+    font-size: 19px !important;
+  }
+
+  .workspaceHeaderV37 p {
+    font-size: 12px !important;
+  }
+
+  .operationStatsRailV42 {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .operationStatsRailV42 article:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .nextActionPanelV42 .sectionTitleRow,
+  .taskCardV42,
+  .taskCardActionsV42 {
+    align-items: stretch;
+  }
+
+  .taskCardV42 {
+    flex-direction: column;
+  }
+
+  .taskCardActionsV42 {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .taskCardActionsV42 button {
+    flex: 1 1 120px;
+  }
+
+  .leadDrawerFooter {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px !important;
+  }
+
+  .leadDrawerFooter > *,
+  .leadDrawerFooter button {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .formValidationSummary {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+}
+
+@media (max-width: 390px) {
+  .appShellV34,
+  .appShellV37 {
+    width: calc(100% - 12px) !important;
+  }
+
+  .cockpitTopbarV37 {
+    border-radius: 0 0 12px 12px !important;
+  }
+
+  .cockpitBrandCopyV34 span,
+  .userPillMeta,
+  .cockpitStatusPillV37 {
+    display: none !important;
+  }
+
+  .cockpitTopbarV37 {
+    grid-template-columns: auto minmax(0, 1fr) !important;
+  }
+
+  .cockpitTopActions {
+    justify-self: end;
+  }
+
+  .operationStatsRailV42 {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .operationStatsRailV42 article:last-child {
+    grid-column: auto;
+  }
+
+  .crmDialogFooter,
+  .leadDrawerFooter {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .crmDialogHeader {
+    padding-top: 16px;
+  }
+
+  .crmDialogBody {
+    padding-top: 16px;
+  }
+
+  .actionMenuPopover {
+    width: calc(100vw - 16px);
+  }
+}
+
+/* Otimização progressiva para listas extensas. Elementos fora da viewport
+   não bloqueiam a primeira pintura em navegadores compatíveis. */
+@supports (content-visibility: auto) {
+  .kanbanCardV40,
+  .opportunityOperationCardV38,
+  .taskCardV42 {
+    content-visibility: auto;
+    contain-intrinsic-size: 0 132px;
+  }
+}

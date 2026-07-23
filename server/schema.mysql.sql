@@ -1,0 +1,304 @@
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version VARCHAR(120) NOT NULL PRIMARY KEY,
+  description VARCHAR(255) NOT NULL DEFAULT '',
+  applied_at VARCHAR(40) NOT NULL DEFAULT ''
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS leads (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  name VARCHAR(255) NOT NULL DEFAULT '',
+  email VARCHAR(255) NOT NULL DEFAULT '',
+  email_key VARCHAR(255) NOT NULL DEFAULT '',
+  phone VARCHAR(80) NOT NULL DEFAULT '',
+  phone_key VARCHAR(80) NOT NULL DEFAULT '',
+  company VARCHAR(255) NOT NULL DEFAULT '',
+  name_company_key VARCHAR(512) NOT NULL DEFAULT '',
+  website VARCHAR(500) NOT NULL DEFAULT '',
+  advertises_on_meta TINYINT(1) NOT NULL DEFAULT 0,
+  advertises_on_google TINYINT(1) NOT NULL DEFAULT 0,
+  does_not_advertise TINYINT(1) NOT NULL DEFAULT 0,
+  last_contact_at VARCHAR(40) NOT NULL DEFAULT '',
+  contact_made_at VARCHAR(40) NOT NULL DEFAULT '',
+  next_contact_at VARCHAR(40) NOT NULL DEFAULT '',
+  expected_close_at VARCHAR(40) NOT NULL DEFAULT '',
+  estimated_budget VARCHAR(120) NOT NULL DEFAULT '',
+  is_lost TINYINT(1) NOT NULL DEFAULT 0,
+  lost_reason VARCHAR(120) NOT NULL DEFAULT '',
+  commercial_notes MEDIUMTEXT NULL,
+  status VARCHAR(80) NOT NULL DEFAULT 'Novo lead',
+  responsible VARCHAR(255) NOT NULL DEFAULT '',
+  responsible_user_id VARCHAR(64) NOT NULL DEFAULT '',
+  temperature VARCHAR(40) NOT NULL DEFAULT '',
+  pain MEDIUMTEXT NULL,
+  source VARCHAR(120) NOT NULL DEFAULT '',
+  service_interests JSON NULL,
+  service_status_map JSON NULL,
+  custom_fields JSON NULL,
+  search_text MEDIUMTEXT NULL,
+  created_at VARCHAR(40) NOT NULL DEFAULT '',
+  updated_at VARCHAR(40) NOT NULL DEFAULT '',
+  deleted_at VARCHAR(40) NOT NULL DEFAULT '',
+  deleted_by VARCHAR(64) NOT NULL DEFAULT '',
+  restored_at VARCHAR(40) NOT NULL DEFAULT '',
+  restored_by VARCHAR(64) NOT NULL DEFAULT '',
+  merged_into_lead_id VARCHAR(64) NOT NULL DEFAULT '',
+  pipeline_id VARCHAR(64) NOT NULL DEFAULT '',
+  pipeline_stage_id VARCHAR(64) NOT NULL DEFAULT '',
+  kanban_position DECIMAL(30,10) NOT NULL DEFAULT 0,
+  pipeline_entered_at VARCHAR(40) NOT NULL DEFAULT '',
+  INDEX idx_leads_updated_at (updated_at),
+  INDEX idx_leads_created_at (created_at),
+  INDEX idx_leads_status (status),
+  INDEX idx_leads_responsible (responsible),
+  INDEX idx_leads_responsible_user (deleted_at, responsible_user_id, updated_at),
+  INDEX idx_leads_email_key (email_key),
+  INDEX idx_leads_phone_key (phone_key),
+  INDEX idx_leads_name_company_key (name_company_key),
+  INDEX idx_leads_deleted_at (deleted_at),
+  INDEX idx_leads_active (deleted_at, is_lost, status),
+  INDEX idx_leads_priority (deleted_at, is_lost, status, temperature, advertises_on_google, advertises_on_meta),
+  INDEX idx_leads_search_email (deleted_at, email_key),
+  INDEX idx_leads_search_phone (deleted_at, phone_key),
+  INDEX idx_leads_pipeline_stage (deleted_at, pipeline_id, pipeline_stage_id, kanban_position),
+  INDEX idx_leads_merged_into (merged_into_lead_id, deleted_at),
+  INDEX idx_leads_expected_close (deleted_at, expected_close_at, responsible_user_id),
+  FULLTEXT INDEX ft_leads_search_text (search_text)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS users (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  name VARCHAR(255) NOT NULL DEFAULT '',
+  email VARCHAR(255) NOT NULL DEFAULT '',
+  role VARCHAR(40) NOT NULL DEFAULT 'consultor_vendas',
+  team_id VARCHAR(64) NOT NULL DEFAULT '',
+  lead_access_scope VARCHAR(20) NOT NULL DEFAULT 'own',
+  password_hash VARCHAR(255) NOT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at VARCHAR(40) NOT NULL DEFAULT '',
+  updated_at VARCHAR(40) NOT NULL DEFAULT '',
+  last_login_at VARCHAR(40) NOT NULL DEFAULT '',
+  UNIQUE KEY idx_users_email_unique (email),
+  INDEX idx_users_email (email),
+  INDEX idx_users_active (is_active),
+  INDEX idx_users_team (team_id, is_active),
+  INDEX idx_users_lead_scope (lead_access_scope, is_active)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE IF NOT EXISTS teams (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  name VARCHAR(160) NOT NULL DEFAULT '',
+  manager_user_id VARCHAR(64) NOT NULL DEFAULT '',
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at VARCHAR(40) NOT NULL DEFAULT '',
+  updated_at VARCHAR(40) NOT NULL DEFAULT '',
+  UNIQUE KEY idx_teams_name_unique (name),
+  INDEX idx_teams_active (is_active, name),
+  INDEX idx_teams_manager (manager_user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS sessions (
+  token VARCHAR(128) NOT NULL PRIMARY KEY,
+  token_format VARCHAR(20) NOT NULL DEFAULT 'sha256',
+  user_id VARCHAR(64) NOT NULL,
+  csrf_token_hash CHAR(64) NOT NULL DEFAULT '',
+  created_at VARCHAR(40) NOT NULL DEFAULT '',
+  expires_at VARCHAR(40) NOT NULL DEFAULT '',
+  INDEX idx_sessions_user_id (user_id),
+  INDEX idx_sessions_expires_at (expires_at),
+  INDEX idx_sessions_token_format (token_format),
+  CONSTRAINT fk_sessions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS rate_limits (
+  bucket_key VARCHAR(191) NOT NULL PRIMARY KEY,
+  request_count INT UNSIGNED NOT NULL DEFAULT 0,
+  reset_at BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  expires_at BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  updated_at BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  INDEX idx_rate_limits_expires (expires_at),
+  INDEX idx_rate_limits_updated (updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  entity_type VARCHAR(80) NOT NULL DEFAULT 'lead',
+  entity_id VARCHAR(128) NOT NULL DEFAULT '',
+  action VARCHAR(120) NOT NULL DEFAULT '',
+  actor_id VARCHAR(64) NOT NULL DEFAULT '',
+  actor_name VARCHAR(255) NOT NULL DEFAULT '',
+  changes_json JSON NULL,
+  summary MEDIUMTEXT NULL,
+  created_at VARCHAR(40) NOT NULL DEFAULT '',
+  INDEX idx_audit_created_at (created_at),
+  INDEX idx_audit_entity (entity_type, entity_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS lead_notes (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  lead_id VARCHAR(64) NOT NULL,
+  body MEDIUMTEXT NOT NULL,
+  created_by VARCHAR(64) NOT NULL DEFAULT '',
+  created_by_name VARCHAR(255) NOT NULL DEFAULT '',
+  created_at VARCHAR(40) NOT NULL DEFAULT '',
+  INDEX idx_lead_notes_lead (lead_id, created_at),
+  INDEX idx_lead_notes_author (created_by, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS tasks (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  type VARCHAR(40) NOT NULL DEFAULT 'follow_up',
+  title VARCHAR(180) NOT NULL DEFAULT '',
+  description MEDIUMTEXT NULL,
+  responsible_user_id VARCHAR(64) NOT NULL DEFAULT '',
+  responsible_name VARCHAR(255) NOT NULL DEFAULT '',
+  created_by VARCHAR(64) NOT NULL DEFAULT '',
+  created_by_name VARCHAR(255) NOT NULL DEFAULT '',
+  lead_id VARCHAR(64) NOT NULL DEFAULT '',
+  due_at VARCHAR(40) NOT NULL DEFAULT '',
+  priority VARCHAR(20) NOT NULL DEFAULT 'normal',
+  status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  result MEDIUMTEXT NULL,
+  completed_at VARCHAR(40) NOT NULL DEFAULT '',
+  completed_by VARCHAR(64) NOT NULL DEFAULT '',
+  next_task_id VARCHAR(64) NOT NULL DEFAULT '',
+  recurrence VARCHAR(80) NOT NULL DEFAULT '',
+  source VARCHAR(40) NOT NULL DEFAULT 'manual',
+  source_key VARCHAR(255) NULL,
+  created_at VARCHAR(40) NOT NULL DEFAULT '',
+  updated_at VARCHAR(40) NOT NULL DEFAULT '',
+  UNIQUE KEY idx_tasks_source_key_unique (source_key),
+  INDEX idx_tasks_responsible_due (responsible_user_id, status, due_at),
+  INDEX idx_tasks_lead (lead_id, status, due_at),
+  INDEX idx_tasks_status_due (status, due_at),
+  INDEX idx_tasks_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS backups (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  file_name VARCHAR(255) NOT NULL DEFAULT '',
+  file_path VARCHAR(1024) NOT NULL DEFAULT '',
+  type VARCHAR(40) NOT NULL DEFAULT 'manual',
+  storage_provider VARCHAR(40) NOT NULL DEFAULT 'legacy_local',
+  storage_key VARCHAR(1024) NOT NULL DEFAULT '',
+  status VARCHAR(40) NOT NULL DEFAULT 'legacy_unverified',
+  size_bytes BIGINT NOT NULL DEFAULT 0,
+  sha256 CHAR(64) NOT NULL DEFAULT '',
+  encryption VARCHAR(80) NOT NULL DEFAULT '',
+  compression VARCHAR(40) NOT NULL DEFAULT '',
+  format_version INT NOT NULL DEFAULT 0,
+  database_name VARCHAR(128) NOT NULL DEFAULT '',
+  created_by VARCHAR(64) NOT NULL DEFAULT '',
+  created_at VARCHAR(40) NOT NULL DEFAULT '',
+  verified_at VARCHAR(40) NOT NULL DEFAULT '',
+  verification_status VARCHAR(40) NOT NULL DEFAULT '',
+  retention_expires_at VARCHAR(40) NOT NULL DEFAULT '',
+  expired_at VARCHAR(40) NOT NULL DEFAULT '',
+  error_message VARCHAR(1000) NOT NULL DEFAULT '',
+  INDEX idx_backups_created_at (created_at),
+  INDEX idx_backups_status_created (status, created_at),
+  INDEX idx_backups_retention (expired_at, retention_expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE IF NOT EXISTS async_jobs (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  type VARCHAR(64) NOT NULL,
+  status VARCHAR(24) NOT NULL DEFAULT 'queued',
+  payload_json JSON NULL,
+  result_json JSON NULL,
+  progress_current BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  progress_total BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  progress_message VARCHAR(255) NOT NULL DEFAULT '',
+  attempts INT UNSIGNED NOT NULL DEFAULT 0,
+  max_attempts INT UNSIGNED NOT NULL DEFAULT 3,
+  run_after VARCHAR(40) NOT NULL DEFAULT '',
+  locked_by VARCHAR(191) NOT NULL DEFAULT '',
+  locked_at VARCHAR(40) NOT NULL DEFAULT '',
+  heartbeat_at VARCHAR(40) NOT NULL DEFAULT '',
+  created_by VARCHAR(64) NOT NULL DEFAULT '',
+  created_by_name VARCHAR(255) NOT NULL DEFAULT '',
+  created_at VARCHAR(40) NOT NULL DEFAULT '',
+  updated_at VARCHAR(40) NOT NULL DEFAULT '',
+  started_at VARCHAR(40) NOT NULL DEFAULT '',
+  completed_at VARCHAR(40) NOT NULL DEFAULT '',
+  failed_at VARCHAR(40) NOT NULL DEFAULT '',
+  expires_at VARCHAR(40) NOT NULL DEFAULT '',
+  payload_storage_key VARCHAR(1024) NOT NULL DEFAULT '',
+  artifact_storage_key VARCHAR(1024) NOT NULL DEFAULT '',
+  artifact_file_name VARCHAR(255) NOT NULL DEFAULT '',
+  artifact_content_type VARCHAR(160) NOT NULL DEFAULT '',
+  artifact_size_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  artifact_sha256 CHAR(64) NOT NULL DEFAULT '',
+  error_code VARCHAR(80) NOT NULL DEFAULT '',
+  error_message VARCHAR(1000) NOT NULL DEFAULT '',
+  dedupe_key VARCHAR(191) NULL,
+  UNIQUE KEY idx_async_jobs_dedupe (dedupe_key),
+  INDEX idx_async_jobs_claim (status, run_after, created_at),
+  INDEX idx_async_jobs_worker (status, heartbeat_at),
+  INDEX idx_async_jobs_creator (created_by, created_at),
+  INDEX idx_async_jobs_expiry (status, expires_at),
+  INDEX idx_async_jobs_type_status (type, status, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE IF NOT EXISTS kanban_pipelines (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  name VARCHAR(160) NOT NULL DEFAULT '',
+  is_default TINYINT(1) NOT NULL DEFAULT 0,
+  is_archived TINYINT(1) NOT NULL DEFAULT 0,
+  position INT NOT NULL DEFAULT 0,
+  created_by VARCHAR(64) NOT NULL DEFAULT '',
+  created_at VARCHAR(40) NOT NULL DEFAULT '',
+  updated_at VARCHAR(40) NOT NULL DEFAULT '',
+  INDEX idx_kanban_pipelines_active (is_archived, position),
+  INDEX idx_kanban_pipelines_default (is_default, is_archived)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS kanban_stages (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  pipeline_id VARCHAR(64) NOT NULL,
+  name VARCHAR(160) NOT NULL DEFAULT '',
+  color VARCHAR(20) NOT NULL DEFAULT '#64748B',
+  position INT NOT NULL DEFAULT 0,
+  stage_type VARCHAR(20) NOT NULL DEFAULT 'open',
+  status_key VARCHAR(80) NOT NULL DEFAULT '',
+  wip_limit INT NOT NULL DEFAULT 0,
+  is_archived TINYINT(1) NOT NULL DEFAULT 0,
+  created_at VARCHAR(40) NOT NULL DEFAULT '',
+  updated_at VARCHAR(40) NOT NULL DEFAULT '',
+  INDEX idx_kanban_stages_pipeline (pipeline_id, is_archived, position),
+  INDEX idx_kanban_stages_type (pipeline_id, stage_type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS integration_events (
+  event_key VARCHAR(255) NOT NULL PRIMARY KEY,
+  provider VARCHAR(40) NOT NULL DEFAULT 'zape',
+  tenant_id VARCHAR(120) NOT NULL DEFAULT '',
+  external_lead_id VARCHAR(120) NOT NULL DEFAULT '',
+  lead_id VARCHAR(64) NOT NULL DEFAULT '',
+  status VARCHAR(40) NOT NULL DEFAULT 'processing',
+  response_json JSON NULL,
+  created_at VARCHAR(40) NOT NULL DEFAULT '',
+  updated_at VARCHAR(40) NOT NULL DEFAULT '',
+  INDEX idx_integration_events_external (provider, tenant_id, external_lead_id),
+  INDEX idx_integration_events_lead (lead_id),
+  INDEX idx_integration_events_updated (updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS lead_external_origins (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  lead_id VARCHAR(64) NOT NULL,
+  provider VARCHAR(40) NOT NULL DEFAULT 'zape',
+  tenant_id VARCHAR(120) NOT NULL DEFAULT '',
+  webhook_id VARCHAR(120) NOT NULL DEFAULT '',
+  webhook_name VARCHAR(255) NOT NULL DEFAULT '',
+  source VARCHAR(120) NOT NULL DEFAULT 'WhatsApp',
+  first_seen_at VARCHAR(40) NOT NULL DEFAULT '',
+  last_seen_at VARCHAR(40) NOT NULL DEFAULT '',
+  occurrences INT NOT NULL DEFAULT 1,
+  metadata_json JSON NULL,
+  UNIQUE KEY idx_lead_external_origin_unique (lead_id, provider, tenant_id, webhook_id),
+  INDEX idx_lead_external_origin_lead (lead_id, last_seen_at),
+  INDEX idx_lead_external_origin_webhook (provider, tenant_id, webhook_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

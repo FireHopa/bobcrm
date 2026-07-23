@@ -1,0 +1,41 @@
+{
+  "files": [
+    ".gitignore",
+    ".npmrc",
+    ".github/workflows/ci.yml",
+    "index.html",
+    "package.json",
+    "package-lock.json",
+    "README.md",
+    "README_MYSQL.md",
+    "SETUP_WINDOWS.md",
+    "MIGRACAO_MYSQL.md",
+    "tsconfig.json",
+    "tsconfig.node.json",
+    "vite.config.ts",
+    "release.allowlist.json",
+    "server/.env.example",
+    "server/schema.mysql.sql",
+    "server/schema.sql",
+    "playwright.config.ts"
+  ],
+  "directories": {
+    "src": [
+      ".ts",
+      ".tsx",
+      ".css"
+    ],
+    "server": [
+      ".js",
+      ".sql"
+    ],
+    "scripts": [
+      ".mjs",
+      ".js",
+      ".ps1"
+    ],
+    "e2e": [
+      ".ts"
+    ]
+  }
+}
