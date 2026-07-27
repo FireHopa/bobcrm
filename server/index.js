@@ -5,6 +5,8 @@ import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import mysql from "mysql2/promise";
+import { createPerformanceMonitor } from "./performanceMetrics.js";
+import { createTtlCache } from "./runtimeCache.js";
 import { normalizeZapePayload, phoneKeyVariants, safeSecretEquals } from "./zapeIntegration.js";
 import {
   description as leadScopeMigrationDescription,
@@ -41,6 +43,12 @@ import {
   up as runAsyncJobsMigration,
   version as asyncJobsMigrationVersion,
 } from "./migrations/20260707_08_async_jobs.js";
+import {
+  description as commercialProfileMigrationDescription,
+  up as runCommercialProfileMigration,
+  version as commercialProfileMigrationVersion,
+} from "./migrations/20260723_09_commercial_profile_materialization.js";
+import { description as datetimeColumnsMigrationDescription, up as runDatetimeColumnsMigration, version as datetimeColumnsMigrationVersion } from "./migrations/20260724_10_parallel_datetime_columns.js";
 import {
   createEncryptedMysqlBackup,
   removeBackupArtifact,
@@ -85,13 +93,11 @@ import {
   buildHandoffTaskSourceKey,
   isClosedLead,
 } from "./operationalIntegrity.js";
-import { buildLeadSummarySql, mapLeadSummaryRow } from "./leadSummarySql.js";
+import { buildLeadDashboardSummarySql, mapLeadDashboardSummaryRow } from "./dashboardSummarySql.js";
 import {
   buildAdminLeadOverviewSql,
   buildOpportunityQuickFilterSql,
-  buildOpportunitySummarySql,
   mapAdminLeadOverviewRow,
-  mapOpportunitySummaryRow,
 } from "./opportunityRules.js";
 import {
   buildDuplicateGroupsCountSql,
@@ -165,9 +171,6 @@ import { writeCsvExport, writeXlsxExport } from "./leadExport.js";
 import { sendBufferResponse } from "./httpCompression.js";
 import { createStaticAssetsHandler } from "./http/staticAssets.js";
 import {
-  buildBooleanFullTextQuery,
-  buildLeadSearchText,
-  buildLeadSearchTextFromRow,
   customFieldLabels,
   leadToDbParams,
   normalizeEmailKey,
@@ -176,11 +179,37 @@ import {
   normalizeCustomFields,
   normalizeNameCompanyKey,
   normalizePhoneKey,
-  normalizeSearchText,
   nowIso,
   parseJsonValue,
   rowToLead,
 } from "./domains/leads/leadMapper.js";
+import {
+  LEAD_DUPLICATE_FIELDS,
+  LEAD_KANBAN_SELECT,
+  LEAD_SEARCH_INDEX_SELECT,
+  LEAD_TRASH_SELECT,
+  getLeadListProjection,
+  qualifyLeadFields,
+} from "./domains/leads/leadProjections.js";
+import { UPSERT_LEAD_SQL } from "./domains/leads/leadPersistenceSql.js";
+import {
+  addLeadToImportDuplicateIndex,
+  buildImportDuplicateLookup,
+  buildLeadBatchUpsert,
+  buildNewLeadFollowUpTaskInsert,
+  createImportDuplicateIndex,
+  findImportDuplicateLead,
+  getImportPrimaryKey,
+  persistImportLeadBatch,
+} from "./domains/leads/importBatch.js";
+import { buildLeadSearchPlan, chooseLeadSearchPlan } from "./domains/leads/leadSearchSql.js";
+import { buildLeadSearchIndexBatchUpdate } from "./domains/leads/leadSearchIndex.js";
+import { buildKanbanBoardMetadataSql, buildKanbanInitialCardsSql, buildKanbanPipelinesSql, buildKanbanStagePageSql } from "./kanbanBoardSql.js";
+import { COMMERCIAL_PROFILE_VERSION } from "./domains/leads/leadCommercialProfile.js";
+import { createCommercialProfileRuntime } from "./domains/leads/commercialProfileRuntime.js";
+import { createDateColumnRuntime, sqlDateColumn } from "./dateColumns.js";
+import { buildTodayTemporalSql } from "./todayTemporalSql.js";
+import { buildRoleReadiness, findMissingWorkerTables, getProcessRoleCapabilities, normalizeProcessRole, PROCESS_ROLES, REQUIRED_WORKER_TABLES } from "./runtimeRole.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -193,6 +222,10 @@ loadEnvFile(path.join(projectRoot, ".env"));
 loadEnvFile(path.join(__dirname, ".env"));
 
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
+const configuredProcessRole = String(process.env.PROCESS_ROLE || PROCESS_ROLES.COMBINED).trim().toLowerCase();
+const PROCESS_ROLE = normalizeProcessRole(configuredProcessRole);
+if (configuredProcessRole && configuredProcessRole !== PROCESS_ROLE) console.warn(`PROCESS_ROLE inválido (${configuredProcessRole}); usando ${PROCESS_ROLE}.`);
+const PROCESS_CAPABILITIES = getProcessRoleCapabilities(PROCESS_ROLE);
 const TRUST_PROXY_ENABLED = process.env.TRUST_PROXY === "1";
 
 function readBoundedEnvironmentInteger(name, fallback, min, max) {
@@ -226,7 +259,12 @@ const MAX_LEADS_PAGE_LIMIT = readBoundedEnvironmentInteger("MAX_LEADS_PAGE_LIMIT
 const DEFAULT_LEADS_PAGE_LIMIT = readBoundedEnvironmentInteger("DEFAULT_LEADS_PAGE_LIMIT", 150, 1, MAX_LEADS_PAGE_LIMIT);
 const MAX_LEADS_OFFSET = readBoundedEnvironmentInteger("MAX_LEADS_OFFSET", 10000, 1000, 100000);
 const LEAD_SUMMARY_CACHE_MS = readBoundedEnvironmentInteger("LEAD_SUMMARY_CACHE_MS", 15000, 1000, 300000);
+const METADATA_CACHE_MS = readBoundedEnvironmentInteger("METADATA_CACHE_MS", 30000, 1000, 300000);
+const FILTER_OPTIONS_CACHE_MS = readBoundedEnvironmentInteger("FILTER_OPTIONS_CACHE_MS", 15000, 1000, 120000);
+const COMMERCIAL_PROFILE_READINESS_CHECK_MS = readBoundedEnvironmentInteger("COMMERCIAL_PROFILE_READINESS_CHECK_MS", 30000, 5000, 300000);
+const DATETIME_COLUMNS_READINESS_CHECK_MS = readBoundedEnvironmentInteger("DATETIME_COLUMNS_READINESS_CHECK_MS", 30000, 5000, 300000);
 const SEARCH_INDEX_REBUILD_BATCH_SIZE = readBoundedEnvironmentInteger("SEARCH_INDEX_REBUILD_BATCH_SIZE", 750, 50, 5000);
+const IMPORT_DB_BATCH_SIZE = readBoundedEnvironmentInteger("IMPORT_DB_BATCH_SIZE", 500, 100, 1000);
 const SEARCH_INDEX_REBUILD_ON_START = process.env.SEARCH_INDEX_REBUILD_ON_START === "1";
 const ZAPE_INTEGRATION_KEY = String(process.env.ZAPE_INTEGRATION_KEY || "").trim();
 const INTEGRATION_MAX_BODY_BYTES = readBoundedEnvironmentInteger("INTEGRATION_MAX_BODY_BYTES", 512 * 1024, 16 * 1024, 2 * 1024 * 1024);
@@ -241,6 +279,11 @@ const JOB_POLL_INTERVAL_MS = readBoundedEnvironmentInteger("JOB_POLL_INTERVAL_MS
 const JOB_HEARTBEAT_INTERVAL_MS = readBoundedEnvironmentInteger("JOB_HEARTBEAT_INTERVAL_MS", 10000, 1000, 60000);
 const JOB_STALE_AFTER_MS = readBoundedEnvironmentInteger("JOB_STALE_AFTER_MS", 120000, 30000, 3600000);
 const JOB_CLEANUP_INTERVAL_MS = readBoundedEnvironmentInteger("JOB_CLEANUP_INTERVAL_MS", 15 * 60 * 1000, 60000, 24 * 60 * 60 * 1000);
+const MYSQL_POOL_CONNECTION_LIMIT = PROCESS_ROLE === PROCESS_ROLES.API
+  ? readBoundedEnvironmentInteger("MYSQL_API_CONNECTION_LIMIT", 8, 1, 100)
+  : PROCESS_ROLE === PROCESS_ROLES.WORKER
+    ? readBoundedEnvironmentInteger("MYSQL_WORKER_CONNECTION_LIMIT", 2, 1, 50)
+    : readBoundedEnvironmentInteger("MYSQL_CONNECTION_LIMIT", 10, 1, 100);
 const GRACEFUL_SHUTDOWN_TIMEOUT_MS = readBoundedEnvironmentInteger("GRACEFUL_SHUTDOWN_TIMEOUT_MS", 30000, 5000, 120000);
 const HTTP_REQUEST_TIMEOUT_MS = readBoundedEnvironmentInteger("HTTP_REQUEST_TIMEOUT_MS", 120000, 10000, 600000);
 const HTTP_HEADERS_TIMEOUT_MS = readBoundedEnvironmentInteger("HTTP_HEADERS_TIMEOUT_MS", 65000, 5000, 120000);
@@ -292,6 +335,8 @@ let httpServer = null;
 let jobWorker = null;
 let securityCleanupTimer = null;
 let jobCleanupTimer = null;
+let commercialProfileReadinessTimer = null;
+let datetimeColumnsReadinessTimer = null;
 let databaseReady = false;
 let isShuttingDown = false;
 let activeRequestCount = 0;
@@ -326,15 +371,18 @@ function requireDatabaseClient(client) {
   throw createDatabaseUnavailableError();
 }
 
-let leadSummaryCache = null;
-let leadSummaryCacheCreatedAt = 0;
-const scopedLeadSummaryCache = new Map();
-let opportunitySummaryCache = null;
-let opportunitySummaryCacheCreatedAt = 0;
-const scopedOpportunitySummaryCache = new Map();
+const leadDashboardSummaryCache = createTtlCache({ ttlMs: LEAD_SUMMARY_CACHE_MS, maxEntries: 100 });
+const metadataCache = createTtlCache({ ttlMs: METADATA_CACHE_MS, maxEntries: 250 });
+const filterOptionsCache = createTtlCache({ ttlMs: FILTER_OPTIONS_CACHE_MS, maxEntries: 100 });
 let leadSearchFullTextEnabled = false;
 let defaultKanbanCache = null;
-
+const performanceMonitor = createPerformanceMonitor();
+const commercialProfileRuntime = createCommercialProfileRuntime({
+  queryFirst: (sql, params, client) => statementFirstRow(sql, params, client),
+  execute: (sql, params, client) => execute(sql, params, client),
+  nowIso,
+});
+const dateColumnRuntime = createDateColumnRuntime({ queryFirst: (sql, params, client) => statementFirstRow(sql, params, client) });
 function loadEnvFile(filePath) {
   if (!existsSync(filePath)) return;
 
@@ -359,11 +407,7 @@ function sanitizeIdentifier(value) {
   return safe || "crm_casa_ads";
 }
 
-function escapeLikeTerm(value) {
-  return String(value || "").replace(/[\\%_]/g, "\\$&");
-}
-
-async function initializeDatabase() {
+async function initializeDatabase({ manageSchema = true } = {}) {
   databaseReady = false;
   const retryOptions = {
     maxAttempts: MYSQL_RETRY_ATTEMPTS,
@@ -379,23 +423,25 @@ async function initializeDatabase() {
     },
   };
 
-  const bootstrapPool = mysql.createPool(buildMysqlPoolOptions({
-    host: MYSQL_HOST,
-    port: MYSQL_PORT,
-    user: MYSQL_USER,
-    password: MYSQL_PASSWORD,
-    connectionLimit: 5,
-    connectTimeout: MYSQL_CONNECT_TIMEOUT_MS,
-    multipleStatements: true,
-  }));
+  if (manageSchema) {
+    const bootstrapPool = mysql.createPool(buildMysqlPoolOptions({
+      host: MYSQL_HOST,
+      port: MYSQL_PORT,
+      user: MYSQL_USER,
+      password: MYSQL_PASSWORD,
+      connectionLimit: 5,
+      connectTimeout: MYSQL_CONNECT_TIMEOUT_MS,
+      multipleStatements: true,
+    }));
 
-  try {
-    await withMysqlRetry(
-      () => bootstrapPool.query(`CREATE DATABASE IF NOT EXISTS \`${MYSQL_DATABASE}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`),
-      retryOptions,
-    );
-  } finally {
-    await bootstrapPool.end().catch(() => undefined);
+    try {
+      await withMysqlRetry(
+        () => bootstrapPool.query(`CREATE DATABASE IF NOT EXISTS \`${MYSQL_DATABASE}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`),
+        retryOptions,
+      );
+    } finally {
+      await bootstrapPool.end().catch(() => undefined);
+    }
   }
 
   pool = mysql.createPool(buildMysqlPoolOptions({
@@ -404,7 +450,7 @@ async function initializeDatabase() {
     user: MYSQL_USER,
     password: MYSQL_PASSWORD,
     database: MYSQL_DATABASE,
-    connectionLimit: Number(process.env.MYSQL_CONNECTION_LIMIT || 10),
+    connectionLimit: MYSQL_POOL_CONNECTION_LIMIT,
     connectTimeout: MYSQL_CONNECT_TIMEOUT_MS,
     multipleStatements: true,
   }));
@@ -415,11 +461,20 @@ async function initializeDatabase() {
       mkdir(backupSettings.storageRoot, { recursive: true }),
       ensureJobArtifactStorage(jobArtifactSettings.storageRoot),
     ]);
-    const schemaSql = await readFile(schemaFile, "utf8");
-    await pool.query(schemaSql);
-    await runSchemaMigrations();
-    await seedDefaultAdminUser();
-    await seedDefaultKanban();
+    if (manageSchema) {
+      const schemaSql = await readFile(schemaFile, "utf8");
+      await pool.query(schemaSql);
+      await runSchemaMigrations();
+      await seedDefaultAdminUser();
+      await seedDefaultKanban();
+      await commercialProfileRuntime.refreshReadiness({ logTransition: true });
+      await dateColumnRuntime.refreshReadiness({ logTransition: true });
+    } else {
+      const placeholders = REQUIRED_WORKER_TABLES.map(() => "?").join(", ");
+      const requiredTables = await queryRows(`SELECT TABLE_NAME AS table_name FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME IN (${placeholders})`, [MYSQL_DATABASE, ...REQUIRED_WORKER_TABLES]);
+      const missingTables = findMissingWorkerTables(requiredTables);
+      if (missingTables.length) throw Object.assign(new Error(`Worker aguardando schema da API. Tabelas ausentes: ${missingTables.join(", ")}.`), { code: "WORKER_SCHEMA_NOT_READY" });
+    }
     databaseReady = true;
   } catch (error) {
     databaseReady = false;
@@ -559,6 +614,15 @@ async function runSchemaMigrations() {
     () => runAsyncJobsMigration({ execute }),
   );
 
+  await runVersionedMigration(
+    commercialProfileMigrationVersion,
+    commercialProfileMigrationDescription,
+    () => runCommercialProfileMigration({ addColumnIfMissing, addIndexIfMissing }),
+  );
+
+  await runVersionedMigration(datetimeColumnsMigrationVersion, datetimeColumnsMigrationDescription,
+    () => runDatetimeColumnsMigration({ addColumnIfMissing, addIndexIfMissing, execute }));
+
   try {
     await addIndexIfMissing("leads", "ft_leads_search_text", "FULLTEXT INDEX ft_leads_search_text (search_text)");
     leadSearchFullTextEnabled = true;
@@ -671,27 +735,18 @@ async function seedDefaultKanban() {
 
 async function withTransaction(operation) {
   const activePool = requireDatabaseClient(pool);
-  const result = await withMysqlTransactionRetry(activePool, (client, transactionContext) => operation(client, transactionContext), {
-    maxAttempts: MYSQL_TRANSACTION_RETRY_ATTEMPTS,
-    baseDelayMs: MYSQL_RETRY_BASE_DELAY_MS,
-    maxDelayMs: MYSQL_RETRY_MAX_DELAY_MS,
+  return withMysqlTransactionRetry(activePool, (client, transactionContext) => operation(client, transactionContext), {
+    maxAttempts: MYSQL_TRANSACTION_RETRY_ATTEMPTS, baseDelayMs: MYSQL_RETRY_BASE_DELAY_MS, maxDelayMs: MYSQL_RETRY_MAX_DELAY_MS,
     signal: shutdownController.signal,
     onRetry: ({ nextAttempt, delayMs, error }) => {
-      if (isShuttingDown) return;
-      console.warn("Transação MySQL refeita após falha transitória segura.", {
-        nextAttempt,
-        delayMs,
-        code: error?.code || "MYSQL_TRANSACTION_RETRY",
-      });
+      if (!isShuttingDown) console.warn("Transação MySQL refeita após falha transitória segura.", { nextAttempt, delayMs, code: error?.code || "MYSQL_TRANSACTION_RETRY" });
     },
   });
-  invalidateLeadSummaryCache();
-  return result;
 }
 
 async function execute(sql, params = [], client = null) {
   const activeClient = requireDatabaseClient(client || pool);
-  const [result] = await activeClient.execute(sql, params);
+  const [result] = await performanceMonitor.measureSql(sql, () => activeClient.execute(sql, params));
   return result;
 }
 
@@ -699,7 +754,7 @@ async function queryRows(sql, params = [], client = null) {
   const usingPool = !client || client === pool;
   const activeClient = requireDatabaseClient(client || pool);
   const run = async () => {
-    const [rows] = await activeClient.execute(sql, params);
+    const [rows] = await performanceMonitor.measureSql(sql, () => activeClient.execute(sql, params));
     return Array.isArray(rows) ? rows : [];
   };
 
@@ -804,57 +859,6 @@ async function sendFileDownload(response, filePath, fileName, contentType, extra
   });
 }
 
-const upsertSql = `
-  INSERT INTO leads (
-    id, name, email, email_key, phone, phone_key, company, name_company_key, website,
-    advertises_on_meta, advertises_on_google, does_not_advertise,
-    last_contact_at, contact_made_at, next_contact_at, expected_close_at, estimated_budget,
-    is_lost, lost_reason, commercial_notes, status, responsible, responsible_user_id, temperature,
-    pain, source, service_interests, service_status_map, custom_fields, search_text, created_at, updated_at,
-    deleted_at, deleted_by, restored_at, restored_by,
-    pipeline_id, pipeline_stage_id, kanban_position, pipeline_entered_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  ON DUPLICATE KEY UPDATE
-    name = VALUES(name),
-    email = VALUES(email),
-    email_key = VALUES(email_key),
-    phone = VALUES(phone),
-    phone_key = VALUES(phone_key),
-    company = VALUES(company),
-    name_company_key = VALUES(name_company_key),
-    website = VALUES(website),
-    advertises_on_meta = VALUES(advertises_on_meta),
-    advertises_on_google = VALUES(advertises_on_google),
-    does_not_advertise = VALUES(does_not_advertise),
-    last_contact_at = VALUES(last_contact_at),
-    contact_made_at = VALUES(contact_made_at),
-    next_contact_at = VALUES(next_contact_at),
-    expected_close_at = VALUES(expected_close_at),
-    estimated_budget = VALUES(estimated_budget),
-    is_lost = VALUES(is_lost),
-    lost_reason = VALUES(lost_reason),
-    commercial_notes = VALUES(commercial_notes),
-    status = VALUES(status),
-    responsible = VALUES(responsible),
-    responsible_user_id = VALUES(responsible_user_id),
-    temperature = VALUES(temperature),
-    pain = VALUES(pain),
-    source = VALUES(source),
-    service_interests = VALUES(service_interests),
-    service_status_map = VALUES(service_status_map),
-    custom_fields = VALUES(custom_fields),
-    search_text = VALUES(search_text),
-    deleted_at = '',
-    deleted_by = '',
-    restored_at = '',
-    restored_by = '',
-    pipeline_id = VALUES(pipeline_id),
-    pipeline_stage_id = VALUES(pipeline_stage_id),
-    kanban_position = VALUES(kanban_position),
-    pipeline_entered_at = VALUES(pipeline_entered_at),
-    updated_at = VALUES(updated_at)
-`;
-
 async function readRequestBody(request, maxBytes = MAX_BODY_BYTES) {
   const chunks = [];
   let totalBytes = 0;
@@ -892,26 +896,28 @@ function isActiveWhere(alias = "") {
   return `${prefix}deleted_at = '' AND ${prefix}is_lost = 0 AND ${prefix}status != 'Perdido' AND ${prefix}status != 'Fechado'`;
 }
 
+function invalidateDirectoryCaches() {
+  metadataCache.deletePrefix("team-members:");
+  metadataCache.deletePrefix("teams:");
+  metadataCache.deletePrefix("users:");
+  leadDashboardSummaryCache.deletePrefix("team:");
+  filterOptionsCache.clear();
+}
+
+function invalidateKanbanCountsCache() { metadataCache.deletePrefix("kanban-pipelines:"); }
+function invalidateKanbanMetadataCache() { defaultKanbanCache = null; invalidateKanbanCountsCache(); }
+
 async function getLeadAccessContext(user, client = pool) {
   const leadAccessScope = getFixedLeadAccessScopeForRole(user?.role);
   const scopedUser = { ...user, leadAccessScope };
   let teamMembers = [];
-
   if (leadAccessScope === "team" && user?.teamId) {
-    const rows = await queryRows(
-      "SELECT * FROM users WHERE team_id = ? AND is_active = 1 ORDER BY name ASC",
-      [user.teamId],
-      client,
-    );
-    teamMembers = rows.map((row) => rowToUser(row));
+    teamMembers = await metadataCache.getOrLoad(`team-members:${user.teamId}`, async () => {
+      const rows = await queryRows("SELECT * FROM users WHERE team_id = ? AND is_active = 1 ORDER BY name ASC", [user.teamId], client);
+      return rows.map((row) => rowToUser(row));
+    });
   }
-
-  return {
-    user: scopedUser,
-    teamMembers,
-    accessSql: buildLeadAccessSql(scopedUser, teamMembers),
-    scope: describeLeadScope(scopedUser, teamMembers),
-  };
+  return { user: scopedUser, teamMembers, accessSql: buildLeadAccessSql(scopedUser, teamMembers), scope: describeLeadScope(scopedUser, teamMembers) };
 }
 
 function addLeadAccessClause(whereParts, params, accessContext, alias = "") {
@@ -940,81 +946,52 @@ async function assertLeadAccess(user, leadId, options = {}, client = pool) {
   return accessContext;
 }
 
-async function getLeadSummary(query = {}, client = pool) {
+async function getLeadDashboardSummary(query = {}, client = pool) {
   const where = query.where || "1 = 1";
   const params = query.params || [];
+  const alias = query.alias || "";
   const row = await statementFirstRow(
-    buildLeadSummarySql({ where, activeWhere: isActiveWhere() }),
+    buildLeadDashboardSummarySql({
+      where,
+      activeWhere: isActiveWhere(alias),
+      alias,
+      useMaterialized: commercialProfileRuntime.isReady(),
+      useDateColumns: dateColumnRuntime.isReady(),
+    }),
     params,
     client,
   );
 
-  return mapLeadSummaryRow(row);
+  return mapLeadDashboardSummaryRow(row);
 }
 
-function invalidateLeadSummaryCache() {
-  leadSummaryCache = null;
-  leadSummaryCacheCreatedAt = 0;
-  scopedLeadSummaryCache.clear();
-  opportunitySummaryCache = null;
-  opportunitySummaryCacheCreatedAt = 0;
-  scopedOpportunitySummaryCache.clear();
+function leadDashboardCacheKey(accessContextOrUser) {
+  const user = accessContextOrUser?.user || accessContextOrUser;
+  const scope = accessContextOrUser?.scope?.scope || (user ? getFixedLeadAccessScopeForRole(user.role) : "all");
+  if (scope === "team") return `team:${user?.teamId || "none"}`;
+  if (scope === "own") return `own:${user?.id || "none"}`;
+  if (scope === "none") return `none:${user?.id || "none"}`;
+  return "all";
+}
+
+function invalidateLeadSummaryCache(accessContext = null) {
+  leadDashboardSummaryCache.deleteKey("all");
+  if (accessContext) leadDashboardSummaryCache.deleteKey(leadDashboardCacheKey(accessContext));
+  filterOptionsCache.deleteKey(accessContext ? `owners:${leadDashboardCacheKey(accessContext)}` : "owners:all");
+}
+
+async function getLeadDashboardSummaryCached(options = {}) {
+  const { force = false, accessContext, client = pool } = options;
+  const query = accessContext ? { where: accessContext.accessSql.clause, params: accessContext.accessSql.params } : {};
+  return leadDashboardSummaryCache.getOrLoad(leadDashboardCacheKey(accessContext), () => getLeadDashboardSummary(query, client), { force });
 }
 
 async function getLeadSummaryCached(options = {}) {
-  const { force = false, accessContext = null, client = pool } = options;
-  const now = Date.now();
-
-  if (!accessContext || accessContext.scope.scope === "all") {
-    if (!force && leadSummaryCache && now - leadSummaryCacheCreatedAt < LEAD_SUMMARY_CACHE_MS) return leadSummaryCache;
-    const query = accessContext ? { where: accessContext.accessSql.clause, params: accessContext.accessSql.params } : {};
-    leadSummaryCache = await getLeadSummary(query, client);
-    leadSummaryCacheCreatedAt = now;
-    return leadSummaryCache;
-  }
-
-  const cacheKey = `${accessContext.user.id}:${accessContext.scope.scope}:${accessContext.user.teamId || ""}`;
-  const cached = scopedLeadSummaryCache.get(cacheKey);
-  if (!force && cached && now - cached.createdAt < LEAD_SUMMARY_CACHE_MS) return cached.value;
-
-  const value = await getLeadSummary({ where: accessContext.accessSql.clause, params: accessContext.accessSql.params }, client);
-  scopedLeadSummaryCache.set(cacheKey, { value, createdAt: now });
-  return value;
-}
-
-function buildAliasedLeadAccess(accessContext, alias = "l") {
-  return buildLeadAccessSql(accessContext.user, accessContext.teamMembers, alias);
-}
-
-async function getOpportunitySummary(query = {}, client = pool) {
-  const where = query.where || "l.deleted_at = ''";
-  const params = query.params || [];
-  const row = await statementFirstRow(buildOpportunitySummarySql({ where, alias: "l" }), params, client);
-  return mapOpportunitySummaryRow(row);
+  return (await getLeadDashboardSummaryCached(options)).summary;
 }
 
 async function getOpportunitySummaryCached(options = {}) {
-  const { force = false, accessContext, client = pool } = options;
-  const now = Date.now();
-  const accessSql = buildAliasedLeadAccess(accessContext, "l");
-  const query = {
-    where: `l.deleted_at = '' AND ${accessSql.clause}`,
-    params: accessSql.params,
-  };
-
-  if (accessContext.scope.scope === "all") {
-    if (!force && opportunitySummaryCache && now - opportunitySummaryCacheCreatedAt < LEAD_SUMMARY_CACHE_MS) return opportunitySummaryCache;
-    opportunitySummaryCache = await getOpportunitySummary(query, client);
-    opportunitySummaryCacheCreatedAt = now;
-    return opportunitySummaryCache;
-  }
-
-  const cacheKey = `${accessContext.user.id}:${accessContext.scope.scope}:${accessContext.user.teamId || ""}`;
-  const cached = scopedOpportunitySummaryCache.get(cacheKey);
-  if (!force && cached && now - cached.createdAt < LEAD_SUMMARY_CACHE_MS) return cached.value;
-  const value = await getOpportunitySummary(query, client);
-  scopedOpportunitySummaryCache.set(cacheKey, { value, createdAt: now });
-  return value;
+  return (await getLeadDashboardSummaryCached(options)).opportunitySummary;
 }
 
 function repeatSqlParams(params, times) {
@@ -1031,16 +1008,17 @@ async function getDuplicateGroupCount(accessContext, client = pool) {
   ) || 0);
 }
 
-async function getAdminLeadOverview(accessContext, client = pool) {
+async function getAdminLeadOverview(accessContext, client = pool, options = {}) {
   const accessSql = buildAliasedLeadAccess(accessContext, "l");
   const where = `l.deleted_at = '' AND ${accessSql.clause}`;
   const row = await statementFirstRow(
-    buildAdminLeadOverviewSql({ where, alias: "l" }),
+    buildAdminLeadOverviewSql({ where, alias: "l", useMaterialized: commercialProfileRuntime.isReady() }),
     accessSql.params,
     client,
   );
   const overview = mapAdminLeadOverviewRow(row);
-  const duplicateGroups = await getDuplicateGroupCount(accessContext, client);
+  const includeDuplicates = options.includeDuplicates !== false;
+  const duplicateGroups = includeDuplicates ? await getDuplicateGroupCount(accessContext, client) : 0;
   return {
     ...overview,
     duplicateGroups,
@@ -1065,7 +1043,12 @@ async function getDuplicateGroupsPage(accessContext, options = {}, client = pool
     [...repeatedAccessParams, limit, offset],
     client,
   );
-  const lookup = buildDuplicateLeadLookup({ groups: groupRows, where, alias: "l" });
+  const lookup = buildDuplicateLeadLookup({
+    groups: groupRows,
+    where,
+    alias: "l",
+    select: qualifyLeadFields(LEAD_DUPLICATE_FIELDS, "l"),
+  });
   const maxLeadRows = 2000;
   const leadRows = lookup.sql
     ? await queryRows(`${lookup.sql} LIMIT ?`, [...accessSql.params, ...lookup.params, maxLeadRows], client)
@@ -1087,57 +1070,19 @@ async function getDuplicateGroupsPage(accessContext, options = {}, client = pool
   };
 }
 
-function addLeadSearchClause(whereParts, params, search) {
-  const rawTerm = String(search || "").trim();
-  if (!rawTerm) return;
+async function resolveLeadSearchClause({ search, baseWhere, baseParams, alias = "", client = pool }) {
+  const plan = buildLeadSearchPlan(search, { alias, fullTextEnabled: leadSearchFullTextEnabled });
+  if (!plan || plan.mode === "none") return null;
+  if (!plan.primary || !plan.requiresProbe) return chooseLeadSearchPlan(plan, false);
 
-  const normalizedTerm = normalizeSearchText(rawTerm);
-  const likeTerm = `%${escapeLikeTerm(normalizedTerm || rawTerm.toLowerCase())}%`;
-  const emailTerm = normalizeEmailKey(rawTerm);
-  const phoneTerm = normalizePhoneKey(rawTerm);
-  const fullTextQuery = buildBooleanFullTextQuery(rawTerm);
-  const clauses = [];
-
-  if (leadSearchFullTextEnabled && fullTextQuery) {
-    clauses.push("MATCH(search_text) AGAINST (? IN BOOLEAN MODE)");
-    params.push(fullTextQuery);
-  }
-
-  if (phoneTerm.length >= 3) {
-    clauses.push("phone_key LIKE ?");
-    params.push(`%${phoneTerm}%`);
-  }
-
-  if (emailTerm.includes("@") || emailTerm.includes(".")) {
-    clauses.push("email_key LIKE ?");
-    params.push(`%${escapeLikeTerm(emailTerm)}%`);
-  }
-
-  clauses.push("LOWER(COALESCE(search_text, '')) LIKE ? ESCAPE '\\\\'");
-  params.push(likeTerm);
-
-  const fallbackColumns = [
-    "name",
-    "email",
-    "phone",
-    "company",
-    "website",
-    "source",
-    "estimated_budget",
-    "status",
-    "responsible",
-    "temperature",
-    "pain",
-    "lost_reason",
-    "commercial_notes",
-    "CAST(custom_fields AS CHAR)",
-    "CAST(service_status_map AS CHAR)",
-  ];
-
-  clauses.push(`(${fallbackColumns.map((column) => `LOWER(COALESCE(${column}, '')) LIKE ? ESCAPE '\\\\'`).join(" OR ")})`);
-  fallbackColumns.forEach(() => params.push(`%${escapeLikeTerm(rawTerm.toLowerCase())}%`));
-
-  whereParts.push(`(${clauses.join(" OR ")})`);
+  const tableAlias = String(alias || "").replace(/[^a-zA-Z0-9_]/g, "");
+  const fromClause = tableAlias ? `leads ${tableAlias}` : "leads";
+  const primaryHasMatches = Boolean(await scalar(
+    `SELECT 1 AS found FROM ${fromClause} WHERE ${baseWhere} AND ${plan.primary.clause} LIMIT 1`,
+    [...baseParams, ...plan.primary.params],
+    client,
+  ));
+  return chooseLeadSearchPlan(plan, primaryHasMatches);
 }
 
 function addLeadQuickFilterClause(whereParts, quickFilter, alias = "") {
@@ -1149,7 +1094,7 @@ function addLeadQuickFilterClause(whereParts, quickFilter, alias = "") {
   } else if (quickFilter === "next") {
     whereParts.push(`${activeWhere} AND TRIM(COALESCE(${prefix}next_contact_at, '')) = ''`);
   } else {
-    const commercialClause = buildOpportunityQuickFilterSql(quickFilter, alias);
+    const commercialClause = buildOpportunityQuickFilterSql(quickFilter, alias, { useMaterialized: commercialProfileRuntime.isReady() });
     if (!commercialClause) return;
     if (["lead-priority", "lead-mapping"].includes(quickFilter)) {
       whereParts.push(`${activeWhere} AND ${commercialClause}`);
@@ -1159,13 +1104,12 @@ function addLeadQuickFilterClause(whereParts, quickFilter, alias = "") {
   }
 }
 
-function buildLeadsPageQuery(params = {}, accessContext = null, alias = "") {
+async function buildLeadsPageQuery(params = {}, accessContext = null, alias = "", client = pool) {
   const prefix = alias ? `${alias}.` : "";
   const whereParts = [`${prefix}deleted_at = ''`];
   const sqlParams = [];
 
   if (accessContext) addLeadAccessClause(whereParts, sqlParams, accessContext, alias);
-  addLeadSearchClause(whereParts, sqlParams, params.search);
 
   if (params.status) {
     whereParts.push(`${prefix}status = ?`);
@@ -1184,7 +1128,25 @@ function buildLeadsPageQuery(params = {}, accessContext = null, alias = "") {
 
   addLeadQuickFilterClause(whereParts, params.quickFilter, alias);
 
-  return { where: whereParts.join(" AND "), params: sqlParams };
+  const baseWhere = whereParts.join(" AND ");
+  const baseParams = [...sqlParams];
+  const searchClause = await resolveLeadSearchClause({
+    search: params.search,
+    baseWhere,
+    baseParams,
+    alias,
+    client,
+  });
+  if (searchClause?.clause) {
+    whereParts.push(searchClause.clause);
+    sqlParams.push(...searchClause.params);
+  }
+
+  return {
+    where: whereParts.join(" AND "),
+    params: sqlParams,
+    searchMode: searchClause?.mode || "none",
+  };
 }
 
 function encodeLeadCursor(payload) {
@@ -1210,6 +1172,7 @@ async function getLeadsPageFromRequest(requestUrl, currentUser) {
   const cursor = decodeLeadCursor(searchParams.get("cursor"));
   const includeSummary = searchParams.get("summary") !== "0";
   const includeOpportunitySummary = searchParams.get("opportunitySummary") === "1";
+  const leadProjection = getLeadListProjection({ includeCommercialContext: includeOpportunitySummary });
   const sort = normalizeLeadSort(searchParams.get("sortBy"), searchParams.get("sortDirection"));
   const accessContext = await getLeadAccessContext(currentUser);
   const filters = {
@@ -1219,11 +1182,25 @@ async function getLeadsPageFromRequest(requestUrl, currentUser) {
     responsible: searchParams.get("responsible") || "",
     quickFilter: searchParams.get("quickFilter") || "",
   };
-  const { where, params } = buildLeadsPageQuery(filters, accessContext);
-  const total = Number(await scalar(`SELECT COUNT(*) AS total FROM leads WHERE ${where}`, params) || 0);
+  const { where, params } = await buildLeadsPageQuery(filters, accessContext);
+  const hasActiveFilters = Object.values(filters).some(Boolean);
+  const needsDashboardSummary = includeSummary || includeOpportunitySummary;
+  let scopedDashboardSummary = null;
+  let filteredDashboardSummary = null;
+
+  if (needsDashboardSummary) {
+    scopedDashboardSummary = await getLeadDashboardSummaryCached({ accessContext });
+    filteredDashboardSummary = hasActiveFilters
+      ? await getLeadDashboardSummary({ where, params })
+      : scopedDashboardSummary;
+  }
+
+  const total = filteredDashboardSummary
+    ? Number(filteredDashboardSummary.summary.total || 0)
+    : Number(await scalar(`SELECT COUNT(*) AS total FROM leads WHERE ${where}`, params) || 0);
   const pageWhere = [where];
   const pageParams = [...params];
-  const orderExpression = `COALESCE(${sort.column}, '')`;
+  const orderExpression = sort.column;
 
   if (cursor) {
     if (cursor.sortBy !== sort.key || cursor.sortDirection !== sort.direction) {
@@ -1239,7 +1216,7 @@ async function getLeadsPageFromRequest(requestUrl, currentUser) {
   const paginationSql = cursor ? "LIMIT ?" : "LIMIT ? OFFSET ?";
   const paginationParams = cursor ? [limit] : [limit, offset];
   const rows = await queryRows(
-    `SELECT * FROM leads WHERE ${pageWhere.join(" AND ")} ORDER BY ${orderExpression} ${sort.direction}, id ${sort.direction} ${paginationSql}`,
+    `SELECT ${leadProjection} FROM leads WHERE ${pageWhere.join(" AND ")} ORDER BY ${orderExpression} ${sort.direction}, id ${sort.direction} ${paginationSql}`,
     [...pageParams, ...paginationParams],
   );
   const lastRow = rows.at(-1);
@@ -1267,25 +1244,25 @@ async function getLeadsPageFromRequest(requestUrl, currentUser) {
     },
     scope: accessContext.scope,
     filterScope: {
-      kind: Object.values(filters).some(Boolean) ? "filtro_atual" : accessContext.scope.kind,
-      label: Object.values(filters).some(Boolean) ? "Filtro atual" : accessContext.scope.label,
+      kind: hasActiveFilters ? "filtro_atual" : accessContext.scope.kind,
+      label: hasActiveFilters ? "Filtro atual" : accessContext.scope.label,
       total,
     },
   };
 
-  if (includeSummary) {
-    response.summary = await getLeadSummaryCached({ accessContext });
-    response.filteredSummary = await getLeadSummary({ where, params });
+  if (includeSummary && scopedDashboardSummary && filteredDashboardSummary) {
+    response.summary = scopedDashboardSummary.summary;
+    response.filteredSummary = filteredDashboardSummary.summary;
   }
 
-  if (includeOpportunitySummary) {
+  if (includeOpportunitySummary && scopedDashboardSummary && filteredDashboardSummary) {
     response.opportunitySummary = {
-      ...await getOpportunitySummaryCached({ accessContext }),
+      ...scopedDashboardSummary.opportunitySummary,
       scope: accessContext.scope,
       generatedAt: nowIso(),
     };
     response.filteredOpportunitySummary = {
-      ...await getOpportunitySummary({ where, params }),
+      ...filteredDashboardSummary.opportunitySummary,
       scope: response.filterScope,
       generatedAt: nowIso(),
     };
@@ -1302,20 +1279,24 @@ async function getLeadById(leadId, options = {}, client = pool) {
   return row ? rowToLead(row) : null;
 }
 
-async function getAllLeads(options = {}, client = pool) {
-  const { includeDeleted = false, deletedOnly = false, accessContext = null } = options;
-  const whereParts = [deletedOnly ? "deleted_at != ''" : includeDeleted ? "1 = 1" : "deleted_at = ''"];
-  const params = [];
-  if (accessContext) {
-    whereParts.push(accessContext.accessSql.clause);
-    params.push(...accessContext.accessSql.params);
-  }
+async function getDeletedLeadsPageFromRequest(requestUrl, accessContext, client = pool) {
+  const limit = parseBoundedInteger(requestUrl.searchParams.get("limit"), 100, 1, 200);
+  const offset = parseBoundedInteger(requestUrl.searchParams.get("offset"), 0, 0, MAX_LEADS_OFFSET);
+  const where = `deleted_at != '' AND ${accessContext.accessSql.clause}`;
+  const params = accessContext.accessSql.params;
+  const total = Number(await scalar(`SELECT COUNT(*) AS total FROM leads WHERE ${where}`, params, client) || 0);
   const rows = await queryRows(
-    `SELECT * FROM leads WHERE ${whereParts.join(" AND ")} ORDER BY updated_at DESC, created_at DESC`,
-    params,
+    `SELECT ${LEAD_TRASH_SELECT} FROM leads
+     WHERE ${where}
+     ORDER BY deleted_at DESC, updated_at DESC, id DESC
+     LIMIT ? OFFSET ?`,
+    [...params, limit, offset],
     client,
   );
-  return rows.map(rowToLead);
+  return {
+    leads: rows.map(rowToLead),
+    pagination: { total, limit, offset, hasMore: offset + rows.length < total },
+  };
 }
 
 function sanitizeKanbanName(value, fallback = "") {
@@ -1493,41 +1474,38 @@ async function ensureLeadKanbanAssignment(lead, client = pool) {
 
 async function getKanbanPipelines(currentUser = null, client = pool) {
   const accessContext = currentUser ? await getLeadAccessContext(currentUser, client) : null;
-  const accessClause = accessContext ? ` AND ${accessContext.accessSql.clause}` : "";
-  const accessParams = accessContext ? accessContext.accessSql.params : [];
-  const pipelineRows = await queryRows(
-    "SELECT * FROM kanban_pipelines WHERE is_archived = 0 ORDER BY position ASC, created_at ASC",
-    [],
-    client,
-  );
-  const stageRows = await queryRows(
-    "SELECT * FROM kanban_stages WHERE is_archived = 0 ORDER BY pipeline_id ASC, position ASC, created_at ASC",
-    [],
-    client,
-  );
-  const pipelineCounts = await queryRows(
-    `SELECT pipeline_id, COUNT(*) AS total FROM leads WHERE deleted_at = ''${accessClause} GROUP BY pipeline_id`,
-    accessParams,
-    client,
-  );
-  const stageCounts = await queryRows(
-    `SELECT pipeline_stage_id, COUNT(*) AS total FROM leads WHERE deleted_at = ''${accessClause} GROUP BY pipeline_stage_id`,
-    accessParams,
-    client,
-  );
+  const accessClause = accessContext?.accessSql.clause || "1 = 1";
+  const accessParams = accessContext?.accessSql.params || [];
+  const rows = await queryRows(buildKanbanPipelinesSql(accessClause), accessParams, client);
+  const pipelines = new Map();
 
-  const pipelineCountMap = new Map(pipelineCounts.map((row) => [row.pipeline_id, Number(row.total || 0)]));
-  const stageCountMap = new Map(stageCounts.map((row) => [row.pipeline_stage_id, Number(row.total || 0)]));
-  const stagesByPipeline = new Map();
-  stageRows.forEach((row) => {
-    if (!stagesByPipeline.has(row.pipeline_id)) stagesByPipeline.set(row.pipeline_id, []);
-    stagesByPipeline.get(row.pipeline_id).push(rowToKanbanStage(row, stageCountMap.get(row.id) || 0));
-  });
+  for (const row of rows) {
+    const pipelineId = row.__pipeline_id;
+    if (!pipelineId) continue;
+    if (!pipelines.has(pipelineId)) {
+      pipelines.set(pipelineId, {
+        row: {
+          id: pipelineId,
+          name: row.__pipeline_name,
+          is_default: row.__pipeline_is_default,
+          is_archived: row.__pipeline_is_archived,
+          position: row.__pipeline_position,
+          created_at: row.__pipeline_created_at,
+          updated_at: row.__pipeline_updated_at,
+        },
+        cardCount: Number(row.__pipeline_card_count || 0),
+        stages: [],
+      });
+    }
+    if (row.id) {
+      pipelines.get(pipelineId).stages.push(rowToKanbanStage(row, Number(row.__stage_card_count || 0)));
+    }
+  }
 
-  return pipelineRows.map((row) => rowToKanbanPipeline(
-    row,
-    stagesByPipeline.get(row.id) || [],
-    pipelineCountMap.get(row.id) || 0,
+  return Array.from(pipelines.values()).map((pipeline) => rowToKanbanPipeline(
+    pipeline.row,
+    pipeline.stages,
+    pipeline.cardCount,
   ));
 }
 
@@ -1543,53 +1521,72 @@ function getKanbanFiltersFromUrl(requestUrl) {
 
 async function getKanbanBoardFromRequest(requestUrl, currentUser) {
   const requestedPipelineId = requestUrl.searchParams.get("pipelineId") || "";
-  let pipeline = requestedPipelineId ? await getKanbanPipelineById(requestedPipelineId) : null;
-  if (!pipeline) {
-    pipeline = await statementFirstRow(
-      "SELECT * FROM kanban_pipelines WHERE is_default = 1 AND is_archived = 0 ORDER BY position ASC LIMIT 1",
-    );
-  }
-  if (!pipeline) {
+  const limitPerStage = parseBoundedInteger(requestUrl.searchParams.get("limitPerStage"), 50, 10, 100);
+  const filters = getKanbanFiltersFromUrl(requestUrl);
+  const accessContext = await getLeadAccessContext(currentUser);
+
+  const metadataRows = await queryRows(
+    buildKanbanBoardMetadataSql(accessContext.accessSql.clause),
+    [requestedPipelineId, requestedPipelineId, ...accessContext.accessSql.params],
+  );
+  if (!metadataRows.length || !metadataRows[0].__pipeline_id) {
     const error = new Error("Nenhum funil ativo foi encontrado.");
     error.statusCode = 404;
     throw error;
   }
 
-  const stages = await getKanbanStages(pipeline.id);
-  const limitPerStage = parseBoundedInteger(requestUrl.searchParams.get("limitPerStage"), 50, 10, 100);
-  const filters = getKanbanFiltersFromUrl(requestUrl);
-  const accessContext = await getLeadAccessContext(currentUser);
-  const { where, params } = buildLeadsPageQuery(filters, accessContext);
-  const columns = [];
-  let filtersTotal = 0;
-  const stageCountRows = await queryRows(
-    `SELECT pipeline_stage_id, COUNT(*) AS total FROM leads WHERE deleted_at = '' AND pipeline_id = ? AND ${accessContext.accessSql.clause} GROUP BY pipeline_stage_id`,
-    [pipeline.id, ...accessContext.accessSql.params],
-  );
-  const stageCountMap = new Map(stageCountRows.map((row) => [row.pipeline_stage_id, Number(row.total || 0)]));
-  const pipelineCardCount = Array.from(stageCountMap.values()).reduce((sum, count) => sum + count, 0);
+  const firstMetadataRow = metadataRows[0];
+  const pipelineRow = {
+    id: firstMetadataRow.__pipeline_id,
+    name: firstMetadataRow.__pipeline_name,
+    is_default: firstMetadataRow.__pipeline_is_default,
+    is_archived: firstMetadataRow.__pipeline_is_archived,
+    position: firstMetadataRow.__pipeline_position,
+    created_at: firstMetadataRow.__pipeline_created_at,
+    updated_at: firstMetadataRow.__pipeline_updated_at,
+  };
+  const stageRows = metadataRows.filter((row) => row.id);
+  const stageCardCountMap = new Map(stageRows.map((row) => [row.id, Number(row.__stage_card_count || 0)]));
+  const pipelineCardCount = Number(firstMetadataRow.__pipeline_card_count || 0);
 
-  for (const stage of stages) {
-    const stageParams = [...params, pipeline.id, stage.id];
-    const stageWhere = `${where} AND pipeline_id = ? AND pipeline_stage_id = ?`;
-    const filteredCardCount = Number(await scalar(`SELECT COUNT(*) AS total FROM leads WHERE ${stageWhere}`, stageParams) || 0);
-    const rows = await queryRows(
-      `SELECT * FROM leads WHERE ${stageWhere}
-       ORDER BY kanban_position ASC, updated_at DESC, created_at DESC
-       LIMIT ?`,
-      [...stageParams, limitPerStage],
-    );
-    filtersTotal += filteredCardCount;
-    columns.push({
-      ...rowToKanbanStage(stage, stageCountMap.get(stage.id) || 0),
-      filteredCardCount,
-      cards: rows.map(rowToLead),
-      hasMore: rows.length < filteredCardCount,
-    });
+  const { where, params } = await buildLeadsPageQuery(filters, accessContext);
+  const cardRows = stageRows.length
+    ? await queryRows(
+        buildKanbanInitialCardsSql(where),
+        [...params, pipelineRow.id, limitPerStage],
+      )
+    : [];
+
+  const cardsByStage = new Map();
+  const filteredCountByStage = new Map();
+  for (const row of cardRows) {
+    const stageId = row.pipeline_stage_id;
+    if (!cardsByStage.has(stageId)) cardsByStage.set(stageId, []);
+    cardsByStage.get(stageId).push(rowToLead(row));
+    if (!filteredCountByStage.has(stageId)) {
+      filteredCountByStage.set(stageId, Number(row.__filtered_card_count || 0));
+    }
   }
 
+  let filtersTotal = 0;
+  const columns = stageRows.map((stage) => {
+    const cards = cardsByStage.get(stage.id) || [];
+    const filteredCardCount = filteredCountByStage.get(stage.id) || 0;
+    filtersTotal += filteredCardCount;
+    return {
+      ...rowToKanbanStage(stage, stageCardCountMap.get(stage.id) || 0),
+      filteredCardCount,
+      cards,
+      hasMore: cards.length < filteredCardCount,
+    };
+  });
+
   return {
-    pipeline: rowToKanbanPipeline(pipeline, columns.map(({ cards, hasMore, filteredCardCount, ...stage }) => stage), pipelineCardCount),
+    pipeline: rowToKanbanPipeline(
+      pipelineRow,
+      columns.map(({ cards, hasMore, filteredCardCount, ...stage }) => stage),
+      pipelineCardCount,
+    ),
     stages: columns,
     filtersTotal,
     limitPerStage,
@@ -1607,16 +1604,14 @@ async function getKanbanStageCardsFromRequest(stageId, requestUrl, currentUser) 
   const offset = parseBoundedInteger(requestUrl.searchParams.get("offset"), 0, 0, Number.MAX_SAFE_INTEGER);
   const limit = parseBoundedInteger(requestUrl.searchParams.get("limit"), 50, 1, 100);
   const accessContext = await getLeadAccessContext(currentUser);
-  const { where, params } = buildLeadsPageQuery(getKanbanFiltersFromUrl(requestUrl), accessContext);
+  const { where, params } = await buildLeadsPageQuery(getKanbanFiltersFromUrl(requestUrl), accessContext);
   const stageWhere = `${where} AND pipeline_id = ? AND pipeline_stage_id = ?`;
   const stageParams = [...params, stage.pipeline_id, stage.id];
-  const total = Number(await scalar(`SELECT COUNT(*) AS total FROM leads WHERE ${stageWhere}`, stageParams) || 0);
   const rows = await queryRows(
-    `SELECT * FROM leads WHERE ${stageWhere}
-     ORDER BY kanban_position ASC, updated_at DESC, created_at DESC
-     LIMIT ? OFFSET ?`,
+    buildKanbanStagePageSql(stageWhere),
     [...stageParams, limit, offset],
   );
+  const total = rows.length ? Number(rows[0].__filtered_card_count || 0) : offset;
 
   return { cards: rows.map(rowToLead), total, hasMore: offset + rows.length < total };
 }
@@ -1946,8 +1941,9 @@ async function saveLead(lead, client = pool) {
   const linkedLead = await resolveLeadResponsibleLink(lead, client);
   const normalizedLead = await ensureLeadKanbanAssignment(linkedLead, client);
   const updatedAt = nowIso();
-  await execute(upsertSql, leadToDbParams({ ...normalizedLead, updatedAt }, { updatedAt }), client);
+  await execute(UPSERT_LEAD_SQL, leadToDbParams({ ...normalizedLead, updatedAt }, { updatedAt }), client);
   invalidateLeadSummaryCache();
+  invalidateKanbanCountsCache();
   return { ...normalizedLead, updatedAt };
 }
 
@@ -1964,100 +1960,6 @@ async function saveLeadWithDuplicateProtection(lead, client = pool, accessContex
   return { lead: await saveLead(normalizedLead, client), action: "created_or_updated", duplicatedLeadId: "" };
 }
 
-async function buildDuplicateIndex(client = pool, accessContext = null) {
-  const index = { byEmail: new Map(), byPhone: new Map(), byNameCompany: new Map() };
-  const accessClause = accessContext ? ` AND ${accessContext.accessSql.clause}` : "";
-  const accessParams = accessContext ? accessContext.accessSql.params : [];
-  const rows = await queryRows(
-    `SELECT id, name, email, email_key, phone, phone_key, company, name_company_key FROM leads WHERE deleted_at = ''${accessClause}`,
-    accessParams,
-    client,
-  );
-  rows.forEach((row) => addLeadToDuplicateIndex(index, row));
-  return index;
-}
-
-function addLeadToDuplicateIndex(index, lead) {
-  const emailKey = lead.email_key || normalizeEmailKey(lead.email);
-  const phoneKey = lead.phone_key || normalizePhoneKey(lead.phone);
-  const nameCompanyKey = lead.name_company_key || normalizeNameCompanyKey(lead);
-
-  if (emailKey) index.byEmail.set(emailKey, lead.id);
-  phoneKeyVariants(phoneKey).forEach((variant) => index.byPhone.set(variant, lead.id));
-  if (nameCompanyKey) index.byNameCompany.set(nameCompanyKey, lead.id);
-}
-
-function findDuplicateLeadIdInIndex(index, lead) {
-  const emailKey = normalizeEmailKey(lead.email);
-  const phoneKey = normalizePhoneKey(lead.phone);
-  const nameCompanyKey = normalizeNameCompanyKey(lead);
-
-  if (emailKey && index.byEmail.has(emailKey)) return index.byEmail.get(emailKey);
-  for (const variant of phoneKeyVariants(phoneKey)) {
-    if (index.byPhone.has(variant)) return index.byPhone.get(variant);
-  }
-  if (nameCompanyKey && index.byNameCompany.has(nameCompanyKey)) return index.byNameCompany.get(nameCompanyKey);
-  return "";
-}
-
-async function saveLeadWithDuplicateProtectionIndexed(lead, duplicateIndex, client = pool) {
-  const normalizedLead = normalizeLead(lead);
-  const duplicateLeadId = findDuplicateLeadIdInIndex(duplicateIndex, normalizedLead);
-
-  if (duplicateLeadId && duplicateLeadId !== normalizedLead.id) {
-    const duplicateLead = await getLeadById(duplicateLeadId, {}, client);
-    const mergedLead = mergeLeadData(duplicateLead, { ...normalizedLead, id: duplicateLeadId });
-    const savedLead = await saveLead(mergedLead, client);
-    addLeadToDuplicateIndex(duplicateIndex, {
-      id: savedLead.id,
-      name: savedLead.name,
-      email: savedLead.email,
-      phone: savedLead.phone,
-      company: savedLead.company,
-    });
-    return { lead: savedLead, action: "merged", duplicatedLeadId };
-  }
-
-  const savedLead = await saveLead(normalizedLead, client);
-  addLeadToDuplicateIndex(duplicateIndex, {
-    id: savedLead.id,
-    name: savedLead.name,
-    email: savedLead.email,
-    phone: savedLead.phone,
-    company: savedLead.company,
-  });
-  return { lead: savedLead, action: "created_or_updated", duplicatedLeadId: "" };
-}
-
-async function saveLeadsWithBatchDuplicateProtection(leads, client = pool, accessContext = null, transactionContext = null) {
-  await acquireLeadIdentityMutationLock(client, transactionContext);
-  const duplicateIndex = await buildDuplicateIndex(client, accessContext);
-  const results = [];
-  const report = { received: leads.length, created: 0, merged: 0, ignoredInsideFile: 0 };
-  const incomingKeys = new Set();
-
-  for (const lead of leads) {
-    const normalizedLead = normalizeLead(lead);
-    const emailKey = normalizeEmailKey(normalizedLead.email);
-    const phoneKey = normalizePhoneKey(normalizedLead.phone);
-    const nameCompanyKey = normalizeNameCompanyKey(normalizedLead);
-    const primaryKey = emailKey ? `email:${emailKey}` : phoneKey.length >= 8 ? `phone:${phoneKey}` : nameCompanyKey ? `name:${nameCompanyKey}` : `id:${normalizedLead.id}`;
-
-    if (incomingKeys.has(primaryKey)) {
-      report.ignoredInsideFile += 1;
-      continue;
-    }
-
-    incomingKeys.add(primaryKey);
-    const result = await saveLeadWithDuplicateProtectionIndexed(normalizedLead, duplicateIndex, client);
-    results.push(result.lead);
-
-    if (result.action === "merged") report.merged += 1;
-    else report.created += 1;
-  }
-
-  return { results, report };
-}
 
 function hashPassword(password) {
   const salt = randomBytes(16).toString("hex");
@@ -2228,6 +2130,18 @@ async function recordAudit({ entityType = "lead", entityId = "", action, actor =
     `INSERT INTO audit_log (id, entity_type, entity_id, action, actor_id, actor_name, changes_json, summary, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [randomUUID(), entityType, entityId, action, actor?.id || "system", actor?.name || "Sistema", JSON.stringify(changes || {}), summary, nowIso()],
+    client,
+  );
+}
+
+async function recordAuditOnce({ id, entityType = "lead", entityId = "", action, actor = null, changes = {}, summary = "" }, client = pool) {
+  const auditId = String(id || "").trim();
+  if (!auditId) return recordAudit({ entityType, entityId, action, actor, changes, summary }, client);
+  await execute(
+    `INSERT INTO audit_log (id, entity_type, entity_id, action, actor_id, actor_name, changes_json, summary, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE id = id`,
+    [auditId, entityType, entityId, action, actor?.id || "system", actor?.name || "Sistema", JSON.stringify(changes || {}), summary, nowIso()],
     client,
   );
 }
@@ -2628,6 +2542,7 @@ async function refreshLeadNextContactFromTasks(leadId, client = pool) {
     [nextDueAt, nowIso(), normalizedLeadId],
     client,
   );
+  await commercialProfileRuntime.refreshLead(normalizedLeadId, client);
   return nextDueAt;
 }
 
@@ -2698,9 +2613,18 @@ async function cancelPendingTasksForClosedLeadsInStage(stageId, reason, actor, c
     client,
   );
   const affectedRows = Number(result?.affectedRows || 0);
+  const nextMappingUrgencySql = "LEAST(100, mapping_urgency_score + CASE WHEN TRIM(COALESCE(next_contact_at, '')) != '' THEN 15 ELSE 0 END)";
+  const nextLeadPrioritySql = `LEAST(100, GREATEST(0, ROUND(commercial_potential_score * 0.65 + (${nextMappingUrgencySql}) * 0.35)))`;
+  const nextOpportunityScoreSql = `LEAST(100, ROUND((${nextLeadPrioritySql}) * 0.45 + service_agency_count * 10 + service_missing_count * 8 + service_unknown_count * 4 + service_casa_count * 2))`;
   await execute(
-    "UPDATE leads SET next_contact_at = '', updated_at = ? WHERE deleted_at = '' AND pipeline_stage_id = ? AND (is_lost = 1 OR status IN ('Fechado', 'Perdido'))",
-    [at, normalizedStageId],
+    `UPDATE leads SET
+       mapping_urgency_score = CASE WHEN commercial_profile_version = ? THEN ${nextMappingUrgencySql} ELSE mapping_urgency_score END,
+       lead_priority_score = CASE WHEN commercial_profile_version = ? THEN ${nextLeadPrioritySql} ELSE lead_priority_score END,
+       opportunity_score = CASE WHEN commercial_profile_version = ? THEN ${nextOpportunityScoreSql} ELSE opportunity_score END,
+       commercial_profile_updated_at = CASE WHEN commercial_profile_version = ? THEN ? ELSE commercial_profile_updated_at END,
+       next_contact_at = '', updated_at = ?
+     WHERE deleted_at = '' AND pipeline_stage_id = ? AND (is_lost = 1 OR status IN ('Fechado', 'Perdido'))`,
+    [COMMERCIAL_PROFILE_VERSION, COMMERCIAL_PROFILE_VERSION, COMMERCIAL_PROFILE_VERSION, COMMERCIAL_PROFILE_VERSION, at, at, normalizedStageId],
     client,
   );
   if (affectedRows > 0) {
@@ -2924,7 +2848,10 @@ async function listTasksForUser(currentUser, requestUrl, client = pool) {
   const bucket = String(requestUrl.searchParams.get("bucket") || "today");
   const limit = parseBoundedInteger(requestUrl.searchParams.get("limit"), 50, 1, 200);
   const accessSql = buildTaskAccessSql(currentUser, "t");
-  const bucketWhere = getTaskBucketWhere(bucket, "t");
+  const useDateColumns = dateColumnRuntime.isReady();
+  const bucketWhere = getTaskBucketWhere(bucket, "t", { useDateColumns });
+  const taskDueOrder = sqlDateColumn("t", "due_at", "due_at_dt", useDateColumns);
+  const taskCreatedOrder = sqlDateColumn("t", "created_at", "created_at_dt", useDateColumns);
   const leadId = String(requestUrl.searchParams.get("leadId") || "").trim();
   const where = [accessSql.clause, bucketWhere];
   const params = [...accessSql.params];
@@ -2940,7 +2867,7 @@ async function listTasksForUser(currentUser, requestUrl, client = pool) {
      WHERE ${where.join(" AND ")}
      ORDER BY CASE t.status WHEN 'pending' THEN 1 ELSE 2 END,
               CASE t.priority WHEN 'urgente' THEN 1 WHEN 'alta' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END,
-              t.due_at ASC, t.created_at ASC
+              ${taskDueOrder} ASC, ${taskCreatedOrder} ASC
      LIMIT ?`,
     [...params, limit],
     client,
@@ -2951,29 +2878,24 @@ async function listTasksForUser(currentUser, requestUrl, client = pool) {
 async function getTodayDashboard(currentUser, client = pool) {
   const accessContext = await getLeadAccessContext(currentUser, client);
   const taskAccess = buildTaskAccessSql(currentUser, "t");
+  const useDateColumns = dateColumnRuntime.isReady();
+  const temporalSql = buildTodayTemporalSql(useDateColumns);
   const countRow = await statementFirstRow(
-    `SELECT
-       SUM(CASE WHEN t.status = 'pending' AND LEFT(t.due_at, 10) < DATE_FORMAT(CURDATE(), '%Y-%m-%d') THEN 1 ELSE 0 END) AS overdue,
-       SUM(CASE WHEN t.status = 'pending' AND LEFT(t.due_at, 10) = DATE_FORMAT(CURDATE(), '%Y-%m-%d') THEN 1 ELSE 0 END) AS today,
-       SUM(CASE WHEN t.status = 'pending' AND LEFT(t.due_at, 10) > DATE_FORMAT(CURDATE(), '%Y-%m-%d') THEN 1 ELSE 0 END) AS upcoming,
-       SUM(CASE WHEN t.status = 'pending' AND t.type = 'reuniao' AND LEFT(t.due_at, 10) = DATE_FORMAT(CURDATE(), '%Y-%m-%d') THEN 1 ELSE 0 END) AS meetings_today,
-       SUM(CASE WHEN t.status = 'completed' AND LEFT(t.completed_at, 10) = DATE_FORMAT(CURDATE(), '%Y-%m-%d') THEN 1 ELSE 0 END) AS completed_today
-     FROM tasks t
-     WHERE ${taskAccess.clause}`,
+    temporalSql.buildTaskCountSql(taskAccess.clause),
     taskAccess.params,
     client,
   );
 
   const taskLists = {};
   for (const bucket of ["overdue", "today", "upcoming"]) {
-    const where = getTaskBucketWhere(bucket, "t");
+    const where = getTaskBucketWhere(bucket, "t", { useDateColumns });
     const rows = await queryRows(
       `SELECT t.*, l.name AS lead_name, l.company AS lead_company, l.phone AS lead_phone
        FROM tasks t
        LEFT JOIN leads l ON l.id = t.lead_id
        WHERE ${taskAccess.clause} AND ${where}
        ORDER BY CASE t.priority WHEN 'urgente' THEN 1 WHEN 'alta' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END,
-                t.due_at ASC
+                ${temporalSql.taskDueColumn} ASC
        LIMIT 12`,
       taskAccess.params,
       client,
@@ -2983,13 +2905,7 @@ async function getTodayDashboard(currentUser, client = pool) {
 
   const leadAccess = buildLeadAccessSql(accessContext.user, accessContext.teamMembers, "l");
   const operationalRow = await statementFirstRow(
-    `SELECT
-       SUM(CASE WHEN l.deleted_at = '' AND l.is_lost = 0 AND l.status = 'Novo lead' AND TRIM(COALESCE(l.contact_made_at, '')) = '' THEN 1 ELSE 0 END) AS awaiting_first_contact,
-       SUM(CASE WHEN l.deleted_at = '' AND l.is_lost = 0 AND TRIM(COALESCE(l.responsible_user_id, '')) = '' AND TRIM(COALESCE(l.responsible, '')) = '' THEN 1 ELSE 0 END) AS without_owner,
-       SUM(CASE WHEN l.deleted_at = '' AND l.is_lost = 0 AND l.status NOT IN ('Fechado', 'Perdido') AND TRIM(COALESCE(l.next_contact_at, '')) = '' THEN 1 ELSE 0 END) AS without_next_step,
-       SUM(CASE WHEN l.deleted_at = '' AND l.is_lost = 0 AND l.status NOT IN ('Fechado', 'Perdido') AND LEFT(l.updated_at, 10) < DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 7 DAY), '%Y-%m-%d') THEN 1 ELSE 0 END) AS stalled
-     FROM leads l
-     WHERE ${leadAccess.clause}`,
+    temporalSql.buildOperationalSql(leadAccess.clause),
     leadAccess.params,
     client,
   );
@@ -3006,13 +2922,7 @@ async function getTodayDashboard(currentUser, client = pool) {
   let systemHealth = null;
   if (role === USER_ROLES.PRE_SALES || role === USER_ROLES.ADMIN) {
     const rows = await queryRows(
-      `SELECT COALESCE(NULLIF(t.responsible_name, ''), 'Sem responsável') AS responsible_name, COUNT(*) AS total
-       FROM tasks t
-       WHERE t.status = 'pending'
-         AND LEFT(t.due_at, 10) < DATE_FORMAT(CURDATE(), '%Y-%m-%d')
-       GROUP BY COALESCE(NULLIF(t.responsible_name, ''), 'Sem responsável')
-       ORDER BY total DESC, responsible_name ASC
-       LIMIT 12`,
+      temporalSql.teamOverdueSql,
       [],
       client,
     );
@@ -3052,7 +2962,10 @@ async function getTodayDashboard(currentUser, client = pool) {
 }
 
 async function getRecentAudit(limit = 80) {
-  const rows = await queryRows("SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ?", [limit]);
+  const rows = await queryRows(
+    "SELECT id, entity_type, entity_id, action, actor_id, actor_name, summary, created_at FROM audit_log ORDER BY created_at DESC LIMIT ?",
+    [limit],
+  );
   return rows.map(rowToAudit);
 }
 
@@ -3500,63 +3413,130 @@ async function enqueuePersistentJob(options) {
     expiresAt: options.expiresAt || jobRecordExpiryIso(jobArtifactSettings.jobRetentionDays),
     ...options,
   });
-  jobWorker?.wake();
+  performanceMonitor.runBackground(() => jobWorker?.wake());
   return queued;
 }
 
 async function performImportLeadsJob(job) {
   const actor = await getActiveJobActor(job);
-  requirePermission(actor, "import_leads");
+  const currentUser = actor;
+  requirePermission(currentUser, "import_leads");
   const payload = await readJsonJobPayload({
     storageRoot: jobArtifactSettings.storageRoot,
     storageKey: job.payloadStorageKey,
     maxBytes: MAX_BODY_BYTES * 4,
   });
   const leads = Array.isArray(payload.leads) ? payload.leads : [];
+  const checkpoint = job.result?.checkpoint || {};
+  const savedReport = job.result?.report || {};
+  const checkpointIndex = Math.max(0, Math.min(leads.length, Number(checkpoint.nextIndex || 0)));
+  const canResume = checkpointIndex > 0 && checkpointIndex === Number(job.progressCurrent || 0);
+  let nextIndex = canResume ? checkpointIndex : 0;
+  let report = canResume ? {
+    received: leads.length,
+    created: Number(savedReport.created || 0),
+    merged: Number(savedReport.merged || 0),
+    ignoredInsideFile: Number(savedReport.ignoredInsideFile || 0),
+  } : { received: leads.length, created: 0, merged: 0, ignoredInsideFile: 0 };
+  const accessContext = await getLeadAccessContext(currentUser);
+  const unassignedLeads = leads.map((lead) => ({ ...lead, responsible: "", responsibleUserId: "", responsible_user_id: "" }));
+  const seenPrimaryKeys = new Set();
+  for (let index = 0; index < nextIndex; index += 1) {
+    seenPrimaryKeys.add(getImportPrimaryKey(leads[index]));
+  }
 
   await updateJobProgress({
     execute,
     jobId: job.id,
     lockToken: job.lockedBy,
-    current: 0,
+    current: nextIndex,
     total: leads.length,
-    message: "Validando e importando lote",
+    message: nextIndex > 0 ? `Retomando importação a partir de ${nextIndex} lead(s)` : "Validando e importando em batches",
   });
 
-  const result = await withTransaction(async (client, transactionContext) => {
-    const accessContext = await getLeadAccessContext(actor, client);
-    const unassignedLeads = leads.map((lead) => ({
-      ...lead,
-      responsible: "",
-      responsibleUserId: "",
-      responsible_user_id: "",
-    }));
-    const assignedLeads = unassignedLeads.map((lead) => enforceLeadAssignmentForUser(lead, accessContext.user, accessContext.teamMembers));
-    const batchResult = await saveLeadsWithBatchDuplicateProtection(assignedLeads, client, accessContext, transactionContext);
-    for (const savedLead of batchResult.results) {
-      if (savedLead?.nextContactAt) await syncLeadNextContactTask(savedLead, actor, client);
-      await reconcileLeadTasksForLifecycle(savedLead, actor, client);
-    }
-    await recordAudit({
-      entityType: "import",
-      entityId: job.id,
-      action: "leads_imported",
-      actor,
-      summary: `Importou ${batchResult.report.received} lead(s). Criados: ${batchResult.report.created}. Mesclados: ${batchResult.report.merged}. Ignorados: ${batchResult.report.ignoredInsideFile}.`,
-      changes: batchResult.report,
-    }, client);
-    return batchResult.report;
+  while (nextIndex < leads.length) {
+    const batchStart = nextIndex;
+    const batchEnd = Math.min(leads.length, batchStart + IMPORT_DB_BATCH_SIZE);
+    const sourceBatch = unassignedLeads.slice(batchStart, batchEnd);
+    const assignedBatch = sourceBatch.map((lead) => enforceLeadAssignmentForUser(lead, accessContext.user, accessContext.teamMembers));
+
+    const outcome = await withTransaction(async (client, transactionContext) => {
+      const batchResult = await persistImportLeadBatch({
+        leads: assignedBatch,
+        client,
+        accessSql: accessContext.accessSql,
+        transactionContext,
+        seenPrimaryKeys,
+        acquireIdentityLock: acquireLeadIdentityMutationLock, queryRows, mergeLeadData, resolveLeadResponsibleLink,
+        ensureLeadKanbanAssignment, execute, nowIso, invalidateLeadSummaryCache: () => invalidateLeadSummaryCache(accessContext),
+      });
+
+      const newFollowUps = buildNewLeadFollowUpTaskInsert(batchResult.newLeads, currentUser, nowIso());
+      if (newFollowUps.sql) await execute(newFollowUps.sql, newFollowUps.params, client);
+
+      // Leads já existentes podem possuir tarefas manuais/legadas. Neles mantemos
+      // a reconciliação completa para preservar exatamente as regras atuais.
+      for (const savedLead of batchResult.existingLeads) {
+        if (savedLead?.nextContactAt) await syncLeadNextContactTask(savedLead, currentUser, client);
+        await reconcileLeadTasksForLifecycle(savedLead, currentUser, client);
+      }
+
+      const nextReport = {
+        received: leads.length,
+        created: report.created + batchResult.report.created,
+        merged: report.merged + batchResult.report.merged,
+        ignoredInsideFile: report.ignoredInsideFile + batchResult.report.ignoredInsideFile,
+      };
+      const at = nowIso();
+      const checkpointResult = await execute(
+        `UPDATE async_jobs
+         SET progress_current = ?, progress_total = ?, progress_message = ?, result_json = ?, heartbeat_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'running' AND locked_by = ?`,
+        [
+          batchEnd,
+          leads.length,
+          `Importados ${batchEnd} de ${leads.length}`,
+          JSON.stringify({ report: nextReport, checkpoint: { nextIndex: batchEnd, batchSize: IMPORT_DB_BATCH_SIZE } }),
+          at,
+          at,
+          job.id,
+          job.lockedBy,
+        ],
+        client,
+      );
+      if (Number(checkpointResult?.affectedRows || 0) !== 1) {
+        const error = new Error("O job perdeu o lock durante o checkpoint da importação.");
+        error.code = "JOB_LOCK_LOST";
+        throw error;
+      }
+
+      return { batchResult, nextReport };
+    });
+
+    outcome.batchResult.keysToCommit.forEach((key) => seenPrimaryKeys.add(key));
+    report = outcome.nextReport;
+    nextIndex = batchEnd;
+  }
+
+  await recordAuditOnce({
+    id: `import:${job.id}`,
+    entityType: "import",
+    entityId: job.id,
+    action: "leads_imported",
+    actor: currentUser,
+    summary: `Importou ${report.received} lead(s). Criados: ${report.created}. Mesclados: ${report.merged}. Ignorados: ${report.ignoredInsideFile}.`,
+    changes: report,
   });
 
   await updateJobProgress({
     execute,
     jobId: job.id,
     lockToken: job.lockedBy,
-    current: result.received,
-    total: result.received,
+    current: report.received,
+    total: report.received,
     message: "Importação concluída",
   });
-  return { result: { report: result }, expiresAt: job.expiresAt };
+  return { result: { report }, expiresAt: job.expiresAt };
 }
 
 async function createLeadExportPageFetcher(actor) {
@@ -3675,15 +3655,14 @@ async function performSearchIndexRebuildJob(job) {
   let processed = 0;
   while (!isShuttingDown) {
     const rows = await queryRows(
-      `SELECT * FROM leads WHERE search_text IS NULL OR search_text = '' ORDER BY id ASC LIMIT ?`,
+      `SELECT ${LEAD_SEARCH_INDEX_SELECT} FROM leads WHERE search_text IS NULL OR search_text = '' ORDER BY id ASC LIMIT ?`,
       [SEARCH_INDEX_REBUILD_BATCH_SIZE],
     );
     if (!rows.length) break;
 
     await withTransaction(async (client) => {
-      for (const row of rows) {
-        await execute("UPDATE leads SET search_text = ? WHERE id = ? AND (search_text IS NULL OR search_text = '')", [buildLeadSearchTextFromRow(row), row.id], client);
-      }
+      const batch = buildLeadSearchIndexBatchUpdate(rows, { onlyMissing: true });
+      if (batch.sql) await execute(batch.sql, batch.params, client);
     });
     processed += rows.length;
     await updateJobProgress({
@@ -3768,6 +3747,7 @@ async function startPersistentJobWorker() {
         name: error?.name || "Error",
       });
     },
+    unrefTimers: PROCESS_ROLE !== PROCESS_ROLES.WORKER,
   });
   jobWorker.start();
 }
@@ -3804,15 +3784,8 @@ async function buildReadinessReport() {
   } catch {
     database = false;
   }
-  const worker = Boolean(jobWorker?.isRunning);
-  return {
-    ok: database && worker,
-    reason: database ? (worker ? "ready" : "worker_not_ready") : "database_not_ready",
-    database,
-    worker,
-    activeJobs: Number(jobWorker?.activeCount || 0),
-    latencyMs: Date.now() - startedAt,
-  };
+  const roleReadiness = buildRoleReadiness({ database, localWorkerRunning: jobWorker?.isRunning, capabilities: PROCESS_CAPABILITIES });
+  return { ...roleReadiness, database, processRole: PROCESS_ROLE, activeJobs: Number(jobWorker?.activeCount || 0), latencyMs: Date.now() - startedAt };
 }
 
 function buildLivenessReport() {
@@ -3822,6 +3795,7 @@ function buildLivenessReport() {
     version: APP_VERSION,
     uptimeSeconds: Math.floor(process.uptime()),
     pid: process.pid,
+    processRole: PROCESS_ROLE,
     activeRequests: activeRequestCount,
   };
 }
@@ -4058,7 +4032,7 @@ async function handleApi(request, response, requestUrl) {
       }, client);
       return { task: await getTaskById(taskId, client), nextTask };
     });
-    invalidateLeadSummaryCache();
+    invalidateLeadSummaryCache(currentUser);
     sendJson(response, 200, result);
     return;
   }
@@ -4111,14 +4085,16 @@ async function handleApi(request, response, requestUrl) {
       if (task.leadId) await refreshLeadNextContactFromTasks(task.leadId, client);
       await recordAudit({ entityType: "task", entityId: taskId, action: "task_canceled", actor: currentUser, summary: `Cancelou tarefa: ${task.title}` }, client);
     });
-    invalidateLeadSummaryCache();
+    invalidateLeadSummaryCache(currentUser);
     sendJson(response, 200, { ok: true });
     return;
   }
 
   if (pathname === "/api/kanban/pipelines" && method === "GET") {
     requirePermission(currentUser, "read_leads");
-    sendJson(response, 200, await getKanbanPipelines(currentUser));
+    const accessContext = await getLeadAccessContext(currentUser);
+    const key = `kanban-pipelines:${leadDashboardCacheKey(accessContext)}`;
+    sendJson(response, 200, await metadataCache.getOrLoad(key, () => getKanbanPipelines(currentUser), { ttlMs: 5000 }));
     return;
   }
 
@@ -4133,9 +4109,6 @@ async function handleApi(request, response, requestUrl) {
     const pipelineId = String(requestUrl.searchParams.get("pipelineId") || "");
     const search = String(requestUrl.searchParams.get("search") || "").trim();
     const limit = parseBoundedInteger(requestUrl.searchParams.get("limit"), 40, 1, 100);
-    const normalizedSearch = normalizeSearchText(search);
-    const phoneSearch = normalizePhoneKey(search);
-    const emailSearch = normalizeEmailKey(search);
     const params = [pipelineId];
     const clauses = ["l.deleted_at = ''", "l.pipeline_id != ?"];
     const accessContext = await getLeadAccessContext(currentUser);
@@ -4144,23 +4117,23 @@ async function handleApi(request, response, requestUrl) {
     params.push(...scopedAccess.params);
 
     if (search) {
-      const searchClauses = [
-        "LOWER(COALESCE(l.search_text, '')) LIKE ?",
-        "LOWER(COALESCE(l.name, '')) LIKE ?",
-        "LOWER(COALESCE(l.company, '')) LIKE ?",
-        "LOWER(COALESCE(l.email, '')) LIKE ?",
-      ];
-      const like = `%${escapeLikeTerm(normalizedSearch || search.toLowerCase())}%`;
-      params.push(like, `%${escapeLikeTerm(search.toLowerCase())}%`, `%${escapeLikeTerm(search.toLowerCase())}%`, `%${escapeLikeTerm(emailSearch)}%`);
-      if (phoneSearch.length >= 3) {
-        searchClauses.push("l.phone_key LIKE ?");
-        params.push(`%${phoneSearch}%`);
+      const baseWhere = clauses.join(" AND ");
+      const searchClause = await resolveLeadSearchClause({
+        search,
+        baseWhere,
+        baseParams: [...params],
+        alias: "l",
+      });
+      if (searchClause?.clause) {
+        clauses.push(searchClause.clause);
+        params.push(...searchClause.params);
       }
-      clauses.push(`(${searchClauses.join(" OR ")})`);
     }
 
     const rows = await queryRows(
-      `SELECT l.*, p.name AS pipeline_name, s.name AS stage_name
+      `SELECT l.id, l.name, l.email, l.phone, l.company,
+              l.pipeline_id, l.pipeline_stage_id, l.created_at, l.updated_at,
+              p.name AS pipeline_name, s.name AS stage_name
        FROM leads l
        LEFT JOIN kanban_pipelines p ON p.id = l.pipeline_id
        LEFT JOIN kanban_stages s ON s.id = l.pipeline_stage_id
@@ -4278,7 +4251,7 @@ async function handleApi(request, response, requestUrl) {
       await recordAudit({ entityType: "pipeline", entityId: pipelineId, action: "pipeline_stages_reordered", actor: currentUser, summary: "Reordenou as etapas do funil", changes: { stageIds } }, client);
     });
 
-    defaultKanbanCache = null;
+    invalidateKanbanMetadataCache();
     sendJson(response, 200, { ok: true });
     return;
   }
@@ -4319,7 +4292,7 @@ async function handleApi(request, response, requestUrl) {
       return newStageId;
     });
 
-    defaultKanbanCache = null;
+    invalidateKanbanMetadataCache();
     const stage = await getKanbanStageById(stageId);
     sendJson(response, 201, rowToKanbanStage(stage, 0));
     return;
@@ -4360,7 +4333,7 @@ async function handleApi(request, response, requestUrl) {
       await execute(`UPDATE kanban_pipelines SET ${updates.join(", ")} WHERE id = ?`, params, client);
       await recordAudit({ entityType: "pipeline", entityId: pipelineId, action: "pipeline_updated", actor: currentUser, summary: "Atualizou o funil", changes: body }, client);
     });
-    defaultKanbanCache = null;
+    invalidateKanbanMetadataCache();
     const updatedPipeline = (await getKanbanPipelines(currentUser)).find((pipeline) => pipeline.id === pipelineId);
     sendJson(response, 200, updatedPipeline);
     return;
@@ -4410,7 +4383,8 @@ async function handleApi(request, response, requestUrl) {
       await recordAudit({ entityType: "pipeline", entityId: pipelineId, action: "pipeline_archived", actor: currentUser, summary: `Arquivou o funil: ${pipeline.name}` }, client);
     });
 
-    invalidateLeadSummaryCache();
+    invalidateKanbanMetadataCache();
+    invalidateLeadSummaryCache(currentUser);
     sendJson(response, 200, { ok: true });
     return;
   }
@@ -4477,8 +4451,8 @@ async function handleApi(request, response, requestUrl) {
       return stageId;
     });
 
-    defaultKanbanCache = null;
-    invalidateLeadSummaryCache();
+    invalidateKanbanMetadataCache();
+    invalidateLeadSummaryCache(currentUser);
     const updatedStage = await getKanbanStageById(updatedStageId);
     const count = Number(await scalar("SELECT COUNT(*) AS total FROM leads WHERE deleted_at = '' AND pipeline_stage_id = ?", [updatedStageId]) || 0);
     sendJson(response, 200, rowToKanbanStage(updatedStage, count));
@@ -4543,8 +4517,8 @@ async function handleApi(request, response, requestUrl) {
       await recordAudit({ entityType: "pipeline_stage", entityId: stageId, action: "pipeline_stage_archived", actor: currentUser, summary: `Removeu a etapa: ${stage.name}`, changes: { targetStageId, movedCards: cardCount } }, client);
     });
 
-    defaultKanbanCache = null;
-    invalidateLeadSummaryCache();
+    invalidateKanbanMetadataCache();
+    invalidateLeadSummaryCache(currentUser);
     sendJson(response, 200, { ok: true });
     return;
   }
@@ -4605,7 +4579,8 @@ async function handleApi(request, response, requestUrl) {
       return result;
     });
 
-    invalidateLeadSummaryCache();
+    invalidateLeadSummaryCache(currentUser);
+    invalidateKanbanCountsCache();
     sendJson(response, 200, movedLead);
     return;
   }
@@ -4655,7 +4630,8 @@ async function handleApi(request, response, requestUrl) {
       return results;
     });
 
-    invalidateLeadSummaryCache();
+    invalidateLeadSummaryCache(currentUser);
+    invalidateKanbanCountsCache();
     sendJson(response, 200, assignedLeads);
     return;
   }
@@ -4664,19 +4640,15 @@ async function handleApi(request, response, requestUrl) {
     requirePermission(currentUser, "read_leads");
     const accessContext = await getLeadAccessContext(currentUser);
     const scopedAccess = buildLeadAccessSql(accessContext.user, accessContext.teamMembers, "l");
-    const rows = await queryRows(
-      `SELECT TRIM(l.responsible) AS name, COUNT(*) AS total
-       FROM leads l
-       WHERE l.deleted_at = '' AND TRIM(COALESCE(l.responsible, '')) != '' AND ${scopedAccess.clause}
-       GROUP BY TRIM(l.responsible)
-       ORDER BY name ASC
-       LIMIT 500`,
-      scopedAccess.params,
-    );
-    sendJson(response, 200, {
-      owners: rows.map((row) => ({ name: String(row.name || ""), total: Number(row.total || 0) })),
-      scope: accessContext.scope,
+    const cacheKey = `owners:${leadDashboardCacheKey(accessContext)}`;
+    const owners = await filterOptionsCache.getOrLoad(cacheKey, async () => {
+      const rows = await queryRows(
+        `SELECT TRIM(l.responsible) AS name, COUNT(*) AS total FROM leads l
+         WHERE l.deleted_at = '' AND TRIM(COALESCE(l.responsible, '')) != '' AND ${scopedAccess.clause}
+         GROUP BY TRIM(l.responsible) ORDER BY name ASC LIMIT 500`, scopedAccess.params);
+      return rows.map((row) => ({ name: String(row.name || ""), total: Number(row.total || 0) }));
     });
+    sendJson(response, 200, { owners, scope: accessContext.scope });
     return;
   }
 
@@ -4713,7 +4685,9 @@ async function handleApi(request, response, requestUrl) {
   if (pathname === "/api/admin/leads/overview" && method === "GET") {
     requirePermission(currentUser, "manage_users");
     const accessContext = await getLeadAccessContext(currentUser);
-    sendJson(response, 200, await getAdminLeadOverview(accessContext));
+    sendJson(response, 200, await getAdminLeadOverview(accessContext, pool, {
+      includeDuplicates: requestUrl.searchParams.get("includeDuplicates") !== "0",
+    }));
     return;
   }
 
@@ -4736,7 +4710,7 @@ async function handleApi(request, response, requestUrl) {
   if (pathname === "/api/leads/deleted" && method === "GET") {
     requirePermission(currentUser, "restore_leads");
     const accessContext = await getLeadAccessContext(currentUser);
-    sendJson(response, 200, await getAllLeads({ deletedOnly: true, accessContext }));
+    sendJson(response, 200, await getDeletedLeadsPageFromRequest(requestUrl, accessContext));
     return;
   }
 
@@ -4895,7 +4869,7 @@ async function handleApi(request, response, requestUrl) {
 
   if (pathname === "/api/teams" && method === "GET") {
     requirePermission(currentUser, "manage_users");
-    const teams = (await queryRows("SELECT * FROM teams ORDER BY is_active DESC, name ASC")).map(rowToTeam);
+    const teams = await metadataCache.getOrLoad("teams:all", async () => (await queryRows("SELECT * FROM teams ORDER BY is_active DESC, name ASC")).map(rowToTeam));
     sendJson(response, 200, teams);
     return;
   }
@@ -4904,6 +4878,7 @@ async function handleApi(request, response, requestUrl) {
     requirePermission(currentUser, "manage_users");
     const body = await readRequestBody(request);
     const team = await withTransaction((client) => createTeam(body, currentUser, client));
+    invalidateDirectoryCaches();
     sendJson(response, 201, team);
     return;
   }
@@ -4914,31 +4889,26 @@ async function handleApi(request, response, requestUrl) {
     const teamId = decodeURIComponent(teamMatch[1]);
     const body = await readRequestBody(request);
     const team = await withTransaction((client) => updateTeam(teamId, body, currentUser, client));
+    invalidateDirectoryCaches();
     sendJson(response, 200, team);
     return;
   }
 
   if (pathname === "/api/users/assignable" && method === "GET") {
     requirePermission(currentUser, "assign_leads");
-    const users = (await queryRows(
-      `SELECT u.*, t.name AS team_name
-       FROM users u
-       LEFT JOIN teams t ON t.id = u.team_id
-       WHERE u.is_active = 1 AND u.role IN ('consultor_vendas', 'vendedor')
-       ORDER BY u.name ASC, u.email ASC`,
-    )).map((row) => rowToUser(row, false));
+    const users = await metadataCache.getOrLoad("users:assignable", async () => (await queryRows(
+      `SELECT u.*, t.name AS team_name FROM users u LEFT JOIN teams t ON t.id = u.team_id
+       WHERE u.is_active = 1 AND u.role IN ('consultor_vendas', 'vendedor') ORDER BY u.name ASC, u.email ASC`,
+    )).map((row) => rowToUser(row, false)));
     sendJson(response, 200, users);
     return;
   }
 
   if (pathname === "/api/users" && method === "GET") {
     requirePermission(currentUser, "manage_users");
-    const users = (await queryRows(
-      `SELECT u.*, t.name AS team_name
-       FROM users u
-       LEFT JOIN teams t ON t.id = u.team_id
-       ORDER BY u.created_at ASC`,
-    )).map((row) => rowToUser(row));
+    const users = await metadataCache.getOrLoad("users:all", async () => (await queryRows(
+      `SELECT u.*, t.name AS team_name FROM users u LEFT JOIN teams t ON t.id = u.team_id ORDER BY u.created_at ASC`,
+    )).map((row) => rowToUser(row)));
     sendJson(response, 200, users);
     return;
   }
@@ -4947,6 +4917,7 @@ async function handleApi(request, response, requestUrl) {
     requirePermission(currentUser, "manage_users");
     const body = await readRequestBody(request);
     const user = await withTransaction((client) => createUser(body, currentUser, client));
+    invalidateDirectoryCaches();
     sendJson(response, 201, user);
     return;
   }
@@ -4957,6 +4928,7 @@ async function handleApi(request, response, requestUrl) {
     const userId = decodeURIComponent(userMatch[1]);
     const body = await readRequestBody(request);
     const user = await withTransaction((client) => updateUser(userId, body, currentUser, client));
+    invalidateDirectoryCaches();
     sendJson(response, 200, user);
     return;
   }
@@ -4981,6 +4953,7 @@ async function handleApi(request, response, requestUrl) {
       await execute("UPDATE users SET is_active = 0, updated_at = ? WHERE id = ?", [nowIso(), userId], client);
       await recordAudit({ entityType: "user", entityId: userId, action: "user_deactivated", actor: currentUser, summary: "Usuário desativado" }, client);
     });
+    invalidateDirectoryCaches();
     sendJson(response, 200, { ok: true });
     return;
   }
@@ -5008,6 +4981,7 @@ async function handleApi(request, response, requestUrl) {
       await reconcileLeadTasksForLifecycle(result.lead, currentUser, client);
       return result.lead;
     });
+    invalidateLeadSummaryCache(currentUser);
 
     sendJson(response, 201, savedLead);
     return;
@@ -5119,6 +5093,7 @@ async function handleApi(request, response, requestUrl) {
         ],
         client,
       );
+      await commercialProfileRuntime.refreshLead(leadId, client);
 
       const task = await createTaskRecord({
         ...handoff.task,
@@ -5147,7 +5122,7 @@ async function handleApi(request, response, requestUrl) {
       return { lead: savedLead, task };
     });
 
-    invalidateLeadSummaryCache();
+    invalidateLeadSummaryCache(currentUser);
     sendJson(response, 200, result);
     return;
   }
@@ -5351,6 +5326,7 @@ async function handleApi(request, response, requestUrl) {
       await reconcileLeadTasksForLifecycle(result, currentUser, client);
       return result;
     });
+    invalidateLeadSummaryCache(currentUser);
 
     sendJson(response, 200, savedLead);
     return;
@@ -5368,6 +5344,8 @@ async function handleApi(request, response, requestUrl) {
       await cancelPendingTasksForLead(leadId, "Tarefa cancelada porque o lead foi enviado para a lixeira.", currentUser, client);
       await recordAudit({ entityType: "lead", entityId: leadId, action: "lead_deleted", actor: currentUser, summary: `Moveu para lixeira: ${lead?.name || leadId}` }, client);
     });
+    invalidateLeadSummaryCache(currentUser);
+    invalidateKanbanCountsCache();
 
     sendJson(response, 200, { ok: true });
     return;
@@ -5379,6 +5357,14 @@ async function handleApi(request, response, requestUrl) {
 const handleStatic = createStaticAssetsHandler({ distDir, sendJson });
 
 async function handleRequest(request, response) {
+  const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
+  return performanceMonitor.runRequest(
+    { request, response, pathname: requestUrl.pathname },
+    () => handleRequestInstrumented(request, response, requestUrl),
+  );
+}
+
+async function handleRequestInstrumented(request, response, requestUrl) {
   activeRequestCount += 1;
   response[RESPONSE_REQUEST] = request;
   let finalized = false;
@@ -5390,7 +5376,6 @@ async function handleRequest(request, response) {
   response.once("finish", finalize);
   response.once("close", finalize);
 
-  const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
   applySecurityHeaders(request, response);
 
   try {
@@ -5474,6 +5459,9 @@ async function gracefulShutdown(signal) {
 
   if (securityCleanupTimer) clearInterval(securityCleanupTimer);
   if (jobCleanupTimer) clearInterval(jobCleanupTimer);
+  if (commercialProfileReadinessTimer) clearInterval(commercialProfileReadinessTimer);
+  if (datetimeColumnsReadinessTimer) clearInterval(datetimeColumnsReadinessTimer);
+  performanceMonitor.stop();
   shutdownController.abort();
 
   const [httpClosed, jobsDrained] = await Promise.all([
@@ -5499,50 +5487,83 @@ async function gracefulShutdown(signal) {
   console.log("Encerramento gracioso concluído.");
 }
 
-async function startServer() {
-  await initializeDatabase();
-  await startPersistentJobWorker();
+async function startRuntime() {
+  await initializeDatabase({ manageSchema: PROCESS_CAPABILITIES.managesSchema });
 
-  securityCleanupTimer = setInterval(() => {
-    cleanupSecurityState().catch((error) => console.warn("Não foi possível limpar sessões ou rate limits expirados:", error.message));
-  }, RATE_LIMIT_CLEANUP_INTERVAL_MS);
-  securityCleanupTimer.unref?.();
+  if (PROCESS_CAPABILITIES.runsJobWorker) {
+    await startPersistentJobWorker();
+  }
+  performanceMonitor.startRuntimeSampler(() => pool);
 
-  jobCleanupTimer = setInterval(() => {
-    cleanupExpiredJobArtifacts().catch((error) => console.warn("Não foi possível aplicar retenção dos jobs:", error.message));
-  }, JOB_CLEANUP_INTERVAL_MS);
-  jobCleanupTimer.unref?.();
+  if (PROCESS_CAPABILITIES.runsHttpServer) {
+    securityCleanupTimer = setInterval(() => {
+      cleanupSecurityState().catch((error) => console.warn("Não foi possível limpar sessões ou rate limits expirados:", error.message));
+    }, RATE_LIMIT_CLEANUP_INTERVAL_MS);
+    securityCleanupTimer.unref?.();
 
-  await Promise.allSettled([
-    cleanupSecurityState(),
-    cleanupExpiredJobArtifacts(),
-    enqueueSearchIndexRebuild(),
-  ]);
+    commercialProfileReadinessTimer = setInterval(() => {
+      commercialProfileRuntime.refreshReadiness({ logTransition: true }).catch((error) => {
+        console.warn("Não foi possível verificar prontidão da inteligência comercial materializada:", error.message);
+      });
+    }, COMMERCIAL_PROFILE_READINESS_CHECK_MS);
+    commercialProfileReadinessTimer.unref?.();
 
-  httpServer = createServer((request, response) => {
-    void handleRequest(request, response);
-  });
-  httpServer.requestTimeout = HTTP_REQUEST_TIMEOUT_MS;
-  httpServer.headersTimeout = Math.min(HTTP_HEADERS_TIMEOUT_MS, HTTP_REQUEST_TIMEOUT_MS);
-  httpServer.keepAliveTimeout = HTTP_KEEP_ALIVE_TIMEOUT_MS;
-  httpServer.on("connection", (socket) => {
-    openSockets.add(socket);
-    socket.once("close", () => openSockets.delete(socket));
-  });
+    datetimeColumnsReadinessTimer = setInterval(() => {
+      dateColumnRuntime.refreshReadiness({ logTransition: true }).catch((error) => {
+        console.warn("Não foi possível verificar prontidão das colunas DATETIME(3):", error.message);
+      });
+    }, DATETIME_COLUMNS_READINESS_CHECK_MS);
+    datetimeColumnsReadinessTimer.unref?.();
 
-  await new Promise((resolve, reject) => {
-    httpServer.once("error", reject);
-    httpServer.listen(PORT, () => {
-      httpServer.off("error", reject);
-      resolve();
+    await Promise.allSettled([cleanupSecurityState()]);
+  }
+
+  if (PROCESS_CAPABILITIES.runsJobWorker) {
+    jobCleanupTimer = setInterval(() => {
+      cleanupExpiredJobArtifacts().catch((error) => console.warn("Não foi possível aplicar retenção dos jobs:", error.message));
+    }, JOB_CLEANUP_INTERVAL_MS);
+    jobCleanupTimer.unref?.();
+
+    await Promise.allSettled([
+      cleanupExpiredJobArtifacts(),
+      enqueueSearchIndexRebuild(),
+    ]);
+  }
+
+  if (PROCESS_CAPABILITIES.runsHttpServer) {
+    httpServer = createServer((request, response) => {
+      void handleRequest(request, response);
     });
-  });
+    httpServer.requestTimeout = HTTP_REQUEST_TIMEOUT_MS;
+    httpServer.headersTimeout = Math.min(HTTP_HEADERS_TIMEOUT_MS, HTTP_REQUEST_TIMEOUT_MS);
+    httpServer.keepAliveTimeout = HTTP_KEEP_ALIVE_TIMEOUT_MS;
+    httpServer.on("connection", (socket) => {
+      openSockets.add(socket);
+      socket.once("close", () => openSockets.delete(socket));
+    });
 
-  console.log(`CRM Casa do Ads v${APP_VERSION} API rodando em http://localhost:${PORT}`);
-  console.log(`MySQL ativo em: ${MYSQL_HOST}:${MYSQL_PORT}/${MYSQL_DATABASE}`);
-  console.log(`Backups criptografados em: ${backupSettings.storageRoot}`);
-  console.log(`Artifacts temporários de jobs em: ${jobArtifactSettings.storageRoot}`);
-  console.log(`Worker persistente: concorrência ${JOB_WORKER_CONCURRENCY}; proxy confiável: ${TRUST_PROXY_POLICY.enabled ? "configurado" : "desativado"}`);
+    await new Promise((resolve, reject) => {
+      httpServer.once("error", reject);
+      httpServer.listen(PORT, () => {
+        httpServer.off("error", reject);
+        resolve();
+      });
+    });
+
+    console.log(`CRM Casa do Ads v${APP_VERSION} API rodando em http://localhost:${PORT}`);
+  } else {
+    console.log(`CRM Casa do Ads v${APP_VERSION} worker iniciado sem servidor HTTP.`);
+  }
+
+  console.log(`Process role: ${PROCESS_ROLE}; MySQL: ${MYSQL_HOST}:${MYSQL_PORT}/${MYSQL_DATABASE}; pool: ${MYSQL_POOL_CONNECTION_LIMIT}`);
+  if (PROCESS_CAPABILITIES.runsHttpServer) console.log(`Backups criptografados em: ${backupSettings.storageRoot}`);
+  if (PROCESS_CAPABILITIES.runsJobWorker) {
+    console.log(`Artifacts temporários de jobs em: ${jobArtifactSettings.storageRoot}`);
+    console.log(`Worker persistente: concorrência ${JOB_WORKER_CONCURRENCY}`);
+  }
+  if (PROCESS_CAPABILITIES.runsHttpServer) {
+    console.log(`Proxy confiável: ${TRUST_PROXY_POLICY.enabled ? "configurado" : "desativado"}`);
+  }
 }
 
 process.once("SIGTERM", () => {
@@ -5553,7 +5574,7 @@ process.once("SIGINT", () => {
 });
 
 try {
-  await startServer();
+  await startRuntime();
 } catch (error) {
   console.error("Falha ao iniciar o CRM", {
     code: error?.code || "STARTUP_FAILED",

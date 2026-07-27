@@ -65,8 +65,8 @@ test("filtros de mapa distinguem migração, outra agência, diagnóstico e mape
 test("filtro inválido não é interpolado no SQL", () => {
   assert.equal(normalizeOpportunityFilter("anything' OR 1=1"), "");
   assert.equal(buildOpportunityQuickFilterSql("anything' OR 1=1", "l"), "");
-  assert.match(buildOpportunityQuickFilterSql("migration", "l"), /Outra agência/);
-  assert.match(buildOpportunityQuickFilterSql("diagnosis", "l"), /Não é feito/);
+  assert.match(buildOpportunityQuickFilterSql("migration", "l", { useMaterialized: false }), /Outra agência/);
+  assert.match(buildOpportunityQuickFilterSql("diagnosis", "l", { useMaterialized: false }), /Não é feito/);
 });
 
 test("todos os filtros comerciais suportados geram cláusula SQL", () => {
@@ -86,14 +86,21 @@ test("todos os filtros comerciais suportados geram cláusula SQL", () => {
   }
 });
 
-test("SQL global usa JSON_EXTRACT por serviço e não aproxima migração por texto", () => {
-  const sql = buildOpportunitySummarySql({ where: "l.deleted_at = '' AND l.responsible_user_id = ?", alias: "l" });
+test("SQL legado continua disponível durante o backfill sem aproximar migração por texto", () => {
+  const sql = buildOpportunitySummarySql({ where: "l.deleted_at = '' AND l.responsible_user_id = ?", alias: "l", useMaterialized: false });
   assert.match(sql, /JSON_EXTRACT\(l\.service_status_map/);
   assert.match(sql, /ELSE 'Não sabemos' END/);
   assert.match(sql, /opportunity_migration/);
   assert.match(sql, /opportunity_expansion/);
   assert.doesNotMatch(sql, /LIKE '%outra ag%'/i);
   assert.match(sql, /l\.responsible_user_id = \?/);
+});
+
+test("consultas materializadas eliminam JSON_EXTRACT quando o backfill está pronto", () => {
+  const summarySql = buildOpportunitySummarySql({ where: "l.deleted_at = ''", alias: "l" });
+  assert.match(summarySql, /l\.opportunity_score/);
+  assert.match(summarySql, /l\.service_casa_count/);
+  assert.doesNotMatch(summarySql, /JSON_EXTRACT/);
 });
 
 test("overview administrativo calcula qualidade sobre consulta global autorizada", () => {

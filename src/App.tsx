@@ -1,10 +1,9 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import packageMetadata from "../package.json";
 import { Header } from "./components/Header";
 import { ActionFeedbackHost, notifyAction } from "./components/ActionFeedback";
 import { useConfirmationDialog } from "./components/ConfirmationDialog";
 import { DailyOperation } from "./components/DailyOperation";
-import { LeadTable } from "./components/LeadTable";
 import { LoginScreen } from "./components/LoginScreen";
 import type { OpportunityQuickFilter } from "./components/ServiceOpportunityMap";
 import type { CRMUser, Lead } from "./types/Lead";
@@ -42,6 +41,7 @@ type ServerStatus = "loading" | "online" | "offline";
 
 
 const ImportLeads = lazy(() => import("./components/ImportLeads").then((module) => ({ default: module.ImportLeads })));
+const LeadTable = lazy(() => import("./components/LeadTable").then((module) => ({ default: module.LeadTable })));
 const LeadDetailsDrawer = lazy(() => import("./components/LeadDetailsDrawer").then((module) => ({ default: module.LeadDetailsDrawer })));
 const LeadHandoffDialog = lazy(() => import("./components/LeadHandoffDialog").then((module) => ({ default: module.LeadHandoffDialog })));
 const LeadForm = lazy(() => import("./components/LeadForm").then((module) => ({ default: module.LeadForm })));
@@ -119,6 +119,8 @@ export default function App() {
   const [globalSearch, setGlobalSearch] = useState("");
   const [kanbanRefreshVersion, setKanbanRefreshVersion] = useState(0);
   const [opportunityRefreshVersion, setOpportunityRefreshVersion] = useState(0);
+  const leadsRef = useRef<Lead[]>([]);
+  const leadListRequestController = useRef<AbortController | null>(null);
   const { confirm, confirmationDialog } = useConfirmationDialog();
 
   const selectedLead = useMemo(
@@ -127,12 +129,19 @@ export default function App() {
   );
 
   useEffect(() => {
+    leadsRef.current = leads;
+  }, [leads]);
+
+  useEffect(() => {
     bootstrap();
     const legacyCheckId = window.setTimeout(() => {
       setLegacyLocalLeads(getLegacyStoredLeads());
     }, 500);
 
-    return () => window.clearTimeout(legacyCheckId);
+    return () => {
+      window.clearTimeout(legacyCheckId);
+      leadListRequestController.current?.abort();
+    };
   }, []);
 
   async function bootstrap() {
@@ -184,7 +193,7 @@ export default function App() {
     if (hasPermission(user, "assign_leads")) void refreshAssignableUsers();
   }
 
-  async function handleLogout() {
+  const handleLogout = useCallback(async () => {
     await logoutFromServer().catch(() => undefined);
     setCurrentUser(null);
     setLeads([]);
@@ -193,16 +202,21 @@ export default function App() {
     setSelectedLeadId(null);
     setHandoffLead(null);
     setActiveTab("operation");
-  }
+  }, []);
 
   const loadLeadsFromServer = useCallback(async (params: FetchLeadsParams = {}, options: { append?: boolean; keepScreen?: boolean } = {}) => {
+    leadListRequestController.current?.abort();
+    const controller = new AbortController();
+    leadListRequestController.current = controller;
+
     if (options.keepScreen) setIsLeadsRefreshing(true);
     else setIsLoading(true);
     setApiError("");
 
     try {
       const normalizedParams = { limit: LEADS_PAGE_SIZE, offset: 0, includeSummary: false, ...params };
-      const result = await fetchLeadPageFromServer(normalizedParams);
+      const result = await fetchLeadPageFromServer(normalizedParams, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       setLeads((currentLeads) => {
         if (!options.append) return result.leads;
 
@@ -218,6 +232,7 @@ export default function App() {
       }
       setServerStatus("online");
     } catch (caughtError) {
+      if (caughtError instanceof Error && caughtError.name === "AbortError") return;
       setServerStatus("offline");
       setApiError(
         caughtError instanceof Error
@@ -225,17 +240,20 @@ export default function App() {
           : "Não foi possível carregar os leads do servidor.",
       );
     } finally {
-      if (options.keepScreen) setIsLeadsRefreshing(false);
-      else setIsLoading(false);
-      setIsAuthLoading(false);
+      if (leadListRequestController.current === controller) {
+        leadListRequestController.current = null;
+        if (options.keepScreen) setIsLeadsRefreshing(false);
+        else setIsLoading(false);
+        setIsAuthLoading(false);
+      }
     }
   }, []);
 
-  function replaceLeadInState(updatedLead: Lead) {
+  const replaceLeadInState = useCallback((updatedLead: Lead) => {
     setLeads((currentLeads) =>
       currentLeads.map((lead) => (lead.id === updatedLead.id ? updatedLead : lead)),
     );
-  }
+  }, []);
 
   async function createLead(lead: Lead) {
     if (!hasPermission(currentUser, "create_leads")) return;
@@ -347,7 +365,7 @@ export default function App() {
     setOpportunityRefreshVersion((version) => version + 1);
   }
 
-  async function updateLead(updatedLead: Lead) {
+  const updateLead = useCallback(async (updatedLead: Lead) => {
     if (!hasPermission(currentUser, "edit_leads_full") && !hasPermission(currentUser, "edit_lead_sales_fields")) return;
     setIsSaving(true);
     setApiError("");
@@ -369,15 +387,23 @@ export default function App() {
     } finally {
       setIsSaving(false);
     }
-  }
+  }, [currentUser, loadLeadsFromServer, refreshLeadSummary, replaceLeadInState]);
 
-  async function updateLeadSilently(updatedLead: Lead) {
+  const updateLeadSilently = useCallback(async (updatedLead: Lead) => {
     if (!hasPermission(currentUser, "edit_leads_full")) return;
     setApiError("");
     replaceLeadInState(updatedLead);
 
     try {
-      const savedLead = await updateLeadOnServer(updatedLead);
+      const currentLead = await fetchLeadByIdFromServer(updatedLead.id);
+      const savedLead = await updateLeadOnServer({
+        ...currentLead,
+        serviceStatusMap: updatedLead.serviceStatusMap,
+        serviceInterests: updatedLead.serviceInterests,
+        advertisesOnMeta: updatedLead.advertisesOnMeta,
+        advertisesOnGoogle: updatedLead.advertisesOnGoogle,
+        doesNotAdvertise: updatedLead.doesNotAdvertise,
+      });
       replaceLeadInState(savedLead);
       setServerStatus("online");
       setKanbanRefreshVersion((version) => version + 1);
@@ -388,15 +414,16 @@ export default function App() {
       setApiError(caughtError instanceof Error ? caughtError.message : "Não foi possível salvar a alteração no mapa.");
       await loadLeadsFromServer();
     }
-  }
+  }, [currentUser, loadLeadsFromServer, refreshLeadSummary, replaceLeadInState]);
 
-  async function deleteLead(leadId: string) {
+  const deleteLead = useCallback(async (leadId: string) => {
     if (!hasPermission(currentUser, "delete_leads")) {
       notifyAction("Seu usuário não tem permissão para excluir leads.", "error");
       return;
     }
 
-    const leadToDelete = leads.find((lead) => lead.id === leadId);
+    const currentLeads = leadsRef.current;
+    const leadToDelete = currentLeads.find((lead) => lead.id === leadId);
     const confirmed = await confirm({
       title: "Mover lead para a lixeira?",
       message: leadToDelete?.name || leadToDelete?.company || "Este lead",
@@ -407,12 +434,9 @@ export default function App() {
 
     if (!confirmed) return;
 
-    const previousLeads = leads;
-    setLeads((currentLeads) => currentLeads.filter((lead) => lead.id !== leadId));
-
-    if (selectedLeadId === leadId) {
-      setSelectedLeadId(null);
-    }
+    const previousLeads = currentLeads;
+    setLeads((loadedLeads) => loadedLeads.filter((lead) => lead.id !== leadId));
+    setSelectedLeadId((currentLeadId) => currentLeadId === leadId ? null : currentLeadId);
 
     setIsSaving(true);
     setApiError("");
@@ -430,7 +454,7 @@ export default function App() {
     } finally {
       setIsSaving(false);
     }
-  }
+  }, [confirm, currentUser, refreshLeadSummary]);
 
   async function migrateLegacyLocalBase() {
     if (!legacyLocalLeads.length || !hasPermission(currentUser, "import_leads")) return;
@@ -455,35 +479,41 @@ export default function App() {
     }
   }
 
-  async function openLead(leadId: string, mode: DrawerMode) {
-    let lead = leads.find((currentLead) => currentLead.id === leadId);
-
-    if (!lead) {
-      try {
-        lead = await fetchLeadByIdFromServer(leadId);
-        setLeads((currentLeads) => [lead!, ...currentLeads.filter((currentLead) => currentLead.id !== leadId)]);
-      } catch (caughtError) {
-        setApiError(caughtError instanceof Error ? caughtError.message : "Não foi possível abrir o lead.");
-        return;
-      }
+  const openLead = useCallback(async (leadId: string, mode: DrawerMode) => {
+    try {
+      const lead = await fetchLeadByIdFromServer(leadId);
+      setLeads((currentLeads) => currentLeads.some((currentLead) => currentLead.id === leadId)
+        ? currentLeads.map((currentLead) => currentLead.id === leadId ? lead : currentLead)
+        : [lead, ...currentLeads]);
+    } catch (caughtError) {
+      setApiError(caughtError instanceof Error ? caughtError.message : "Não foi possível abrir o lead.");
+      return;
     }
 
     setSelectedLeadId(leadId);
     setDrawerMode(mode);
-  }
+  }, []);
 
-  function closeDrawer() {
+  const closeDrawer = useCallback(() => {
     setSelectedLeadId(null);
     setDrawerMode("view");
-  }
+  }, []);
 
-  function openLeadHandoff(lead: Lead) {
+  const openLeadHandoff = useCallback((lead: Lead) => {
     setHandoffLead(lead);
-  }
+  }, []);
 
-  function closeLeadHandoff() {
+  const closeLeadHandoff = useCallback(() => {
     setHandoffLead(null);
-  }
+  }, []);
+
+  const handleViewLead = useCallback((leadId: string) => {
+    void openLead(leadId, "view");
+  }, [openLead]);
+
+  const handleEditLead = useCallback((leadId: string) => {
+    void openLead(leadId, "edit");
+  }, [openLead]);
 
   function handleLeadHandoffCompleted(updatedLead: Lead) {
     replaceLeadInState(updatedLead);
@@ -512,17 +542,15 @@ export default function App() {
     void refreshLeadSummary();
   }
 
-  function handleGlobalSearchChange(value: string) {
+  const handleGlobalSearchChange = useCallback((value: string) => {
     setGlobalSearch(value);
-    if (value.trim() && activeTab !== "leads") setActiveTab("leads");
-  }
+    if (value.trim()) setActiveTab("leads");
+  }, []);
 
-  async function handleGlobalSearchSubmit(value: string) {
-    const searchValue = value.trim();
-    setGlobalSearch(searchValue);
+  const handleGlobalSearchSubmit = useCallback((value: string) => {
+    setGlobalSearch(value.trim());
     setActiveTab("leads");
-    await loadLeadsFromServer({ search: searchValue, offset: 0, limit: LEADS_PAGE_SIZE, includeSummary: false }, { keepScreen: true });
-  }
+  }, []);
 
   const handleLeadQueryChange = useCallback(
     async (params: FetchLeadsParams, options: { append?: boolean } = {}) => {
@@ -530,6 +558,15 @@ export default function App() {
     },
     [loadLeadsFromServer],
   );
+
+  const handleOperationalDataChanged = useCallback(() => {
+    void loadLeadsFromServer({ includeSummary: false }, { keepScreen: true });
+    void refreshLeadSummary();
+  }, [loadLeadsFromServer, refreshLeadSummary]);
+
+  const handleRefreshLeads = useCallback(() => (
+    loadLeadsFromServer({ includeSummary: false }, { keepScreen: true })
+  ), [loadLeadsFromServer]);
 
   const openLeadFilterFromAdmin = useCallback((filter: "owner") => {
     setGlobalSearch("");
@@ -759,11 +796,8 @@ export default function App() {
             leads={leads}
             currentUser={currentUser}
             assignableUsers={assignableUsers}
-            onViewLead={(leadId) => openLead(leadId, "view")}
-            onDataChanged={() => {
-              void loadLeadsFromServer({ includeSummary: false }, { keepScreen: true });
-              void refreshLeadSummary();
-            }}
+            onViewLead={handleViewLead}
+            onDataChanged={handleOperationalDataChanged}
           />
         ) : null}
   
@@ -777,8 +811,8 @@ export default function App() {
               ownerOptions={leadFilterOptions.owners}
               isLoading={isLeadsRefreshing}
               onQueryChange={handleLeadQueryChange}
-              onViewLead={(leadId) => { void openLead(leadId, "view"); }}
-              onEditLead={(leadId) => { void openLead(leadId, "edit"); }}
+              onViewLead={handleViewLead}
+              onEditLead={handleEditLead}
               onDeleteLead={deleteLead}
               onHandoffLead={openLeadHandoff}
               canEditLeads={hasPermission(currentUser, "edit_leads_full") || hasPermission(currentUser, "edit_lead_sales_fields")}
@@ -813,8 +847,8 @@ export default function App() {
               onQueryChange={handleLeadQueryChange}
               onUpdateLead={updateLeadSilently}
               canUpdateCommercialMap={hasPermission(currentUser, "edit_leads_full")}
-              onViewLead={(leadId) => openLead(leadId, "view")}
-              onEditLead={(leadId) => openLead(leadId, "edit")}
+              onViewLead={handleViewLead}
+              onEditLead={handleEditLead}
             />
           </section>
         ) : null}
@@ -834,41 +868,44 @@ export default function App() {
         {!isLoading && activeTab === "settings" ? (
           <SettingsCenter
             currentUser={currentUser}
-            onViewLead={(leadId) => openLead(leadId, "view")}
-            onEditLead={(leadId) => openLead(leadId, "edit")}
+            onViewLead={handleViewLead}
+            onEditLead={handleEditLead}
             onLeadRestored={handleLeadRestored}
             onLeadsMerged={handleLeadsMerged}
-            onRefreshLeads={() => loadLeadsFromServer({ includeSummary: false }, { keepScreen: true })}
+            onRefreshLeads={handleRefreshLeads}
             onOpenLeadFilter={openLeadFilterFromAdmin}
             onOpenOpportunityFilter={openOpportunityFilterFromAdmin}
           />
         ) : null}
   
         {!handoffLead ? (
-          <LeadDetailsDrawer
-            lead={selectedLead}
-            mode={drawerMode}
-            currentUser={currentUser}
-            assignableUsers={assignableUsers}
-            onClose={closeDrawer}
-            onChangeMode={setDrawerMode}
-            onSaveLead={updateLead}
-            onDeleteLead={deleteLead}
-            onRequestHandoff={openLeadHandoff}
-            onTaskChanged={() => {
-              void loadLeadsFromServer({ includeSummary: false }, { keepScreen: true });
-              void refreshLeadSummary();
-            }}
-          />
+          selectedLead ? (
+            <Suspense fallback={<div className="syncBar" role="status">Abrindo lead...</div>}>
+              <LeadDetailsDrawer
+                lead={selectedLead}
+                mode={drawerMode}
+                currentUser={currentUser}
+                assignableUsers={assignableUsers}
+                onClose={closeDrawer}
+                onChangeMode={setDrawerMode}
+                onSaveLead={updateLead}
+                onDeleteLead={deleteLead}
+                onRequestHandoff={openLeadHandoff}
+                onTaskChanged={handleOperationalDataChanged}
+              />
+            </Suspense>
+          ) : null
         ) : null}
   
         {handoffLead ? (
-          <LeadHandoffDialog
-            lead={handoffLead}
-            assignableUsers={assignableUsers}
-            onClose={closeLeadHandoff}
-            onCompleted={(result) => handleLeadHandoffCompleted(result.lead)}
-          />
+          <Suspense fallback={<div className="syncBar" role="status">Preparando encaminhamento...</div>}>
+            <LeadHandoffDialog
+              lead={handoffLead}
+              assignableUsers={assignableUsers}
+              onClose={closeLeadHandoff}
+              onCompleted={(result) => handleLeadHandoffCompleted(result.lead)}
+            />
+          </Suspense>
         ) : null}
   
         </Suspense>

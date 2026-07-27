@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   getClientIntelligence,
   getLeadWithSyncedAdvertisingFromServices,
@@ -92,21 +92,6 @@ function getServiceCounts(lead: Lead, services: ServiceInterest[] = serviceOptio
   return counts;
 }
 
-function buildSummary(leads: Lead[], services: ServiceInterest[] = serviceOptions): ServiceSummary {
-  return leads.reduce<ServiceSummary>((summary, lead) => {
-    const counts = getServiceCounts(lead, services);
-    serviceProviderStatusOptions.forEach((status) => {
-      summary[status] += counts[status];
-    });
-    return summary;
-  }, {
-    "Casa do Ads": 0,
-    "Outra agência": 0,
-    "Não é feito": 0,
-    "Não sabemos": 0,
-  });
-}
-
 function getCommercialType(lead: Lead, services: ServiceInterest[] = serviceOptions) {
   const counts = getServiceCounts(lead, services);
 
@@ -187,25 +172,7 @@ function getLeadSubtitle(lead: Lead): string {
   return [lead.company, lead.responsible ? `Resp. ${lead.responsible}` : "Responsável pendente"].filter(Boolean).join(" • ");
 }
 
-function sortOpportunityLeads(leadsToSort: Lead[], sortMode: SortMode, visibleServices: ServiceInterest[]) {
-  return [...leadsToSort].sort((firstLead, secondLead) => {
-    if (sortMode === "name") {
-      return (firstLead.name || firstLead.company || "").localeCompare(secondLead.name || secondLead.company || "", "pt-BR");
-    }
-
-    if (sortMode === "unknown") {
-      return getServiceCounts(secondLead, visibleServices)["Não sabemos"] - getServiceCounts(firstLead, visibleServices)["Não sabemos"];
-    }
-
-    if (sortMode === "agency") {
-      return getServiceCounts(secondLead, visibleServices)["Outra agência"] - getServiceCounts(firstLead, visibleServices)["Outra agência"];
-    }
-
-    return getOpportunityScore(secondLead, visibleServices) - getOpportunityScore(firstLead, visibleServices);
-  });
-}
-
-export function ServiceOpportunityMap({ leads, totalLeadsCount = leads.length, loadedLeadsCount = leads.length, externalSearch = "", pagination, opportunitySummary, filteredOpportunitySummary, isLoading = false, refreshVersion = 0, quickFilter, onQuickFilterChange, onQueryChange, onUpdateLead, canUpdateCommercialMap = false, onViewLead, onEditLead }: ServiceOpportunityMapProps) {
+export const ServiceOpportunityMap = memo(function ServiceOpportunityMap({ leads, totalLeadsCount = leads.length, loadedLeadsCount = leads.length, externalSearch = "", pagination, opportunitySummary, filteredOpportunitySummary, isLoading = false, refreshVersion = 0, quickFilter, onQuickFilterChange, onQueryChange, onUpdateLead, canUpdateCommercialMap = false, onViewLead, onEditLead }: ServiceOpportunityMapProps) {
   const [search, setSearch] = useState("");
   const [selectedService, setSelectedService] = useState<ServiceInterest | "">("");
   const [selectedStatus, setSelectedStatus] = useState<ServiceProviderStatus | "">("");
@@ -217,6 +184,15 @@ export function ServiceOpportunityMap({ leads, totalLeadsCount = leads.length, l
   const rankingSignatureRef = useRef("");
 
   const visibleServices = useMemo(() => selectedService ? [selectedService] : serviceOptions, [selectedService]);
+  const metricsByLeadId = useMemo(() => new Map(leads.map((lead) => [lead.id, {
+    normalizedMap: normalizeServiceStatusMap(lead.serviceStatusMap, lead.serviceInterests || []),
+    counts: getServiceCounts(lead, visibleServices),
+    type: getCommercialType(lead, visibleServices),
+    score: getOpportunityScore(lead, visibleServices),
+    nextOffer: getNextBestOffer(lead, visibleServices),
+    intelligence: getClientIntelligence(lead),
+    leadScores: getLeadScores(lead),
+  }])), [leads, visibleServices]);
 
   useEffect(() => {
     if (!externalSearch) return;
@@ -242,26 +218,23 @@ export function ServiceOpportunityMap({ leads, totalLeadsCount = leads.length, l
     const normalizedSearch = search.trim().toLowerCase();
     const serverMode = Boolean(onQueryChange);
 
-    const result = leads.filter((lead) => {
-      const normalizedMap = normalizeServiceStatusMap(lead.serviceStatusMap, lead.serviceInterests || []);
-      const counts = getServiceCounts(lead, visibleServices);
-      const type = getCommercialType(lead, visibleServices).label;
-      const score = getOpportunityScore(lead, visibleServices);
-      const nextOffer = getNextBestOffer(lead, visibleServices);
-      const intelligence = getClientIntelligence(lead);
+    return leads.filter((lead) => {
+      const metrics = metricsByLeadId.get(lead.id);
+      if (!metrics) return false;
+      const type = metrics.type.label;
 
       const matchesQuickFilter = serverMode ||
         quickFilter === "all" ||
         (quickFilter === "expansion" && type === "Expansão") ||
         (quickFilter === "migration" && type === "Migração") ||
-        (quickFilter === "mapping" && counts["Não sabemos"] > 0) ||
-        (quickFilter === "priority" && score >= 70) ||
-        (quickFilter === "agency" && counts["Outra agência"] > 0) ||
-        (quickFilter === "diagnosis" && !intelligence.hasAnyConfirmedInformation) ||
-        (quickFilter === "mapping-critical" && getLeadScores(lead).mappingUrgency >= 70);
+        (quickFilter === "mapping" && metrics.counts["Não sabemos"] > 0) ||
+        (quickFilter === "priority" && metrics.score >= 70) ||
+        (quickFilter === "agency" && metrics.counts["Outra agência"] > 0) ||
+        (quickFilter === "diagnosis" && !metrics.intelligence.hasAnyConfirmedInformation) ||
+        (quickFilter === "mapping-critical" && metrics.leadScores.mappingUrgency >= 70);
 
       if (!matchesQuickFilter) return false;
-      if (selectedStatus && !visibleServices.some((service) => normalizedMap[service] === selectedStatus)) return false;
+      if (selectedStatus && !visibleServices.some((service) => metrics.normalizedMap[service] === selectedStatus)) return false;
       if (serverMode || !normalizedSearch) return true;
 
       const searchableContent = [
@@ -274,21 +247,24 @@ export function ServiceOpportunityMap({ leads, totalLeadsCount = leads.length, l
         lead.temperature,
         lead.pain,
         type,
-        nextOffer.label,
-        nextOffer.reason,
-        intelligence.items.map((item) => `${item.label} ${item.value}`).join(" "),
+        metrics.nextOffer.label,
+        metrics.nextOffer.reason,
+        metrics.intelligence.items.map((item) => `${item.label} ${item.value}`).join(" "),
       ].join(" ").toLowerCase();
 
       return searchableContent.includes(normalizedSearch);
     });
+  }, [leads, metricsByLeadId, onQueryChange, quickFilter, search, selectedStatus, visibleServices]);
 
-    return result.sort((firstLead, secondLead) => {
-      if (sortMode === "name") return (firstLead.name || firstLead.company || "").localeCompare(secondLead.name || secondLead.company || "", "pt-BR");
-      if (sortMode === "unknown") return getServiceCounts(secondLead, visibleServices)["Não sabemos"] - getServiceCounts(firstLead, visibleServices)["Não sabemos"];
-      if (sortMode === "agency") return getServiceCounts(secondLead, visibleServices)["Outra agência"] - getServiceCounts(firstLead, visibleServices)["Outra agência"];
-      return getOpportunityScore(secondLead, visibleServices) - getOpportunityScore(firstLead, visibleServices);
-    });
-  }, [leads, onQueryChange, quickFilter, search, selectedStatus, sortMode, visibleServices]);
+  const sortedFilteredLeads = useMemo(() => [...filteredLeads].sort((firstLead, secondLead) => {
+    if (sortMode === "name") return (firstLead.name || firstLead.company || "").localeCompare(secondLead.name || secondLead.company || "", "pt-BR");
+    const firstMetrics = metricsByLeadId.get(firstLead.id);
+    const secondMetrics = metricsByLeadId.get(secondLead.id);
+    if (!firstMetrics || !secondMetrics) return 0;
+    if (sortMode === "unknown") return secondMetrics.counts["Não sabemos"] - firstMetrics.counts["Não sabemos"];
+    if (sortMode === "agency") return secondMetrics.counts["Outra agência"] - firstMetrics.counts["Outra agência"];
+    return secondMetrics.score - firstMetrics.score;
+  }), [filteredLeads, metricsByLeadId, sortMode]);
 
   const rankingSignature = useMemo(
     () => JSON.stringify({
@@ -307,32 +283,46 @@ export function ServiceOpportunityMap({ leads, totalLeadsCount = leads.length, l
     if (rankingSignatureRef.current === rankingSignature && lockedRankingIds.length) return;
 
     rankingSignatureRef.current = rankingSignature;
-    setLockedRankingIds(sortOpportunityLeads(filteredLeads, sortMode, visibleServices).map((lead) => lead.id));
-  }, [filteredLeads, lockedRankingIds.length, rankingSignature, sortMode, visibleServices]);
+    setLockedRankingIds(sortedFilteredLeads.map((lead) => lead.id));
+  }, [lockedRankingIds.length, rankingSignature, sortedFilteredLeads]);
 
   const rankedLeads = useMemo(() => {
-    if (!lockedRankingIds.length) return filteredLeads;
+    if (!lockedRankingIds.length) return sortedFilteredLeads;
 
-    const leadById = new Map(filteredLeads.map((lead) => [lead.id, lead]));
+    const leadById = new Map(sortedFilteredLeads.map((lead) => [lead.id, lead]));
     const orderedLeads = lockedRankingIds
       .map((leadId) => leadById.get(leadId))
       .filter((lead): lead is Lead => Boolean(lead));
     const orderedIds = new Set(orderedLeads.map((lead) => lead.id));
-    const newLeads = filteredLeads.filter((lead) => !orderedIds.has(lead.id));
+    const newLeads = sortedFilteredLeads.filter((lead) => !orderedIds.has(lead.id));
 
     return [...orderedLeads, ...newLeads];
-  }, [filteredLeads, lockedRankingIds]);
+  }, [lockedRankingIds, sortedFilteredLeads]);
 
-  const summary = useMemo(
-    () => selectedService
-      ? buildSummary(filteredLeads, visibleServices)
-      : filteredOpportunitySummary?.serviceStatuses || buildSummary(filteredLeads, visibleServices),
-    [filteredLeads, filteredOpportunitySummary, selectedService, visibleServices],
+  const localSummary = useMemo(() => filteredLeads.reduce<ServiceSummary>((summary, lead) => {
+    const counts = metricsByLeadId.get(lead.id)?.counts;
+    if (!counts) return summary;
+    serviceProviderStatusOptions.forEach((status) => {
+      summary[status] += counts[status];
+    });
+    return summary;
+  }, {
+    "Casa do Ads": 0,
+    "Outra agência": 0,
+    "Não é feito": 0,
+    "Não sabemos": 0,
+  }), [filteredLeads, metricsByLeadId]);
+
+  const summary = selectedService
+    ? localSummary
+    : filteredOpportunitySummary?.serviceStatuses || localSummary;
+  const localHighPotentialCount = useMemo(
+    () => filteredLeads.reduce((total, lead) => total + ((metricsByLeadId.get(lead.id)?.score || 0) >= 70 ? 1 : 0), 0),
+    [filteredLeads, metricsByLeadId],
   );
   const highPotentialCount = selectedService
-    ? filteredLeads.filter((lead) => getOpportunityScore(lead, visibleServices) >= 70).length
-    : filteredOpportunitySummary?.priority
-      ?? filteredLeads.filter((lead) => getOpportunityScore(lead, visibleServices) >= 70).length;
+    ? localHighPotentialCount
+    : filteredOpportunitySummary?.priority ?? localHighPotentialCount;
   const quickCounts = useMemo(() => ({
     all: opportunitySummary?.total ?? totalLeadsCount ?? leads.length,
     expansion: opportunitySummary?.expansion ?? 0,
@@ -347,12 +337,14 @@ export function ServiceOpportunityMap({ leads, totalLeadsCount = leads.length, l
   const bestOpportunity = useMemo(() => {
     const lead = rankedLeads[0];
     if (!lead) return null;
+    const metrics = metricsByLeadId.get(lead.id);
+    if (!metrics) return null;
     return {
       lead,
-      score: getOpportunityScore(lead, visibleServices),
-      offer: getNextBestOffer(lead, visibleServices),
+      score: metrics.score,
+      offer: metrics.nextOffer,
     };
-  }, [rankedLeads, visibleServices]);
+  }, [metricsByLeadId, rankedLeads]);
 
   const totalAvailable = pagination?.total ?? totalLeadsCount ?? filteredLeads.length;
   const hasMoreLeads = Boolean(pagination?.hasMore);
@@ -513,9 +505,9 @@ export function ServiceOpportunityMap({ leads, totalLeadsCount = leads.length, l
             </thead>
             <tbody>
               {rankedLeads.length ? rankedLeads.map((lead) => {
-                const score = getOpportunityScore(lead, visibleServices);
-                const type = getCommercialType(lead, visibleServices);
-                const offer = getNextBestOffer(lead, visibleServices);
+                const metrics = metricsByLeadId.get(lead.id);
+                if (!metrics) return null;
+                const { score, type, nextOffer: offer } = metrics;
                 return (
                   <tr key={lead.id}>
                     <td>
@@ -556,9 +548,9 @@ export function ServiceOpportunityMap({ leads, totalLeadsCount = leads.length, l
             </thead>
             <tbody>
               {rankedLeads.length ? rankedLeads.map((lead) => {
-                const normalizedMap = normalizeServiceStatusMap(lead.serviceStatusMap, lead.serviceInterests || []);
-                const type = getCommercialType(lead, visibleServices);
-                const offer = getNextBestOffer(lead, visibleServices);
+                const metrics = metricsByLeadId.get(lead.id);
+                if (!metrics) return null;
+                const { normalizedMap, type, nextOffer: offer } = metrics;
                 return (
                   <tr key={lead.id} className={editedLeadId === lead.id ? "opportunityRowLastEdited" : undefined}>
                     <td className="stickyLeadColumn leadMapIdentityCell">
@@ -611,10 +603,9 @@ export function ServiceOpportunityMap({ leads, totalLeadsCount = leads.length, l
       ) : (
         <div className="opportunityOperationBoardV38">
           {rankedLeads.length ? rankedLeads.slice(0, 24).map((lead, index) => {
-            const score = getOpportunityScore(lead, visibleServices);
-            const type = getCommercialType(lead, visibleServices);
-            const offer = getNextBestOffer(lead, visibleServices);
-            const counts = getServiceCounts(lead, visibleServices);
+            const metrics = metricsByLeadId.get(lead.id);
+            if (!metrics) return null;
+            const { score, type, nextOffer: offer, counts } = metrics;
 
             return (
               <article className={editedLeadId === lead.id ? "opportunityOperationCardV38 opportunityOperationCardEditedV38" : "opportunityOperationCardV38"} key={lead.id}>
@@ -658,4 +649,4 @@ export function ServiceOpportunityMap({ leads, totalLeadsCount = leads.length, l
       </div>
     </section>
   );
-}
+});

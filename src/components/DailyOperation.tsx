@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import type { CRMTask, CRMUser, Lead, TaskPriority, TaskType, TodayDashboard } from "../types/Lead";
 import {
   completeTaskOnServer,
@@ -47,7 +47,7 @@ function getTaskTone(priority: TaskPriority) {
   return "badgeGreen";
 }
 
-export function DailyOperation({ leads, currentUser, assignableUsers, onViewLead, onDataChanged }: DailyOperationProps) {
+export const DailyOperation = memo(function DailyOperation({ leads, currentUser, assignableUsers, onViewLead, onDataChanged }: DailyOperationProps) {
   const [dashboard, setDashboard] = useState<TodayDashboard | null>(null);
   const [activeBucket, setActiveBucket] = useState<"overdue" | "today" | "upcoming">("today");
   const [isLoading, setIsLoading] = useState(true);
@@ -223,4 +223,4 @@ export function DailyOperation({ leads, currentUser, assignableUsers, onViewLead
       />
     </section>
   );
-}
+});

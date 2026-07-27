@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type DragEvent, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import type { KanbanBoardData, KanbanBoardFilters, KanbanLeadSearchResult, KanbanPipeline, KanbanStage, KanbanStageColumn, KanbanStageType } from "../types/Kanban";
 import type { Lead, LeadStatus } from "../types/Lead";
 import {
@@ -95,6 +95,107 @@ function replaceCardInBoard(board: KanbanBoardData, updatedLead: Lead): KanbanBo
   };
 }
 
+type KanbanCardItemProps = {
+  lead: Lead;
+  stageId: string;
+  stages: KanbanStageColumn[];
+  cardIndex: number;
+  stageIndex: number;
+  isDragging: boolean;
+  isDropBefore: boolean;
+  canMoveCards: boolean;
+  canEditCards: boolean;
+  canDeleteCards: boolean;
+  onViewLead: (leadId: string) => void;
+  onEditLead: (leadId: string) => void;
+  onDeleteLead: (leadId: string) => void;
+  onDragStartCard: (event: DragEvent<HTMLElement>, lead: Lead, stageId: string) => void;
+  onDragEndCard: () => void;
+  onDragOverCard: (event: DragEvent<HTMLElement>, stageId: string, cardIndex: number, stageIndex: number) => void;
+  onDropCard: (event: DragEvent<HTMLElement>, stageId: string, cardIndex: number, stageIndex: number) => void;
+  onMoveCard: (leadId: string, targetStageId: string) => void;
+};
+
+const KanbanCardItem = memo(function KanbanCardItem({
+  lead,
+  stageId,
+  stages,
+  cardIndex,
+  stageIndex,
+  isDragging,
+  isDropBefore,
+  canMoveCards,
+  canEditCards,
+  canDeleteCards,
+  onViewLead,
+  onEditLead,
+  onDeleteLead,
+  onDragStartCard,
+  onDragEndCard,
+  onDragOverCard,
+  onDropCard,
+  onMoveCard,
+}: KanbanCardItemProps) {
+  const scores = getLeadScores(lead);
+  const plan = getRecommendedCommercialPlan(lead);
+
+  return (
+    <article
+      data-lead-id={lead.id}
+      data-stage-id={stageId}
+      className={`kanbanCardV40 ${isDragging ? "kanbanCardDragging" : ""} ${isDropBefore ? "kanbanCardDropBefore" : ""}`}
+      draggable={canMoveCards}
+      onDragStart={(event) => onDragStartCard(event, lead, stageId)}
+      onDragEnd={onDragEndCard}
+      onDragOver={(event) => onDragOverCard(event, stageId, cardIndex, stageIndex)}
+      onDrop={(event) => onDropCard(event, stageId, cardIndex, stageIndex)}
+    >
+      <div className="kanbanCardTopline">
+        <button type="button" className="kanbanCardIdentity" onClick={() => onViewLead(lead.id)}>
+          <strong>{lead.name || lead.phone || "Lead sem nome"}</strong>
+          <span>{lead.company || lead.email || lead.phone || "Empresa pendente"}</span>
+        </button>
+        <LeadOverflowMenu
+          lead={lead}
+          onViewLead={onViewLead}
+          onEditLead={canEditCards ? onEditLead : undefined}
+          includeContactChannels
+          extraItems={canDeleteCards ? [{
+            id: "delete",
+            label: "Excluir lead",
+            description: "Mover o lead para a lixeira",
+            icon: createLeadMenuIcon("delete"),
+            danger: true,
+            separatorBefore: true,
+            onSelect: () => onDeleteLead(lead.id),
+          }] : []}
+        />
+      </div>
+
+      <div className="kanbanCardBadges">
+        <span className={`badge ${getPriorityClass(scores.priority)}`}>Prioridade {scores.priority}</span>
+        {lead.temperature ? <span className="badge badgeGray">{lead.temperature}</span> : null}
+      </div>
+
+      <p className="kanbanCardNextAction" title={plan.nextAction}>{plan.offer || plan.nextAction}</p>
+
+      <div className="kanbanCardMeta">
+        <span>{lead.responsible || "Sem responsável"}</span>
+        <span>{lead.nextContactAt ? formatDate(lead.nextContactAt) : "Sem próximo passo"}</span>
+      </div>
+
+      {canMoveCards ? (
+        <label className="kanbanMoveSelect">
+          <span>Mover para</span>
+          <select value={stageId} onChange={(event) => onMoveCard(lead.id, event.target.value)}>
+            {stages.map((targetStage) => <option key={targetStage.id} value={targetStage.id}>{targetStage.name}</option>)}
+          </select>
+        </label>
+      ) : null}
+    </article>
+  );
+});
+
 function Modal({ title, description, onClose, children, wide = false }: { title: string; description?: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   return (
     <ModalDialog
@@ -109,7 +210,7 @@ function Modal({ title, description, onClose, children, wide = false }: { title:
   );
 }
 
-export function KanbanBoard({
+export const KanbanBoard = memo(function KanbanBoard({
   filters,
   canMoveCards,
   canAddCards,
@@ -148,6 +249,7 @@ export function KanbanBoard({
   const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
   const [addToStageId, setAddToStageId] = useState("");
   const [isSearchingLeads, setIsSearchingLeads] = useState(false);
+  const leadSearchController = useRef<AbortController | null>(null);
   const { confirm, confirmationDialog } = useConfirmationDialog();
 
   const handleBoardLoaded = useCallback((result: KanbanBoardData) => {
@@ -172,16 +274,118 @@ export function KanbanBoard({
     loadBoard,
   } = useKanbanBoardData({ filters, externalRefreshVersion, onBoardLoaded: handleBoardLoaded });
 
+  const draggedCardStateRef = useRef(draggedCard);
+  const draggedStageStateRef = useRef(draggedStage);
+  const dropTargetStateRef = useRef(dropTarget);
+  const stageDropIndexStateRef = useRef(stageDropIndex);
+  const commitCardMoveRef = useRef<(leadId: string, targetStageId: string, targetIndex?: number) => Promise<void>>(async () => undefined);
+  const commitStageReorderRef = useRef<(targetIndex?: number | null) => Promise<void>>(async () => undefined);
+
+  draggedCardStateRef.current = draggedCard;
+  draggedStageStateRef.current = draggedStage;
+  dropTargetStateRef.current = dropTarget;
+  stageDropIndexStateRef.current = stageDropIndex;
+  commitCardMoveRef.current = commitCardMove;
+  commitStageReorderRef.current = commitStageReorder;
+
+  const handleCardDragStart = useCallback((event: DragEvent<HTMLElement>, lead: Lead, stageId: string) => {
+    if (!canMoveCards) return;
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", lead.id);
+    const nextDraggedCard = { leadId: lead.id, sourceStageId: stageId };
+    draggedCardStateRef.current = nextDraggedCard;
+    setDraggedCard(nextDraggedCard);
+  }, [canMoveCards]);
+
+  const handleCardDragEnd = useCallback(() => {
+    draggedCardStateRef.current = null;
+    dropTargetStateRef.current = null;
+    setDraggedCard(null);
+    setDropTarget(null);
+  }, []);
+
+  const handleCardDragOver = useCallback((event: DragEvent<HTMLElement>, stageId: string, cardIndex: number, stageIndex: number) => {
+    if (draggedStageStateRef.current) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = "move";
+      const rect = event.currentTarget.getBoundingClientRect();
+      const nextDropIndex = event.clientX > rect.left + rect.width / 2 ? stageIndex + 1 : stageIndex;
+      if (stageDropIndexStateRef.current !== nextDropIndex) {
+        stageDropIndexStateRef.current = nextDropIndex;
+        setStageDropIndex(nextDropIndex);
+      }
+      return;
+    }
+
+    if (!draggedCardStateRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    const rect = event.currentTarget.getBoundingClientRect();
+    const index = event.clientY > rect.top + rect.height / 2 ? cardIndex + 1 : cardIndex;
+    const currentTarget = dropTargetStateRef.current;
+    if (!currentTarget || currentTarget.stageId !== stageId || currentTarget.index !== index) {
+      const nextTarget = { stageId, index };
+      dropTargetStateRef.current = nextTarget;
+      setDropTarget(nextTarget);
+    }
+  }, []);
+
+  const handleCardDrop = useCallback((event: DragEvent<HTMLElement>, stageId: string, cardIndex: number, stageIndex: number) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (draggedStageStateRef.current) {
+      const rect = event.currentTarget.getBoundingClientRect();
+      const targetIndex = event.clientX > rect.left + rect.width / 2 ? stageIndex + 1 : stageIndex;
+      void commitStageReorderRef.current(targetIndex);
+      return;
+    }
+
+    const leadId = draggedCardStateRef.current?.leadId || event.dataTransfer.getData("text/plain");
+    const currentTarget = dropTargetStateRef.current;
+    const targetIndex = currentTarget?.stageId === stageId ? currentTarget.index : cardIndex;
+    if (leadId) void commitCardMoveRef.current(leadId, stageId, targetIndex);
+  }, []);
+
+  const handleCardMoveSelect = useCallback((leadId: string, targetStageId: string) => {
+    void commitCardMoveRef.current(leadId, targetStageId);
+  }, []);
+
   useEffect(() => {
-    if (!addLeadsOpen || !selectedPipelineId) return;
+    if (!addLeadsOpen || !selectedPipelineId) {
+      leadSearchController.current?.abort();
+      leadSearchController.current = null;
+      return;
+    }
+
     const timeoutId = window.setTimeout(() => {
+      leadSearchController.current?.abort();
+      const controller = new AbortController();
+      leadSearchController.current = controller;
       setIsSearchingLeads(true);
-      void searchLeadsForKanban(selectedPipelineId, leadSearch, 50)
-        .then(setLeadSearchResults)
-        .catch((caughtError) => setError(caughtError instanceof Error ? caughtError.message : "Não foi possível buscar os leads."))
-        .finally(() => setIsSearchingLeads(false));
+      void searchLeadsForKanban(selectedPipelineId, leadSearch, 50, controller.signal)
+        .then((result) => {
+          if (!controller.signal.aborted) setLeadSearchResults(result);
+        })
+        .catch((caughtError) => {
+          if (!controller.signal.aborted && !(caughtError instanceof Error && caughtError.name === "AbortError")) {
+            setError(caughtError instanceof Error ? caughtError.message : "Não foi possível buscar os leads.");
+          }
+        })
+        .finally(() => {
+          if (leadSearchController.current === controller) {
+            leadSearchController.current = null;
+            setIsSearchingLeads(false);
+          }
+        });
     }, 300);
-    return () => window.clearTimeout(timeoutId);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      leadSearchController.current?.abort();
+    };
   }, [addLeadsOpen, leadSearch, selectedPipelineId, setError]);
 
   const hasActiveFilters = Boolean(
@@ -229,13 +433,6 @@ export function KanbanBoard({
     }
   }
 
-  function startDragging(event: DragEvent<HTMLElement>, lead: Lead, stageId: string) {
-    if (!canMoveCards) return;
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", lead.id);
-    setDraggedCard({ leadId: lead.id, sourceStageId: stageId });
-  }
-
   function startStageDragging(event: DragEvent<HTMLElement>, stageId: string, sourceIndex: number) {
     if (!canManagePipeline || isSaving) {
       event.preventDefault();
@@ -276,16 +473,6 @@ export function KanbanBoard({
     event.stopPropagation();
     event.dataTransfer.dropEffect = "move";
     if (stageDropIndex !== board.stages.length) setStageDropIndex(board.stages.length);
-  }
-
-  function setCardDropTarget(event: DragEvent<HTMLElement>, stageId: string, cardIndex: number) {
-    if (!draggedCard) return;
-    event.preventDefault();
-    event.stopPropagation();
-    event.dataTransfer.dropEffect = "move";
-    const rect = event.currentTarget.getBoundingClientRect();
-    const index = event.clientY > rect.top + rect.height / 2 ? cardIndex + 1 : cardIndex;
-    setDropTarget({ stageId, index });
   }
 
   function setColumnDropTarget(event: DragEvent<HTMLElement>, stageId: string, index: number) {
@@ -871,73 +1058,29 @@ export function KanbanBoard({
               ) : null}
 
               <div className="kanbanCardsV40">
-                {stage.cards.map((lead, cardIndex) => {
-                  const scores = getLeadScores(lead);
-                  const plan = getRecommendedCommercialPlan(lead);
-                  const isDropBefore = dropTarget?.stageId === stage.id && dropTarget.index === cardIndex;
-                  return (
-                    <article
-                      data-lead-id={lead.id}
-                      data-stage-id={stage.id}
-                      className={`kanbanCardV40 ${draggedCard?.leadId === lead.id ? "kanbanCardDragging" : ""} ${isDropBefore ? "kanbanCardDropBefore" : ""}`}
-                      key={lead.id}
-                      draggable={canMoveCards}
-                      onDragStart={(event) => startDragging(event, lead, stage.id)}
-                      onDragEnd={() => { setDraggedCard(null); setDropTarget(null); }}
-                      onDragOver={(event) => {
-                        if (draggedStage) setStageReorderTarget(event, stageIndex);
-                        else setCardDropTarget(event, stage.id, cardIndex);
-                      }}
-                      onDrop={(event) => {
-                        if (draggedStage) void handleStageDrop(event, resolveStageDropIndex(event, stageIndex));
-                        else void handleDrop(event, stage.id, cardIndex);
-                      }}
-                    >
-                      <div className="kanbanCardTopline">
-                        <button type="button" className="kanbanCardIdentity" onClick={() => onViewLead(lead.id)}>
-                          <strong>{lead.name || lead.phone || "Lead sem nome"}</strong>
-                          <span>{lead.company || lead.email || lead.phone || "Empresa pendente"}</span>
-                        </button>
-                        <LeadOverflowMenu
-                          lead={lead}
-                          onViewLead={onViewLead}
-                          onEditLead={canEditCards ? onEditLead : undefined}
-                          includeContactChannels
-                          extraItems={canDeleteCards ? [{
-                            id: "delete",
-                            label: "Excluir lead",
-                            description: "Mover o lead para a lixeira",
-                            icon: createLeadMenuIcon("delete"),
-                            danger: true,
-                            separatorBefore: true,
-                            onSelect: () => onDeleteLead(lead.id),
-                          }] : []}
-                        />
-                      </div>
-
-                      <div className="kanbanCardBadges">
-                        <span className={`badge ${getPriorityClass(scores.priority)}`}>Prioridade {scores.priority}</span>
-                        {lead.temperature ? <span className="badge badgeGray">{lead.temperature}</span> : null}
-                      </div>
-
-                      <p className="kanbanCardNextAction" title={plan.nextAction}>{plan.offer || plan.nextAction}</p>
-
-                      <div className="kanbanCardMeta">
-                        <span>{lead.responsible || "Sem responsável"}</span>
-                        <span>{lead.nextContactAt ? formatDate(lead.nextContactAt) : "Sem próximo passo"}</span>
-                      </div>
-
-                      {canMoveCards ? (
-                        <label className="kanbanMoveSelect">
-                          <span>Mover para</span>
-                          <select value={stage.id} onChange={(event) => void commitCardMove(lead.id, event.target.value)}>
-                            {board.stages.map((targetStage) => <option key={targetStage.id} value={targetStage.id}>{targetStage.name}</option>)}
-                          </select>
-                        </label>
-                      ) : null}
-                    </article>
-                  );
-                })}
+                {stage.cards.map((lead, cardIndex) => (
+                  <KanbanCardItem
+                    key={lead.id}
+                    lead={lead}
+                    stageId={stage.id}
+                    stages={board.stages}
+                    cardIndex={cardIndex}
+                    stageIndex={stageIndex}
+                    isDragging={draggedCard?.leadId === lead.id}
+                    isDropBefore={dropTarget?.stageId === stage.id && dropTarget.index === cardIndex}
+                    canMoveCards={canMoveCards}
+                    canEditCards={canEditCards}
+                    canDeleteCards={canDeleteCards}
+                    onViewLead={onViewLead}
+                    onEditLead={onEditLead}
+                    onDeleteLead={onDeleteLead}
+                    onDragStartCard={handleCardDragStart}
+                    onDragEndCard={handleCardDragEnd}
+                    onDragOverCard={handleCardDragOver}
+                    onDropCard={handleCardDrop}
+                    onMoveCard={handleCardMoveSelect}
+                  />
+                ))}
 
                 {dropTarget?.stageId === stage.id && dropTarget.index === stage.cards.length ? <div className="kanbanEndDropMarker" /> : null}
                 {!stage.cards.length ? <div className="kanbanEmptyColumn">Solte um card aqui</div> : null}
@@ -1120,4 +1263,4 @@ export function KanbanBoard({
       {confirmationDialog}
     </div>
   );
-}
+});

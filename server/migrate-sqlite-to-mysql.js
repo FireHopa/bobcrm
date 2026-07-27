@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import initSqlJs from "sql.js";
 import mysql from "mysql2/promise";
+import { calculateLeadCommercialProfile, commercialProfileToDbParams } from "./domains/leads/leadCommercialProfile.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -162,7 +163,14 @@ function buildLeadInsertSql() {
     is_lost = VALUES(is_lost), lost_reason = VALUES(lost_reason), commercial_notes = VALUES(commercial_notes), status = VALUES(status), responsible = VALUES(responsible),
     temperature = VALUES(temperature), pain = VALUES(pain), source = VALUES(source), service_interests = VALUES(service_interests), service_status_map = VALUES(service_status_map),
     custom_fields = VALUES(custom_fields), created_at = VALUES(created_at), updated_at = VALUES(updated_at), deleted_at = VALUES(deleted_at), deleted_by = VALUES(deleted_by),
-    restored_at = VALUES(restored_at), restored_by = VALUES(restored_by)` : "";
+    restored_at = VALUES(restored_at), restored_by = VALUES(restored_by),
+    commercial_profile_version = VALUES(commercial_profile_version), commercial_profile_updated_at = VALUES(commercial_profile_updated_at),
+    commercial_potential_score = VALUES(commercial_potential_score), mapping_urgency_score = VALUES(mapping_urgency_score),
+    lead_priority_score = VALUES(lead_priority_score), opportunity_score = VALUES(opportunity_score),
+    service_casa_count = VALUES(service_casa_count), service_agency_count = VALUES(service_agency_count),
+    service_missing_count = VALUES(service_missing_count), service_unknown_count = VALUES(service_unknown_count),
+    has_expansion_opportunity = VALUES(has_expansion_opportunity), has_migration_opportunity = VALUES(has_migration_opportunity),
+    has_external_agency = VALUES(has_external_agency)` : "";
 
   return `${insertMode} INTO leads (
     id, name, email, email_key, phone, phone_key, company, name_company_key, website,
@@ -170,7 +178,10 @@ function buildLeadInsertSql() {
     last_contact_at, contact_made_at, next_contact_at, estimated_budget,
     is_lost, lost_reason, commercial_notes, status, responsible, temperature,
     pain, source, service_interests, service_status_map, custom_fields, created_at, updated_at,
-    deleted_at, deleted_by, restored_at, restored_by
+    deleted_at, deleted_by, restored_at, restored_by,
+    commercial_profile_version, commercial_profile_updated_at, commercial_potential_score, mapping_urgency_score,
+    lead_priority_score, opportunity_score, service_casa_count, service_agency_count, service_missing_count, service_unknown_count,
+    has_expansion_opportunity, has_migration_opportunity, has_external_agency
   ) VALUES ?${duplicateClause}`;
 }
 
@@ -181,6 +192,20 @@ function leadRowValues(row) {
   const serviceStatusMap = parseJsonValue(row.service_status_map, {});
   const customFields = parseJsonValue(row.custom_fields, {});
   const createdAt = normalizeDate(row.created_at);
+  const updatedAt = normalizeDate(row.updated_at || createdAt);
+  const commercialProfile = calculateLeadCommercialProfile({
+    website: row.website || "",
+    advertisesOnMeta: Boolean(Number(row.advertises_on_meta || 0)),
+    advertisesOnGoogle: Boolean(Number(row.advertises_on_google || 0)),
+    estimatedBudget: row.estimated_budget || "",
+    responsible: row.responsible || "",
+    responsibleUserId: row.responsible_user_id || "",
+    temperature: row.temperature || "",
+    pain: row.pain || "",
+    source: row.source || "",
+    nextContactAt: row.next_contact_at || "",
+    serviceStatusMap,
+  });
 
   return [
     row.id || randomUUID(),
@@ -211,11 +236,12 @@ function leadRowValues(row) {
     JSON.stringify(serviceStatusMap),
     JSON.stringify(customFields),
     createdAt,
-    normalizeDate(row.updated_at || createdAt),
+    updatedAt,
     row.deleted_at || "",
     row.deleted_by || "",
     row.restored_at || "",
     row.restored_by || "",
+    ...commercialProfileToDbParams(commercialProfile, updatedAt),
   ];
 }
 

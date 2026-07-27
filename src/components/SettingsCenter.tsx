@@ -26,6 +26,7 @@ import {
   type AdminLeadOverview,
   type DuplicateGroup,
   type DuplicateGroupsPage,
+  type DeletedLeadPagination,
 } from "../utils/api";
 import { useConfirmationDialog } from "./ConfirmationDialog";
 
@@ -68,6 +69,13 @@ const emptyAdminLeadOverview: AdminLeadOverview = {
 const emptyDuplicatePagination: DuplicateGroupsPage["pagination"] = {
   total: 0,
   limit: 20,
+  offset: 0,
+  hasMore: false,
+};
+
+const emptyDeletedPagination: DeletedLeadPagination = {
+  total: 0,
+  limit: 100,
   offset: 0,
   hasMore: false,
 };
@@ -127,6 +135,7 @@ export function SettingsCenter({
   const [teams, setTeams] = useState<CRMTeam[]>([]);
   const [teamName, setTeamName] = useState("");
   const [deletedLeads, setDeletedLeads] = useState<Lead[]>([]);
+  const [deletedPagination, setDeletedPagination] = useState<DeletedLeadPagination>(emptyDeletedPagination);
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [adminOverview, setAdminOverview] = useState<AdminLeadOverview>(emptyAdminLeadOverview);
@@ -187,13 +196,19 @@ export function SettingsCenter({
     if (canManageUsers) {
       tasks.push(fetchUsersFromServer().then(setUsers));
       tasks.push(fetchTeamsFromServer().then(setTeams));
-      tasks.push(fetchAdminLeadOverviewFromServer().then(setAdminOverview));
+      tasks.push(fetchAdminLeadOverviewFromServer({ includeDuplicates: false }).then((overview) => {
+        setAdminOverview((current) => ({ ...overview, duplicateGroups: current.duplicateGroups }));
+      }));
       tasks.push(fetchDuplicateGroupsFromServer({ limit: emptyDuplicatePagination.limit, offset: 0 }).then((result) => {
         setDuplicates(result.groups);
         setDuplicatePagination(result.pagination);
+        setAdminOverview((current) => ({ ...current, duplicateGroups: result.pagination.total }));
       }));
     }
-    if (canRestore) tasks.push(fetchDeletedLeadsFromServer().then(setDeletedLeads));
+    if (canRestore) tasks.push(fetchDeletedLeadsFromServer({ limit: emptyDeletedPagination.limit, offset: 0 }).then((result) => {
+      setDeletedLeads(result.leads);
+      setDeletedPagination(result.pagination);
+    }));
     if (canBackup) tasks.push(fetchBackupsFromServer().then(setBackups));
     if (canAudit) tasks.push(fetchRecentAuditFromServer().then(setAuditEntries));
 
@@ -271,6 +286,7 @@ export function SettingsCenter({
     await runPanelAction(async () => {
       const restored = await restoreLeadOnServer(lead.id);
       setDeletedLeads((currentDeleted) => currentDeleted.filter((currentLead) => currentLead.id !== lead.id));
+      setDeletedPagination((current) => ({ ...current, total: Math.max(0, current.total - 1) }));
       onLeadRestored(restored);
       await Promise.all([refreshAdminOverview(), loadDuplicatePage(0)]);
     }, "Lead restaurado.");
@@ -289,17 +305,29 @@ export function SettingsCenter({
     await runPanelAction(async () => {
       await permanentlyDeleteLeadFromServer(lead.id);
       setDeletedLeads((currentDeleted) => currentDeleted.filter((currentLead) => currentLead.id !== lead.id));
+      setDeletedPagination((current) => ({ ...current, total: Math.max(0, current.total - 1) }));
     }, "Lead apagado definitivamente.");
+  }
+
+  async function loadDeletedPage(offset: number, append = false) {
+    const result = await fetchDeletedLeadsFromServer({ limit: deletedPagination.limit, offset });
+    setDeletedLeads((currentLeads) => append ? [...currentLeads, ...result.leads] : result.leads);
+    setDeletedPagination(result.pagination);
   }
 
   async function loadDuplicatePage(offset: number, append = false) {
     const result = await fetchDuplicateGroupsFromServer({ limit: duplicatePagination.limit, offset });
     setDuplicates((currentGroups) => append ? [...currentGroups, ...result.groups] : result.groups);
     setDuplicatePagination(result.pagination);
+    if (!append && offset === 0) {
+      setAdminOverview((current) => ({ ...current, duplicateGroups: result.pagination.total }));
+    }
+    return result;
   }
 
   async function refreshAdminOverview() {
-    setAdminOverview(await fetchAdminLeadOverviewFromServer());
+    const overview = await fetchAdminLeadOverviewFromServer({ includeDuplicates: false });
+    setAdminOverview((current) => ({ ...overview, duplicateGroups: current.duplicateGroups }));
   }
 
   async function handleMergeGroup(group: DuplicateGroup) {
@@ -333,7 +361,7 @@ export function SettingsCenter({
     { id: "summary" as AdminTab, label: "Resumo", count: 0 },
     ...(canManageUsers ? [{ id: "users" as AdminTab, label: "Usuários", count: users.length }] : []),
     ...(canBackup ? [{ id: "backups" as AdminTab, label: "Backups", count: backups.length }] : []),
-    ...(canRestore ? [{ id: "trash" as AdminTab, label: "Lixeira", count: deletedLeads.length }] : []),
+    ...(canRestore ? [{ id: "trash" as AdminTab, label: "Lixeira", count: deletedPagination.total }] : []),
     { id: "duplicates" as AdminTab, label: "Duplicados", count: adminOverview.duplicateGroups },
     ...(canAudit ? [{ id: "audit" as AdminTab, label: "Auditoria", count: auditEntries.length }] : []),
     { id: "system" as AdminTab, label: "Sistema", count: 0 },
@@ -384,7 +412,7 @@ export function SettingsCenter({
           <div className="adminSummaryGridV32 adminSummaryGridV34 adminSupportGridV34">
             <article className="panel adminSummaryCardV32">
               <span>Leads na lixeira</span>
-              <strong>{deletedLeads.length || (canRestore ? 0 : "-")}</strong>
+              <strong>{canRestore ? deletedPagination.total : "-"}</strong>
               <button className="secondaryButton" type="button" onClick={() => setActiveAdminTab("trash")} disabled={!canRestore}>Abrir lixeira</button>
             </article>
             <article className="panel adminSummaryCardV32">
@@ -575,11 +603,11 @@ export function SettingsCenter({
               <h3>Lixeira</h3>
               <p>Restaure leads excluídos ou apague definitivamente com confirmação.</p>
             </div>
-            <span className="badge badgeYellow">{deletedLeads.length} excluído(s)</span>
+            <span className="badge badgeYellow">{deletedPagination.total} excluído(s)</span>
           </div>
 
           <div className="productionRows productionRowsV32">
-            {deletedLeads.length ? deletedLeads.slice(0, 120).map((lead) => (
+            {deletedLeads.length ? deletedLeads.map((lead) => (
               <article className="productionRow" key={lead.id}>
                 <div>
                   <strong>{lead.name || lead.phone || "Lead sem nome"}</strong>
@@ -595,6 +623,20 @@ export function SettingsCenter({
               </article>
             )) : <div className="operationEmptyCompact"><strong>Nenhum lead na lixeira.</strong></div>}
           </div>
+
+          {deletedPagination.hasMore ? (
+            <div className="paginationFooter">
+              <span>Exibindo {deletedLeads.length} de {deletedPagination.total} lead(s) excluído(s).</span>
+              <button
+                className="secondaryButton"
+                type="button"
+                onClick={() => void loadDeletedPage(deletedLeads.length, true)}
+                disabled={isBusy}
+              >
+                Carregar mais
+              </button>
+            </div>
+          ) : null}
         </section>
       ) : null}
 
@@ -657,7 +699,9 @@ export function SettingsCenter({
               <button
                 className="secondaryButton"
                 type="button"
-                onClick={() => runPanelAction(() => loadDuplicatePage(duplicatePagination.offset + duplicatePagination.limit, true))}
+                onClick={() => runPanelAction(async () => {
+                  await loadDuplicatePage(duplicatePagination.offset + duplicatePagination.limit, true);
+                })}
                 disabled={isBusy}
               >
                 Carregar mais

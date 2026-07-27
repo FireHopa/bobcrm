@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { memo, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { normalizeCustomFields, spreadsheetCustomFieldLabels } from "../constants/customFields";
 import {
   getLeadWithSyncedAdvertisingFromServices,
@@ -81,7 +81,7 @@ type LeadDetailsDrawerProps = {
   onRequestHandoff?: (lead: Lead) => void;
 };
 
-export function LeadDetailsDrawer({
+export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
   lead,
   mode,
   onClose,
@@ -656,4 +656,4 @@ export function LeadDetailsDrawer({
       />
     </div>
   );
-}
+});

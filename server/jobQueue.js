@@ -306,6 +306,7 @@ export function createJobWorker({
   shouldRetry = () => false,
   retryDelay = (attempts) => Math.min(30000, 500 * (2 ** Math.max(0, attempts - 1))),
   onError = (error) => console.error("Falha no worker de jobs", error),
+  unrefTimers = true,
 }) {
   const active = new Set();
   let running = false;
@@ -318,7 +319,7 @@ export function createJobWorker({
       timer = null;
       void tick();
     }, delay);
-    timer.unref?.();
+    if (unrefTimers) timer.unref?.();
   };
 
   const processJob = (job) => {
@@ -329,7 +330,7 @@ export function createJobWorker({
           if (running) onError(error);
         });
       }, heartbeatIntervalMs);
-      heartbeatTimer.unref?.();
+      if (unrefTimers) heartbeatTimer.unref?.();
 
       try {
         if (!handler) {

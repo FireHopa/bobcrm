@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { calculateLeadCommercialProfile, commercialProfileToDbParams } from "./leadCommercialProfile.js";
 
 export const customFieldLabels = [
   "Datas Imersão",
@@ -233,6 +234,7 @@ export function leadToDbParams(lead, options = {}) {
   const phoneKey = normalizePhoneKey(normalizedLead.phone);
   const nameCompanyKey = normalizeNameCompanyKey(normalizedLead);
   const searchText = buildLeadSearchText(normalizedLead);
+  const commercialProfile = calculateLeadCommercialProfile(normalizedLead);
 
   return [
     normalizedLead.id,
@@ -275,5 +277,6 @@ export function leadToDbParams(lead, options = {}) {
     normalizedLead.pipelineStageId,
     normalizedLead.kanbanPosition,
     normalizedLead.pipelineEnteredAt,
+    ...commercialProfileToDbParams(commercialProfile, updatedAt),
   ];
 }

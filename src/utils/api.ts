@@ -201,6 +201,18 @@ export type FetchLeadsPageResult = {
   hasOpportunitySummary: boolean;
 };
 
+export type DeletedLeadPagination = {
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+};
+
+export type DeletedLeadsPageResult = {
+  leads: Lead[];
+  pagination: DeletedLeadPagination;
+};
+
 type ApiRequestOptions = RequestInit & {
   timeoutMs?: number;
 };
@@ -571,7 +583,10 @@ export async function logoutFromServer(): Promise<void> {
   }
 }
 
-export async function fetchLeadPageFromServer(params: FetchLeadsParams = {}): Promise<FetchLeadsPageResult> {
+export async function fetchLeadPageFromServer(
+  params: FetchLeadsParams = {},
+  options: { signal?: AbortSignal } = {},
+): Promise<FetchLeadsPageResult> {
   const queryString = buildQueryString(params);
   const response = await requestApi<
     Partial<Lead>[] | {
@@ -582,7 +597,7 @@ export async function fetchLeadPageFromServer(params: FetchLeadsParams = {}): Pr
       filteredOpportunitySummary?: Partial<OpportunitySummary>;
       scope?: LeadScopeMeta;
     }
-  >(`/api/leads?${queryString}`, { timeoutMs: 60000 });
+  >(`/api/leads?${queryString}`, { timeoutMs: 60000, signal: options.signal });
 
   return normalizeLeadPageResponse(response, params);
 }
@@ -596,8 +611,11 @@ export async function fetchOpportunitySummaryFromServer(): Promise<OpportunitySu
   return normalizeOpportunitySummary(summary);
 }
 
-export async function fetchAdminLeadOverviewFromServer(): Promise<AdminLeadOverview> {
-  return requestApi<AdminLeadOverview>("/api/admin/leads/overview", { timeoutMs: 60000 });
+export async function fetchAdminLeadOverviewFromServer(options: { includeDuplicates?: boolean } = {}): Promise<AdminLeadOverview> {
+  const search = new URLSearchParams();
+  if (options.includeDuplicates === false) search.set("includeDuplicates", "0");
+  const query = search.toString();
+  return requestApi<AdminLeadOverview>(`/api/admin/leads/overview${query ? `?${query}` : ""}`, { timeoutMs: 60000 });
 }
 
 export async function fetchDuplicateGroupsFromServer(params: { limit?: number; offset?: number } = {}): Promise<DuplicateGroupsPage> {
@@ -810,9 +828,10 @@ export async function searchLeadsForKanban(
   pipelineId: string,
   search: string,
   limit = 40,
+  signal?: AbortSignal,
 ): Promise<KanbanLeadSearchResult[]> {
   const query = new URLSearchParams({ pipelineId, search, limit: String(limit) });
-  const leads = await requestApi<Array<Partial<KanbanLeadSearchResult>>>(`/api/kanban/leads/search?${query.toString()}`);
+  const leads = await requestApi<Array<Partial<KanbanLeadSearchResult>>>(`/api/kanban/leads/search?${query.toString()}`, { signal });
   return leads.map((lead) => ({
     ...normalizeLeadFromApi(lead),
     pipelineName: lead.pipelineName || "Sem funil",
@@ -876,9 +895,28 @@ export async function importLeadsToServer(leads: Lead[]): Promise<Lead[]> {
   return result.leads;
 }
 
-export async function fetchDeletedLeadsFromServer(): Promise<Lead[]> {
-  const leads = await requestApi<Partial<Lead>[]>("/api/leads/deleted");
-  return leads.map(normalizeLeadFromApi);
+export async function fetchDeletedLeadsFromServer(params: { limit?: number; offset?: number } = {}): Promise<DeletedLeadsPageResult> {
+  const search = new URLSearchParams();
+  search.set("limit", String(params.limit ?? 100));
+  search.set("offset", String(params.offset ?? 0));
+  const response = await requestApi<{
+    leads?: Partial<Lead>[];
+    pagination?: Partial<DeletedLeadPagination>;
+  }>(`/api/leads/deleted?${search.toString()}`);
+  const leads = Array.isArray(response.leads) ? response.leads.map(normalizeLeadFromApi) : [];
+  const pagination = response.pagination || {};
+  const limit = Number(pagination.limit ?? params.limit ?? 100);
+  const offset = Number(pagination.offset ?? params.offset ?? 0);
+  const total = Number(pagination.total ?? leads.length);
+  return {
+    leads,
+    pagination: {
+      total,
+      limit,
+      offset,
+      hasMore: Boolean(pagination.hasMore ?? offset + leads.length < total),
+    },
+  };
 }
 
 export async function restoreLeadOnServer(leadId: string): Promise<Lead> {

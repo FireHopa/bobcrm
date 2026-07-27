@@ -1,4 +1,5 @@
 import { normalizeUserRole, USER_ROLES } from "./rolePolicy.js";
+import { buildDatePredicate } from "./dateColumns.js";
 
 export const TASK_TYPES = Object.freeze(["ligacao", "whatsapp", "email", "reuniao", "follow_up", "outro"]);
 export const TASK_PRIORITIES = Object.freeze(["baixa", "normal", "alta", "urgente"]);
@@ -97,12 +98,20 @@ export function buildTaskAccessSql(user, alias = "t") {
   };
 }
 
-export function getTaskBucketWhere(bucket, alias = "t") {
+export function getTaskBucketWhere(bucket, alias = "t", options = {}) {
   const prefix = alias ? `${alias}.` : "";
   const normalized = String(bucket || "today").trim().toLowerCase();
-  if (normalized === "overdue") return `${prefix}status = 'pending' AND LEFT(${prefix}due_at, 10) < DATE_FORMAT(CURDATE(), '%Y-%m-%d')`;
-  if (normalized === "upcoming") return `${prefix}status = 'pending' AND LEFT(${prefix}due_at, 10) > DATE_FORMAT(CURDATE(), '%Y-%m-%d')`;
+  const useDateColumns = Boolean(options.useDateColumns);
+  if (normalized === "overdue") {
+    const clause = buildDatePredicate(alias, "due_at", "due_at_dt", "<", useDateColumns ? "CURDATE()" : "DATE_FORMAT(CURDATE(), '%Y-%m-%d')", useDateColumns);
+    return `${prefix}status = 'pending' AND ${clause}`;
+  }
+  if (normalized === "upcoming") {
+    if (useDateColumns) return `${prefix}status = 'pending' AND ${prefix}due_at_dt >= DATE_ADD(CURDATE(), INTERVAL 1 DAY)`;
+    return `${prefix}status = 'pending' AND LEFT(${prefix}due_at, 10) > DATE_FORMAT(CURDATE(), '%Y-%m-%d')`;
+  }
   if (normalized === "completed") return `${prefix}status = 'completed'`;
   if (normalized === "all") return `${prefix}status != 'canceled'`;
+  if (useDateColumns) return `${prefix}status = 'pending' AND ${prefix}due_at_dt >= CURDATE() AND ${prefix}due_at_dt < DATE_ADD(CURDATE(), INTERVAL 1 DAY)`;
   return `${prefix}status = 'pending' AND LEFT(${prefix}due_at, 10) = DATE_FORMAT(CURDATE(), '%Y-%m-%d')`;
 }

@@ -1,40 +1,19 @@
-export const SERVICE_OPTIONS = Object.freeze([
-  "Criação de Website",
-  "Mentorias em Google Ads",
-  "Mentorias em Meta Ads",
-  "Mentorias em LinkedIn Ads",
-  "Mentorias em Canva",
-  "Mentorias em CapCut",
-  "Mentorias AEO",
-  "Gerenciamento Google",
-  "Gerenciamento Meta",
-  "Gerenciamento LinkedIn Ads",
-  "Social Media",
-  "Projeto Copy - LinkedIn, Perfil de Empresa e Blog no site",
-]);
+import {
+  CORE_MAPPING_SERVICES,
+  PAID_TRAFFIC_SERVICES,
+  SERVICE_OPTIONS,
+  SERVICE_PROVIDER_STATUSES,
+  calculateLeadCommercialProfile,
+  getServiceCounts,
+} from "./domains/leads/leadCommercialProfile.js";
 
-export const CORE_MAPPING_SERVICES = Object.freeze([
-  "Gerenciamento Google",
-  "Gerenciamento Meta",
-  "Criação de Website",
-  "Mentorias AEO",
-]);
-
-export const PAID_TRAFFIC_SERVICES = Object.freeze([
-  "Gerenciamento Google",
-  "Mentorias em Google Ads",
-  "Gerenciamento Meta",
-  "Mentorias em Meta Ads",
-  "Gerenciamento LinkedIn Ads",
-  "Mentorias em LinkedIn Ads",
-]);
-
-export const SERVICE_PROVIDER_STATUSES = Object.freeze([
-  "Casa do Ads",
-  "Outra agência",
-  "Não é feito",
-  "Não sabemos",
-]);
+export {
+  CORE_MAPPING_SERVICES,
+  PAID_TRAFFIC_SERVICES,
+  SERVICE_OPTIONS,
+  SERVICE_PROVIDER_STATUSES,
+  getServiceCounts,
+};
 
 const OPPORTUNITY_FILTERS = new Set([
   "expansion",
@@ -49,91 +28,8 @@ const OPPORTUNITY_FILTERS = new Set([
   "lead-expansion",
 ]);
 
-function clampScore(value) {
-  return Math.max(0, Math.min(100, Math.round(value)));
-}
-
-function meaningfulBudget(value) {
-  const digits = String(value || "").replace(/\D/g, "");
-  return Boolean(digits && Number(digits) > 0);
-}
-
-function normalizeStatus(value) {
-  return SERVICE_PROVIDER_STATUSES.includes(value) ? value : "Não sabemos";
-}
-
-export function getServiceCounts(lead = {}) {
-  const map = lead.serviceStatusMap && typeof lead.serviceStatusMap === "object" ? lead.serviceStatusMap : {};
-  const counts = {
-    "Casa do Ads": 0,
-    "Outra agência": 0,
-    "Não é feito": 0,
-    "Não sabemos": 0,
-  };
-
-  for (const service of SERVICE_OPTIONS) counts[normalizeStatus(map[service])] += 1;
-  return counts;
-}
-
 export function getCommercialScores(lead = {}) {
-  const counts = getServiceCounts(lead);
-  const casa = counts["Casa do Ads"];
-  const agency = counts["Outra agência"];
-  const notDone = counts["Não é feito"];
-  const unknown = counts["Não sabemos"];
-  const map = lead.serviceStatusMap && typeof lead.serviceStatusMap === "object" ? lead.serviceStatusMap : {};
-
-  let commercialPotential = 0;
-  if (lead.temperature === "Quente") commercialPotential += 22;
-  else if (lead.temperature === "Morno") commercialPotential += 12;
-  if (meaningfulBudget(lead.estimatedBudget)) commercialPotential += 16;
-  if (String(lead.pain || "").trim()) commercialPotential += 12;
-  if (String(lead.website || "").trim()) commercialPotential += 8;
-  commercialPotential += Math.min(25, agency * 8);
-  commercialPotential += Math.min(20, notDone * 5);
-  if (casa > 0) commercialPotential += 10;
-
-  const hasPaidTraffic = Boolean(lead.advertisesOnGoogle || lead.advertisesOnMeta || PAID_TRAFFIC_SERVICES.some((service) => {
-    const status = normalizeStatus(map[service]);
-    return status === "Casa do Ads" || status === "Outra agência";
-  }));
-  if (hasPaidTraffic) commercialPotential += 10;
-
-  let mappingUrgency = 0;
-  if (!String(lead.responsible || "").trim()) mappingUrgency += 15;
-  if (!String(lead.source || "").trim()) mappingUrgency += 8;
-  if (!String(lead.temperature || "").trim()) mappingUrgency += 10;
-  if (!String(lead.pain || "").trim()) mappingUrgency += 10;
-  if (!String(lead.nextContactAt || "").trim()) mappingUrgency += 15;
-  if (!String(lead.website || "").trim()) mappingUrgency += 8;
-
-  const coreUnknown = CORE_MAPPING_SERVICES.filter((service) => normalizeStatus(map[service]) === "Não sabemos").length;
-  mappingUrgency += Math.min(28, coreUnknown * 7);
-  mappingUrgency += Math.min(20, unknown * 2);
-  const withoutDiagnosis = casa + agency + notDone === 0;
-  if (withoutDiagnosis) mappingUrgency += 15;
-
-  const normalizedCommercialPotential = clampScore(commercialPotential);
-  const normalizedMappingUrgency = clampScore(mappingUrgency);
-  const leadPriority = clampScore(normalizedCommercialPotential * 0.65 + normalizedMappingUrgency * 0.35);
-  const opportunityScore = Math.min(100, Math.round(leadPriority * 0.45 + agency * 10 + notDone * 8 + unknown * 4 + casa * 2));
-  const expansion = casa > 0 && (agency > 0 || notDone > 0 || unknown > 0);
-
-  return {
-    counts,
-    commercialPotential: normalizedCommercialPotential,
-    mappingUrgency: normalizedMappingUrgency,
-    leadPriority,
-    opportunityScore,
-    expansion,
-    migration: agency > 0 && !expansion,
-    mapping: unknown > 0,
-    agency: agency > 0,
-    withoutDiagnosis,
-    mappingCritical: normalizedMappingUrgency >= 70,
-    leadMapping: normalizedMappingUrgency >= 55,
-    leadExpansion: casa > 0 && notDone + unknown > 0,
-  };
+  return calculateLeadCommercialProfile(lead);
 }
 
 export function matchesOpportunityFilter(lead, quickFilter) {
@@ -260,18 +156,55 @@ export function buildOpportunitySqlExpressions(alias = "") {
   };
 }
 
-export function buildOpportunityQuickFilterSql(quickFilter, alias = "") {
+export function buildMaterializedOpportunitySqlExpressions(alias = "") {
+  const casaCount = column(alias, "service_casa_count");
+  const agencyCount = column(alias, "service_agency_count");
+  const notDoneCount = column(alias, "service_missing_count");
+  const unknownCount = column(alias, "service_unknown_count");
+  const commercialPotential = column(alias, "commercial_potential_score");
+  const mappingUrgency = column(alias, "mapping_urgency_score");
+  const leadPriority = column(alias, "lead_priority_score");
+  const opportunityScore = column(alias, "opportunity_score");
+  const expansion = `(${column(alias, "has_expansion_opportunity")} = 1)`;
+  const migration = `(${column(alias, "has_migration_opportunity")} = 1)`;
+  const agency = `(${column(alias, "has_external_agency")} = 1)`;
+
+  return {
+    casaCount,
+    agencyCount,
+    notDoneCount,
+    unknownCount,
+    commercialPotential,
+    mappingUrgency,
+    leadPriority,
+    opportunityScore,
+    expansion,
+    migration,
+    mapping: `((${unknownCount}) > 0)`,
+    agency,
+    withoutDiagnosis: `((${casaCount}) + (${agencyCount}) + (${notDoneCount}) = 0)`,
+    mappingCritical: `((${mappingUrgency}) >= 70)`,
+    leadMapping: `((${mappingUrgency}) >= 55)`,
+    leadExpansion: `((${casaCount}) > 0 AND ((${notDoneCount}) + (${unknownCount})) > 0)`,
+  };
+}
+
+export function buildCommercialSqlExpressions(alias = "", { useMaterialized = true } = {}) {
+  return useMaterialized ? buildMaterializedOpportunitySqlExpressions(alias) : buildOpportunitySqlExpressions(alias);
+}
+
+export function buildOpportunityQuickFilterSql(quickFilter, alias = "", { useMaterialized = true } = {}) {
   const filter = normalizeOpportunityFilter(quickFilter);
   if (!filter) return "";
-  const expressions = buildOpportunitySqlExpressions(alias);
+  const expressions = buildCommercialSqlExpressions(alias, { useMaterialized });
   if (filter === "lead-priority") return `((${expressions.leadPriority}) >= 70)`;
   if (filter === "priority") return `((${expressions.opportunityScore}) >= 70)`;
   if (filter === "diagnosis") return expressions.withoutDiagnosis;
   return expressions[filter.replace(/-([a-z])/g, (_, character) => character.toUpperCase())] || "";
 }
 
-export function buildOpportunitySummarySql({ where = "1 = 1", alias = "l" } = {}) {
-  const expressions = buildOpportunitySqlExpressions(alias);
+export function buildOpportunitySummarySql({ where = "1 = 1", alias = "l", useMaterialized = true } = {}) {
+  const expressions = buildCommercialSqlExpressions(alias, { useMaterialized });
   return `SELECT
       COUNT(*) AS opportunity_total,
       SUM(CASE WHEN ${expressions.expansion} THEN 1 ELSE 0 END) AS opportunity_expansion,
@@ -308,8 +241,8 @@ export function mapOpportunitySummaryRow(row = {}) {
   };
 }
 
-export function buildAdminLeadOverviewSql({ where = "1 = 1", alias = "l" } = {}) {
-  const expressions = buildOpportunitySqlExpressions(alias);
+export function buildAdminLeadOverviewSql({ where = "1 = 1", alias = "l", useMaterialized = true } = {}) {
+  const expressions = buildCommercialSqlExpressions(alias, { useMaterialized });
   const responsible = column(alias, "responsible");
   const responsibleUserId = column(alias, "responsible_user_id");
   const temperature = column(alias, "temperature");

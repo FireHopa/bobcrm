@@ -56,7 +56,7 @@ export function buildDuplicateGroupsPageSql(options = {}) {
     LIMIT ? OFFSET ?`;
 }
 
-export function buildDuplicateLeadLookup({ groups = [], where = "1 = 1", alias = "l" } = {}) {
+export function buildDuplicateLeadLookup({ groups = [], where = "1 = 1", alias = "l", select = "" } = {}) {
   const clauses = [];
   const params = [];
   const emailKey = prefixed(alias, "email_key");
@@ -74,8 +74,9 @@ export function buildDuplicateLeadLookup({ groups = [], where = "1 = 1", alias =
   }
 
   if (!clauses.length) return { sql: "", params: [] };
+  const selectClause = String(select || "").trim() || `${alias}.*`;
   return {
-    sql: `SELECT ${alias}.* FROM leads ${alias}
+    sql: `SELECT ${selectClause} FROM leads ${alias}
       WHERE ${where} AND (${clauses.join(" OR ")})
       ORDER BY ${updatedOrdering(alias)}`,
     params,

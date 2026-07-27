@@ -1,16 +1,17 @@
-import { buildOpportunitySqlExpressions } from "./opportunityRules.js";
+import { buildCommercialSqlExpressions } from "./opportunityRules.js";
+import { buildDateMissingPredicate, buildDatePresentPredicate } from "./dateColumns.js";
 
 const DEFAULT_ACTIVE_WHERE = "deleted_at = '' AND is_lost = 0 AND status != 'Perdido' AND status != 'Fechado'";
 
-export function buildLeadSummarySql({ where = "1 = 1", activeWhere = DEFAULT_ACTIVE_WHERE } = {}) {
-  const commercial = buildOpportunitySqlExpressions();
+export function buildLeadSummarySql({ where = "1 = 1", activeWhere = DEFAULT_ACTIVE_WHERE, useMaterialized = true, useDateColumns = false } = {}) {
+  const commercial = buildCommercialSqlExpressions("", { useMaterialized });
   return `SELECT
        SUM(CASE WHEN deleted_at = '' THEN 1 ELSE 0 END) AS metric_total,
        SUM(CASE WHEN ${activeWhere} THEN 1 ELSE 0 END) AS metric_active,
-       SUM(CASE WHEN ${activeWhere} AND TRIM(COALESCE(next_contact_at, '')) != '' AND LEFT(next_contact_at, 10) <= DATE_FORMAT(CURDATE(), '%Y-%m-%d') THEN 1 ELSE 0 END) AS metric_due_follow_ups,
+       SUM(CASE WHEN ${activeWhere} AND ${buildDatePresentPredicate('', 'next_contact_at', 'next_contact_at_dt', useDateColumns)} AND ${useDateColumns ? 'next_contact_at_dt < DATE_ADD(CURDATE(), INTERVAL 1 DAY)' : "LEFT(next_contact_at, 10) <= DATE_FORMAT(CURDATE(), '%Y-%m-%d')"} THEN 1 ELSE 0 END) AS metric_due_follow_ups,
        SUM(CASE WHEN ${activeWhere} AND (${commercial.leadPriority}) >= 70 THEN 1 ELSE 0 END) AS metric_high_priority,
        SUM(CASE WHEN ${activeWhere} AND TRIM(COALESCE(responsible, '')) = '' AND TRIM(COALESCE(responsible_user_id, '')) = '' THEN 1 ELSE 0 END) AS metric_without_owner,
-       SUM(CASE WHEN ${activeWhere} AND TRIM(COALESCE(next_contact_at, '')) = '' THEN 1 ELSE 0 END) AS metric_without_next_step,
+       SUM(CASE WHEN ${activeWhere} AND ${buildDateMissingPredicate('', 'next_contact_at', 'next_contact_at_dt', useDateColumns)} THEN 1 ELSE 0 END) AS metric_without_next_step,
        SUM(CASE WHEN ${activeWhere} AND temperature = 'Quente' THEN 1 ELSE 0 END) AS metric_hot_leads,
        SUM(CASE WHEN deleted_at = '' AND ${commercial.agency} THEN 1 ELSE 0 END) AS metric_agency_opportunities,
        SUM(CASE WHEN ${activeWhere} AND ${commercial.leadMapping} THEN 1 ELSE 0 END) AS metric_needs_mapping,

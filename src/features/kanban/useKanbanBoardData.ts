@@ -22,6 +22,7 @@ export function useKanbanBoardData({ filters, externalRefreshVersion, onBoardLoa
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const externalRefreshInitialized = useRef(false);
+  const lastExternalRefreshVersion = useRef(externalRefreshVersion);
   const boardRequestController = useRef<AbortController | null>(null);
 
   const setSelectedPipelineId = useCallback((pipelineId: string) => {
@@ -99,17 +100,18 @@ export function useKanbanBoardData({ filters, externalRefreshVersion, onBoardLoa
 
   useEffect(() => {
     if (!selectedPipelineId) return;
-    const timeoutId = window.setTimeout(() => {
-      void loadBoard(selectedPipelineId);
-    }, 180);
-    return () => window.clearTimeout(timeoutId);
-  }, [selectedPipelineId, filters.search, filters.status, filters.temperature, filters.responsible, filters.quickFilter, loadBoard]);
+    void loadBoard(selectedPipelineId);
+  }, [selectedPipelineId, loadBoard]);
 
   useEffect(() => {
     if (!externalRefreshInitialized.current) {
       externalRefreshInitialized.current = true;
+      lastExternalRefreshVersion.current = externalRefreshVersion;
       return;
     }
+
+    if (lastExternalRefreshVersion.current === externalRefreshVersion) return;
+    lastExternalRefreshVersion.current = externalRefreshVersion;
     if (selectedPipelineId) void loadBoard(selectedPipelineId);
   }, [externalRefreshVersion, loadBoard, selectedPipelineId]);
 

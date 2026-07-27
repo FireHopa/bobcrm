@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, memo, Suspense, useEffect, useMemo, useState } from "react";
 import { getClientIntelligence } from "../constants/services";
 import type { Lead, LeadStatus, LeadTemperature } from "../types/Lead";
 import type { FetchLeadsParams, LeadPagination, LeadSummary } from "../utils/api";
@@ -105,6 +105,17 @@ function getMissingFields(lead: Lead): string[] {
   return missing;
 }
 
+type LeadActionProps = {
+  lead: Lead;
+  onViewLead: (leadId: string) => void;
+  onEditLead: (leadId: string) => void;
+  onDeleteLead: (leadId: string) => void;
+  onHandoffLead?: (lead: Lead) => void;
+  canEditLeads?: boolean;
+  canDeleteLeads?: boolean;
+  canHandoffLeads?: boolean;
+};
+
 function LeadActions({
   lead,
   onViewLead,
@@ -114,7 +125,7 @@ function LeadActions({
   canEditLeads = false,
   canDeleteLeads = false,
   canHandoffLeads = false,
-}: LeadTableProps & { lead: Lead }) {
+}: LeadActionProps) {
   const canHandoff = canHandoffLeads && Boolean(onHandoffLead);
   const isUnassigned = !lead.responsibleUserId && !lead.responsible.trim();
   const handoffLabel = isUnassigned ? "Encaminhar para consultor" : "Trocar consultor ou funil";
@@ -166,7 +177,100 @@ function LeadIdentity({ lead, onViewLead }: { lead: Lead; onViewLead: (leadId: s
   );
 }
 
-export function LeadTable({
+
+type LeadTableRowProps = {
+  lead: Lead;
+  viewMode: Exclude<ViewMode, "kanban">;
+  onViewLead: (leadId: string) => void;
+  onEditLead: (leadId: string) => void;
+  onDeleteLead: (leadId: string) => void;
+  onHandoffLead?: (lead: Lead) => void;
+  canEditLeads: boolean;
+  canDeleteLeads: boolean;
+  canHandoffLeads: boolean;
+};
+
+const LeadTableRow = memo(function LeadTableRow({
+  lead,
+  viewMode,
+  onViewLead,
+  onEditLead,
+  onDeleteLead,
+  onHandoffLead,
+  canEditLeads,
+  canDeleteLeads,
+  canHandoffLeads,
+}: LeadTableRowProps) {
+  const status = lead.status || (lead.isLost ? "Perdido" : "Novo lead");
+  const scores = getLeadScores(lead);
+  const plan = getRecommendedCommercialPlan(lead);
+  const missingFields = getMissingFields(lead);
+  const isLost = lead.isLost || status === "Perdido";
+
+  return (
+    <tr className={isLost ? "lostLeadRow" : undefined}>
+      <td className="leadCellV32">
+        <LeadIdentity lead={lead} onViewLead={onViewLead} />
+        {viewMode === "complete" ? (
+          <div className="leadMiniMeta">
+            <span>{formatPhone(lead.phone) || "Telefone pendente"}</span>
+            <span>{lead.email || "E-mail pendente"}</span>
+          </div>
+        ) : null}
+      </td>
+
+      <td>{lead.company || "Empresa pendente"}</td>
+
+      <td>
+        <div className="badgeGroup">
+          <span className={`badge ${getStatusBadgeClass(status)}`}>{status}</span>
+          <span className={`badge ${getTemperatureBadgeClass(lead.temperature)}`}>{lead.temperature || "Temperatura pendente"}</span>
+        </div>
+      </td>
+
+      <td>
+        <span className={`badge ${getPriorityClass(scores.priority)}`} title={scores.reasons.length ? scores.reasons.join(", ") : "Score por potencial, urgência e lacunas."}>
+          {scores.priority}
+        </span>
+      </td>
+
+      <td className="nextActionCellV32 nextActionCellV33">
+        <strong className={getNextStepBadgeClass(lead.nextContactAt)}>
+          {lead.nextContactAt ? formatDate(lead.nextContactAt) : "Sem próximo passo definido"}
+        </strong>
+        <p title={plan.nextAction}>{plan.offer || plan.nextAction}</p>
+      </td>
+
+      <td>{lead.responsible || "Pendente"}</td>
+
+      {viewMode === "complete" ? (
+        <td>
+          <span className={`badge ${missingFields.length >= 4 ? "badgeRed" : missingFields.length >= 2 ? "badgeYellow" : "badgeGreen"}`}>
+            {missingFields.length ? `Faltam ${missingFields.length}` : "Boa"}
+          </span>
+          <p className="microText">{missingFields.length ? missingFields.join(", ") : "Cadastro operacional"}</p>
+        </td>
+      ) : null}
+
+      <td>{formatDate(lead.lastContactAt || lead.contactMadeAt || lead.updatedAt || lead.createdAt)}</td>
+
+      <td>
+        <LeadActions
+          lead={lead}
+          onViewLead={onViewLead}
+          onEditLead={onEditLead}
+          onDeleteLead={onDeleteLead}
+          onHandoffLead={onHandoffLead}
+          canEditLeads={canEditLeads}
+          canDeleteLeads={canDeleteLeads}
+          canHandoffLeads={canHandoffLeads}
+        />
+      </td>
+    </tr>
+  );
+});
+
+export const LeadTable = memo(function LeadTable({
   leads,
   externalSearch = "",
   pagination,
@@ -201,6 +305,13 @@ export function LeadTable({
     const stored = localStorage.getItem("crmCasaAdsLeadViewMode");
     return stored === "complete" || stored === "kanban" ? stored : "compact";
   });
+  const [kanbanFilters, setKanbanFilters] = useState(() => ({
+    search: externalSearch,
+    status: "" as LeadStatus | "",
+    temperature: "" as LeadTemperature | "",
+    responsible: "",
+    quickFilter: requestedQuickFilter || "all",
+  }));
 
   useEffect(() => {
     setSearch(externalSearch);
@@ -232,6 +343,22 @@ export function LeadTable({
 
     return () => window.clearTimeout(timeoutId);
   }, [onQueryChange, ownerFilter, quickFilter, search, sortBy, sortDirection, statusFilter, temperatureFilter, viewMode]);
+
+  useEffect(() => {
+    if (viewMode !== "kanban") return;
+
+    const timeoutId = window.setTimeout(() => {
+      setKanbanFilters({
+        search,
+        status: statusFilter,
+        temperature: temperatureFilter,
+        responsible: ownerFilter,
+        quickFilter,
+      });
+    }, 180);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [ownerFilter, quickFilter, search, statusFilter, temperatureFilter, viewMode]);
 
   const ownerOptions = useMemo(() => {
     if (serverOwnerOptions.length) return serverOwnerOptions.map((owner) => owner.name);
@@ -450,13 +577,7 @@ export function LeadTable({
       {viewMode === "kanban" ? (
         <Suspense fallback={<div className="kanbanLoadingState" role="status"><strong>Carregando Kanban...</strong><span>O módulo é carregado somente quando necessário.</span></div>}>
           <KanbanBoard
-          filters={{
-            search,
-            status: statusFilter,
-            temperature: temperatureFilter,
-            responsible: ownerFilter,
-            quickFilter,
-          }}
+          filters={kanbanFilters}
           canMoveCards={canMoveKanbanCards}
           canAddCards={canAddKanbanCards}
           canEditCards={canEditLeads}
@@ -494,76 +615,20 @@ export function LeadTable({
                   </td>
                 </tr>
               ) : (
-                displayedLeads.map((lead) => {
-                  const status = lead.status || (lead.isLost ? "Perdido" : "Novo lead");
-                  const scores = getLeadScores(lead);
-                  const plan = getRecommendedCommercialPlan(lead);
-                  const missingFields = getMissingFields(lead);
-                  const isLost = lead.isLost || status === "Perdido";
-
-                  return (
-                    <tr key={lead.id} className={isLost ? "lostLeadRow" : undefined}>
-                      <td className="leadCellV32">
-                        <LeadIdentity lead={lead} onViewLead={onViewLead} />
-                        {viewMode === "complete" ? (
-                          <div className="leadMiniMeta">
-                            <span>{formatPhone(lead.phone) || "Telefone pendente"}</span>
-                            <span>{lead.email || "E-mail pendente"}</span>
-                          </div>
-                        ) : null}
-                      </td>
-
-                      <td>{lead.company || "Empresa pendente"}</td>
-
-                      <td>
-                        <div className="badgeGroup">
-                          <span className={`badge ${getStatusBadgeClass(status)}`}>{status}</span>
-                          <span className={`badge ${getTemperatureBadgeClass(lead.temperature)}`}>{lead.temperature || "Temperatura pendente"}</span>
-                        </div>
-                      </td>
-
-                      <td>
-                        <span className={`badge ${getPriorityClass(scores.priority)}`} title={scores.reasons.length ? scores.reasons.join(", ") : "Score por potencial, urgência e lacunas."}>
-                          {scores.priority}
-                        </span>
-                      </td>
-
-                      <td className="nextActionCellV32 nextActionCellV33">
-                        <strong className={getNextStepBadgeClass(lead.nextContactAt)}>
-                          {lead.nextContactAt ? formatDate(lead.nextContactAt) : "Sem próximo passo definido"}
-                        </strong>
-                        <p title={plan.nextAction}>{plan.offer || plan.nextAction}</p>
-                      </td>
-
-                      <td>{lead.responsible || "Pendente"}</td>
-
-                      {viewMode === "complete" ? (
-                        <td>
-                          <span className={`badge ${missingFields.length >= 4 ? "badgeRed" : missingFields.length >= 2 ? "badgeYellow" : "badgeGreen"}`}>
-                            {missingFields.length ? `Faltam ${missingFields.length}` : "Boa"}
-                          </span>
-                          <p className="microText">{missingFields.length ? missingFields.join(", ") : "Cadastro operacional"}</p>
-                        </td>
-                      ) : null}
-
-                      <td>{formatDate(lead.lastContactAt || lead.contactMadeAt || lead.updatedAt || lead.createdAt)}</td>
-
-                      <td>
-                        <LeadActions
-                          leads={leads}
-                          lead={lead}
-                          onViewLead={onViewLead}
-                          onEditLead={onEditLead}
-                          onDeleteLead={onDeleteLead}
-                          onHandoffLead={onHandoffLead}
-                          canEditLeads={canEditLeads}
-                          canDeleteLeads={canDeleteLeads}
-                          canHandoffLeads={canHandoffLeads}
-                        />
-                      </td>
-                    </tr>
-                  );
-                })
+                displayedLeads.map((lead) => (
+                  <LeadTableRow
+                    key={lead.id}
+                    lead={lead}
+                    viewMode={viewMode}
+                    onViewLead={onViewLead}
+                    onEditLead={onEditLead}
+                    onDeleteLead={onDeleteLead}
+                    onHandoffLead={onHandoffLead}
+                    canEditLeads={canEditLeads}
+                    canDeleteLeads={canDeleteLeads}
+                    canHandoffLeads={canHandoffLeads}
+                  />
+                ))
               )}
             </tbody>
           </table>
@@ -582,4 +647,4 @@ export function LeadTable({
       )}
     </section>
   );
-}
+});

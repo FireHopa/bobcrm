@@ -1,4 +1,4 @@
-import { FormEvent } from "react";
+import { memo, type FormEvent } from "react";
 import type { CRMUser } from "../types/Lead";
 
 type HeaderProps = {
@@ -12,7 +12,7 @@ type HeaderProps = {
   totalLeadsCount?: number;
 };
 
-export function Header({
+export const Header = memo(function Header({
   storageLabel = "MySQL ativo",
   storageTone = "green",
   currentUser,
@@ -77,4 +77,4 @@ export function Header({
       </div>
     </header>
   );
-}
+});
