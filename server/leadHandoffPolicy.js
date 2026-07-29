@@ -39,6 +39,7 @@ export function assertLeadHandoffPayload(payload = {}) {
     pipelineId,
     stageId,
     requestId,
+    expectedUpdatedAt: String(payload.expectedUpdatedAt || "").trim(),
     task: assertTaskPayload(payload.task || {}),
   };
 }

@@ -52,7 +52,7 @@ export function buildIsoToMysqlDateExpression(columnExpression) {
     WHEN ${value} REGEXP '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
       THEN STR_TO_DATE(${value}, '%Y-%m-%d')
     WHEN ${value} REGEXP '^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{1,6}'
-      THEN STR_TO_DATE(REPLACE(SUBSTRING(${value}, 1, 26), 'T', ' '), '%Y-%m-%d %H:%i:%s.%f')
+      THEN STR_TO_DATE(REPLACE(SUBSTRING(${value}, 1, 23), 'T', ' '), '%Y-%m-%d %H:%i:%s.%f')
     WHEN ${value} REGEXP '^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}'
       THEN STR_TO_DATE(REPLACE(SUBSTRING(${value}, 1, 19), 'T', ' '), '%Y-%m-%d %H:%i:%s')
     ELSE NULL
@@ -67,6 +67,7 @@ function pendingClause(tableAlias, fields) {
 
 export function createDateColumnRuntime({ queryFirst, logger = console }) {
   let ready = false;
+  let refreshPromise = null;
 
   return {
     isReady() {
@@ -75,25 +76,33 @@ export function createDateColumnRuntime({ queryFirst, logger = console }) {
 
     async refreshReadiness({ logTransition = false, client } = {}) {
       if (ready) return true;
-      const pending = await queryFirst(
-        `SELECT id, source FROM (
-           SELECT l.id, 'leads' AS source FROM leads l
-            WHERE ${pendingClause("l", TABLE_DATE_FIELDS.leads)}
-           UNION ALL
-           SELECT t.id, 'tasks' AS source FROM tasks t
-            WHERE ${pendingClause("t", TABLE_DATE_FIELDS.tasks)}
-         ) pending_dates LIMIT 1`,
-        [],
-        client,
-      );
-      const nextReady = !pending;
-      if (logTransition && nextReady !== ready) {
-        logger.log(nextReady
-          ? "Colunas DATETIME(3): ATIVAS. Filtros temporais usarão campos indexáveis."
-          : "Colunas DATETIME(3): EM BACKFILL. Filtros temporais permanecem no modo VARCHAR até concluir e validar 100% dos registros.");
-      }
-      ready = nextReady;
-      return ready;
+      if (refreshPromise) return refreshPromise;
+
+      refreshPromise = (async () => {
+        const pending = await queryFirst(
+          `SELECT id, source FROM (
+             SELECT l.id, 'leads' AS source FROM leads l
+              WHERE ${pendingClause("l", TABLE_DATE_FIELDS.leads)}
+             UNION ALL
+             SELECT t.id, 'tasks' AS source FROM tasks t
+              WHERE ${pendingClause("t", TABLE_DATE_FIELDS.tasks)}
+           ) pending_dates LIMIT 1`,
+          [],
+          client,
+        );
+        const nextReady = !pending;
+        if (logTransition && nextReady !== ready) {
+          logger.log(nextReady
+            ? "Colunas DATETIME(3): ATIVAS. Filtros temporais usarão campos indexáveis."
+            : "Colunas DATETIME(3): EM BACKFILL. Filtros temporais permanecem no modo VARCHAR até concluir e validar 100% dos registros.");
+        }
+        ready = nextReady;
+        return ready;
+      })().finally(() => {
+        refreshPromise = null;
+      });
+
+      return refreshPromise;
     },
   };
 }

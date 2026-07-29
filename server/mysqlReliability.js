@@ -31,6 +31,23 @@ export function isRetryableMysqlOperationError(error) {
   return Boolean(error?.mysqlRetrySafe) && isRetryableMysqlConnectionError(error);
 }
 
+export function isMysqlPoolQueueLimitError(error) {
+  const code = String(error?.code || "").trim().toUpperCase();
+  const message = String(error?.message || "").trim().toLowerCase();
+  return code === "POOL_ENQUEUELIMIT"
+    || code === "MYSQL_POOL_QUEUE_LIMIT"
+    || message.includes("queue limit reached")
+    || message.includes("pool queue limit");
+}
+
+export function markMysqlCapacityError(error) {
+  if (!isMysqlPoolQueueLimitError(error) || !error || typeof error !== "object") return error;
+  error.code = error.code || "MYSQL_POOL_QUEUE_LIMIT";
+  error.statusCode = 503;
+  error.publicMessage = "O CRM está processando muitas operações simultâneas. Tente novamente em instantes.";
+  return error;
+}
+
 export function calculateBackoffDelay(attempt, {
   baseDelayMs = 100,
   maxDelayMs = 3000,
@@ -163,7 +180,9 @@ export async function withMysqlTransactionRetry(pool, operation, {
 export function buildMysqlPoolOptions(options = {}) {
   return {
     waitForConnections: true,
-    queueLimit: 0,
+    // Evita fila infinita quando todas as conexões estão ocupadas por queries lentas.
+    // O runtime pode sobrescrever por processo, mas nunca deve depender de fila ilimitada.
+    queueLimit: 32,
     enableKeepAlive: true,
     keepAliveInitialDelay: 10000,
     connectTimeout: 10000,

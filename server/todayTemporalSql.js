@@ -3,6 +3,7 @@ import { sqlDateColumn } from "./dateColumns.js";
 export function buildTodayTemporalSql(useDateColumns = false) {
   const taskDueColumn = sqlDateColumn("t", "due_at", "due_at_dt", useDateColumns);
   const taskCompletedColumn = sqlDateColumn("t", "completed_at", "completed_at_dt", useDateColumns);
+  const rankedTaskDueColumn = useDateColumns ? "due_at_dt" : "due_at";
   const leadUpdatedColumn = sqlDateColumn("l", "updated_at", "updated_at_dt", useDateColumns);
   const overdue = useDateColumns
     ? `${taskDueColumn} < CURDATE()`
@@ -34,6 +35,33 @@ export function buildTodayTemporalSql(useDateColumns = false) {
        SUM(CASE WHEN t.status = 'completed' AND ${completedToday} THEN 1 ELSE 0 END) AS completed_today
      FROM tasks t
      WHERE ${taskAccessClause}`;
+    },
+
+    buildTaskListsSql(taskAccessClause) {
+      return `WITH classified AS (
+       SELECT t.*, l.name AS lead_name, l.company AS lead_company, l.phone AS lead_phone,
+         CASE
+           WHEN t.status = 'pending' AND ${overdue} THEN 'overdue'
+           WHEN t.status = 'pending' AND ${today} THEN 'today'
+           WHEN t.status = 'pending' AND ${upcoming} THEN 'upcoming'
+           ELSE ''
+         END AS __bucket
+       FROM tasks t
+       LEFT JOIN leads l ON l.id = t.lead_id
+       WHERE ${taskAccessClause} AND t.status = 'pending'
+     ), ranked AS (
+       SELECT classified.*,
+         ROW_NUMBER() OVER (
+           PARTITION BY __bucket
+           ORDER BY CASE priority WHEN 'urgente' THEN 1 WHEN 'alta' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END,
+                    ${rankedTaskDueColumn} ASC
+         ) AS __row_num
+       FROM classified
+       WHERE __bucket != ''
+     )
+     SELECT * FROM ranked
+     WHERE __row_num <= 12
+     ORDER BY FIELD(__bucket, 'overdue', 'today', 'upcoming'), __row_num`;
     },
     buildOperationalSql(leadAccessClause) {
       return `SELECT

@@ -141,6 +141,7 @@ export function SettingsCenter({
   const [adminOverview, setAdminOverview] = useState<AdminLeadOverview>(emptyAdminLeadOverview);
   const [duplicates, setDuplicates] = useState<DuplicateGroup[]>([]);
   const [duplicatePagination, setDuplicatePagination] = useState<DuplicateGroupsPage["pagination"]>(emptyDuplicatePagination);
+  const [duplicatesLoaded, setDuplicatesLoaded] = useState(false);
   const [userForm, setUserForm] = useState<UserFormState>(initialUserForm);
   const [panelMessage, setPanelMessage] = useState("");
   const [panelError, setPanelError] = useState("");
@@ -174,6 +175,13 @@ export function SettingsCenter({
     loadProductionData();
   }, []);
 
+  useEffect(() => {
+    if (activeAdminTab !== "duplicates" || duplicatesLoaded) return;
+    void loadDuplicatePage(0).catch((error) => {
+      setPanelError(error instanceof Error ? error.message : "Não foi possível carregar os duplicados.");
+    });
+  }, [activeAdminTab, duplicatesLoaded]);
+
   async function runPanelAction(action: () => Promise<void>, successMessage?: string) {
     setPanelError("");
     setPanelMessage("");
@@ -198,11 +206,6 @@ export function SettingsCenter({
       tasks.push(fetchTeamsFromServer().then(setTeams));
       tasks.push(fetchAdminLeadOverviewFromServer({ includeDuplicates: false }).then((overview) => {
         setAdminOverview((current) => ({ ...overview, duplicateGroups: current.duplicateGroups }));
-      }));
-      tasks.push(fetchDuplicateGroupsFromServer({ limit: emptyDuplicatePagination.limit, offset: 0 }).then((result) => {
-        setDuplicates(result.groups);
-        setDuplicatePagination(result.pagination);
-        setAdminOverview((current) => ({ ...current, duplicateGroups: result.pagination.total }));
       }));
     }
     if (canRestore) tasks.push(fetchDeletedLeadsFromServer({ limit: emptyDeletedPagination.limit, offset: 0 }).then((result) => {
@@ -319,6 +322,7 @@ export function SettingsCenter({
     const result = await fetchDuplicateGroupsFromServer({ limit: duplicatePagination.limit, offset });
     setDuplicates((currentGroups) => append ? [...currentGroups, ...result.groups] : result.groups);
     setDuplicatePagination(result.pagination);
+    setDuplicatesLoaded(true);
     if (!append && offset === 0) {
       setAdminOverview((current) => ({ ...current, duplicateGroups: result.pagination.total }));
     }

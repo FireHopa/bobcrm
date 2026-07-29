@@ -57,6 +57,18 @@ export function buildLeadAccessSql(user, teamMembers = [], alias = "") {
     return { clause: "1 = 0", params: [], scope };
   }
 
+  // Carteira própria é o caminho crítico do consultor. Desde a migração de
+  // escopo e o fluxo de handoff, responsible_user_id é o vínculo canônico.
+  // Evitamos aqui o fallback legado com OR + TRIM/LOWER porque ele impede o
+  // MySQL de usar de forma eficiente o índice da carteira em bases grandes.
+  // A migração 20260727_12 executa novamente o backfill dos vínculos antigos.
+  if (scope === "own") {
+    const userId = String(user?.id || "").trim();
+    return userId
+      ? { clause: `${prefix}responsible_user_id = ?`, params: [userId], scope }
+      : { clause: "1 = 0", params: [], scope };
+  }
+
   const allowedUsers = getUsersAllowedByScope(user, teamMembers);
   if (!allowedUsers.length) {
     return { clause: "1 = 0", params: [], scope };

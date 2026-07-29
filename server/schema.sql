@@ -138,3 +138,19 @@ CREATE TABLE IF NOT EXISTS lead_external_origins (
   metadata_json TEXT DEFAULT '{}',
   UNIQUE (lead_id, provider, tenant_id, webhook_id)
 );
+
+
+CREATE TABLE IF NOT EXISTS mutation_receipts (
+  id TEXT PRIMARY KEY,
+  actor_id TEXT NOT NULL DEFAULT '',
+  operation TEXT NOT NULL DEFAULT '',
+  request_id TEXT NOT NULL DEFAULT '',
+  resource_id TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'started',
+  response_json TEXT,
+  created_at TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT '',
+  completed_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_mutation_receipts_actor_created ON mutation_receipts(actor_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_mutation_receipts_status_updated ON mutation_receipts(status, updated_at);

@@ -52,7 +52,13 @@
     "test:phase12-performance": "node --test scripts/mysql-hardening-core.test.mjs server/phase12MysqlHardening.test.js server/mysqlReliability.test.js server/phase9IndexReadiness.test.js",
     "test:phase13-performance": "node --test scripts/load-test-core.test.mjs server/phase13LoadTest.test.js",
     "test:load:smoke": "RUN_LOAD_TEST=1 LOAD_TEST_PROFILE=smoke node scripts/load-test.mjs",
-    "test:load:full": "RUN_LOAD_TEST=1 LOAD_TEST_PROFILE=full node scripts/load-test.mjs"
+    "test:load:full": "RUN_LOAD_TEST=1 LOAD_TEST_PROFILE=full node scripts/load-test.mjs",
+    "integrity:check": "node scripts/operational-integrity.mjs",
+    "integrity:repair": "node scripts/operational-integrity.mjs --repair",
+    "test:phase3-integrity": "node --test server/mutationReceipts.test.js server/migrations/20260727_15_integrity_concurrency_phase3.test.js server/phase3IntegrityConcurrency20260727.test.js scripts/operational-integrity.test.mjs",
+    "test:phase4-observability": "node --test server/performanceMetrics.test.js server/operationalObservability.test.js server/migrations/20260727_16_observability_maintenance_phase4.test.js server/phase4ObservabilityMaintenance20260727.test.js",
+    "ops:check": "node scripts/operational-health.mjs",
+    "ops:maintenance": "node scripts/operational-maintenance.mjs"
   },
   "dependencies": {
     "dotenv": "^17.4.2",

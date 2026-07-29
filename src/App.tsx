@@ -166,13 +166,11 @@ export default function App() {
         throw caughtError;
       }
 
+      // Carrega a carteira e o resumo em uma única requisição antes de montar a Tela Hoje.
+      // Isso evita a rajada /leads + /summary + /filter-options + /today no mesmo instante.
+      await loadLeadsFromServer({ includeSummary: true }, { keepScreen: true, keepAuthLoading: true });
       setCurrentUser(user);
       setIsAuthLoading(false);
-
-      void loadLeadsFromServer({ includeSummary: false }, { keepScreen: true });
-      void refreshLeadSummary();
-      void refreshLeadFilterOptions();
-      if (hasPermission(user, "assign_leads")) void refreshAssignableUsers();
     } catch (caughtError) {
       setServerStatus("offline");
       clearServerSessionState();
@@ -185,12 +183,11 @@ export default function App() {
   }
 
   async function handleLogin(user: CRMUser) {
-    setCurrentUser(user);
+    setIsAuthLoading(true);
     setIsLoading(false);
-    await loadLeadsFromServer({ includeSummary: false }, { keepScreen: true });
-    void refreshLeadSummary();
-    void refreshLeadFilterOptions();
-    if (hasPermission(user, "assign_leads")) void refreshAssignableUsers();
+    await loadLeadsFromServer({ includeSummary: true }, { keepScreen: true, keepAuthLoading: true });
+    setCurrentUser(user);
+    setIsAuthLoading(false);
   }
 
   const handleLogout = useCallback(async () => {
@@ -204,7 +201,7 @@ export default function App() {
     setActiveTab("operation");
   }, []);
 
-  const loadLeadsFromServer = useCallback(async (params: FetchLeadsParams = {}, options: { append?: boolean; keepScreen?: boolean } = {}) => {
+  const loadLeadsFromServer = useCallback(async (params: FetchLeadsParams = {}, options: { append?: boolean; keepScreen?: boolean; keepAuthLoading?: boolean } = {}) => {
     leadListRequestController.current?.abort();
     const controller = new AbortController();
     leadListRequestController.current = controller;
@@ -244,7 +241,7 @@ export default function App() {
         leadListRequestController.current = null;
         if (options.keepScreen) setIsLeadsRefreshing(false);
         else setIsLoading(false);
-        setIsAuthLoading(false);
+        if (!options.keepAuthLoading) setIsAuthLoading(false);
       }
     }
   }, []);
@@ -312,6 +309,17 @@ export default function App() {
       setAssignableUsers([]);
     }
   }, []);
+
+  useEffect(() => {
+    if (!currentUser || activeTab !== "leads") return;
+    void refreshLeadFilterOptions();
+  }, [activeTab, currentUser?.id, refreshLeadFilterOptions]);
+
+  useEffect(() => {
+    if (!currentUser || activeTab !== "operation" || !hasPermission(currentUser, "assign_tasks") || assignableUsers.length) return;
+    const timer = window.setTimeout(() => void refreshAssignableUsers(), 1200);
+    return () => window.clearTimeout(timer);
+  }, [activeTab, assignableUsers.length, currentUser?.id, refreshAssignableUsers]);
 
   async function importLeads(importedLeads: Lead[], options: { chunked?: boolean } = {}): Promise<ImportDeduplicationReport | void> {
     if (!hasPermission(currentUser, "import_leads")) return;
@@ -501,7 +509,8 @@ export default function App() {
 
   const openLeadHandoff = useCallback((lead: Lead) => {
     setHandoffLead(lead);
-  }, []);
+    if (!assignableUsers.length) void refreshAssignableUsers();
+  }, [assignableUsers.length, refreshAssignableUsers]);
 
   const closeLeadHandoff = useCallback(() => {
     setHandoffLead(null);

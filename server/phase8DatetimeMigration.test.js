@@ -52,3 +52,13 @@ test("schema e scripts de operação incluem a transição DATETIME", () => {
   assert.equal(packageJson.scripts["datetime:backfill"], "node scripts/backfill-datetime-columns.mjs");
   assert.equal(packageJson.scripts["datetime:verify"], "node scripts/backfill-datetime-columns.mjs --verify-only");
 });
+
+test("Tela Hoje consolida as três listas de tarefas em uma query ranqueada", () => {
+  const temporal = buildTodayTemporalSql(true);
+  const sql = temporal.buildTaskListsSql("t.responsible_user_id = ?");
+  assert.match(sql, /WITH classified AS/);
+  assert.match(sql, /ROW_NUMBER\(\) OVER/);
+  assert.match(sql, /PARTITION BY __bucket/);
+  assert.match(sql, /__row_num <= 12/);
+  assert.match(sql, /t\.due_at_dt/);
+});

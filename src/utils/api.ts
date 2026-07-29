@@ -31,6 +31,22 @@ type CurrentSessionResponse = {
   user: CRMUser;
 };
 
+const pendingMutationIds = new Map<string, { id: string; expiresAt: number }>();
+function stableMutationId(key: string): string {
+  const now = Date.now();
+  const existing = pendingMutationIds.get(key);
+  if (existing && existing.expiresAt > now) return existing.id;
+  if (pendingMutationIds.size >= 500) {
+    for (const [pendingKey, pending] of pendingMutationIds) if (pending.expiresAt <= now) pendingMutationIds.delete(pendingKey);
+    while (pendingMutationIds.size >= 500) pendingMutationIds.delete(pendingMutationIds.keys().next().value as string);
+  }
+  const id = crypto.randomUUID();
+  pendingMutationIds.set(key, { id, expiresAt: now + 2 * 60_000 });
+  return id;
+}
+function finishMutation(key: string) { pendingMutationIds.delete(key); }
+function mutationKey(operation: string, payload: unknown) { return `${operation}:${JSON.stringify(payload)}`; }
+
 export class ApiRequestError extends Error {
   status: number;
 
@@ -816,11 +832,11 @@ export async function moveKanbanCard(payload: {
   stageId: string;
   beforeLeadId?: string;
   afterLeadId?: string;
+  expectedUpdatedAt?: string;
 }): Promise<Lead> {
-  const lead = await requestApi<Partial<Lead>>("/api/kanban/cards/move", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  const key = mutationKey("kanban:move", payload);
+  const lead = await requestApi<Partial<Lead>>("/api/kanban/cards/move", { method: "POST", body: JSON.stringify({ ...payload, requestId: stableMutationId(key) }) });
+  finishMutation(key);
   return normalizeLeadFromApi(lead);
 }
 
@@ -840,10 +856,9 @@ export async function searchLeadsForKanban(
 }
 
 export async function bulkAssignKanbanCards(payload: { leadIds: string[]; pipelineId: string; stageId: string }): Promise<Lead[]> {
-  const leads = await requestApi<Partial<Lead>[]>("/api/kanban/cards/bulk-assign", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  const key = mutationKey("kanban:bulk-assign", payload);
+  const leads = await requestApi<Partial<Lead>[]>("/api/kanban/cards/bulk-assign", { method: "POST", body: JSON.stringify({ ...payload, requestId: stableMutationId(key) }) });
+  finishMutation(key);
   return leads.map(normalizeLeadFromApi);
 }
 
@@ -853,20 +868,16 @@ export async function fetchLeadsFromServer(): Promise<Lead[]> {
 }
 
 export async function createLeadOnServer(lead: Lead): Promise<Lead> {
-  const savedLead = await requestApi<Partial<Lead>>("/api/leads", {
-    method: "POST",
-    body: JSON.stringify({ lead }),
-  });
-
+  const key = mutationKey("lead:create", lead);
+  const savedLead = await requestApi<Partial<Lead>>("/api/leads", { method: "POST", body: JSON.stringify({ lead, requestId: stableMutationId(key) }) });
+  finishMutation(key);
   return normalizeLeadFromApi(savedLead);
 }
 
 export async function updateLeadOnServer(lead: Lead): Promise<Lead> {
-  const savedLead = await requestApi<Partial<Lead>>(`/api/leads/${encodeURIComponent(lead.id)}`, {
-    method: "PUT",
-    body: JSON.stringify({ lead }),
-  });
-
+  const key = mutationKey("lead:update", lead);
+  const savedLead = await requestApi<Partial<Lead>>(`/api/leads/${encodeURIComponent(lead.id)}`, { method: "PUT", body: JSON.stringify({ lead, requestId: stableMutationId(key) }) });
+  finishMutation(key);
   return normalizeLeadFromApi(savedLead);
 }
 
@@ -964,6 +975,7 @@ export type CreateTaskPayload = {
   dueAt: string;
   priority?: TaskPriority;
   recurrence?: string;
+  requestId?: string;
 };
 
 export type LeadHandoffPayload = {
@@ -971,6 +983,7 @@ export type LeadHandoffPayload = {
   consultantUserId: string;
   pipelineId: string;
   stageId: string;
+  expectedUpdatedAt?: string;
   task: CreateTaskPayload;
 };
 
@@ -1001,24 +1014,23 @@ export async function fetchTasksFromServer(params: { bucket?: "overdue" | "today
 }
 
 export async function createTaskOnServer(payload: CreateTaskPayload): Promise<CRMTask> {
-  return requestApi<CRMTask>("/api/tasks", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  const base = { ...payload, requestId: undefined };
+  const key = mutationKey("task:create", base);
+  const task = await requestApi<CRMTask>("/api/tasks", { method: "POST", body: JSON.stringify({ ...base, requestId: payload.requestId || stableMutationId(key) }) });
+  finishMutation(key);
+  return task;
 }
 
-export async function updateTaskOnServer(taskId: string, payload: Partial<CreateTaskPayload>): Promise<CRMTask> {
-  return requestApi<CRMTask>(`/api/tasks/${encodeURIComponent(taskId)}`, {
-    method: "PUT",
-    body: JSON.stringify(payload),
-  });
+export async function updateTaskOnServer(taskId: string, payload: Partial<CreateTaskPayload> & { expectedUpdatedAt?: string }): Promise<CRMTask> {
+  return requestApi<CRMTask>(`/api/tasks/${encodeURIComponent(taskId)}`, { method: "PUT", body: JSON.stringify(payload) });
 }
 
-export async function completeTaskOnServer(taskId: string, payload: { result?: string; nextTask?: CreateTaskPayload | null } = {}): Promise<{ task: CRMTask; nextTask: CRMTask | null }> {
-  return requestApi<{ task: CRMTask; nextTask: CRMTask | null }>(`/api/tasks/${encodeURIComponent(taskId)}/complete`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+export async function completeTaskOnServer(taskId: string, payload: { result?: string; nextTask?: CreateTaskPayload | null; requestId?: string } = {}): Promise<{ task: CRMTask; nextTask: CRMTask | null; idempotentReplay?: boolean }> {
+  const base = { ...payload, requestId: undefined };
+  const key = mutationKey(`task:complete:${taskId}`, base);
+  const result = await requestApi<{ task: CRMTask; nextTask: CRMTask | null; idempotentReplay?: boolean }>(`/api/tasks/${encodeURIComponent(taskId)}/complete`, { method: "POST", body: JSON.stringify({ ...base, requestId: payload.requestId || stableMutationId(key) }) });
+  finishMutation(key);
+  return result;
 }
 
 export async function cancelTaskOnServer(taskId: string): Promise<void> {

@@ -64,6 +64,10 @@ CREATE TABLE IF NOT EXISTS leads (
   has_migration_opportunity TINYINT(1) NOT NULL DEFAULT 0,
   has_external_agency TINYINT(1) NOT NULL DEFAULT 0,
   INDEX idx_leads_updated_at (updated_at),
+  INDEX idx_leads_active_updated_id (deleted_at, updated_at, id),
+  INDEX idx_leads_status_updated_id (deleted_at, status, updated_at, id),
+  INDEX idx_leads_temperature_updated_id (deleted_at, temperature, updated_at, id),
+  INDEX idx_leads_owner_name_updated_id (deleted_at, responsible, updated_at, id),
   INDEX idx_leads_created_at (created_at),
   INDEX idx_leads_status (status),
   INDEX idx_leads_responsible (responsible),
@@ -83,6 +87,10 @@ CREATE TABLE IF NOT EXISTS leads (
   INDEX idx_leads_expected_close_dt (deleted_at, expected_close_at_dt, responsible_user_id),
   INDEX idx_leads_stalled_dt (deleted_at, is_lost, status, updated_at_dt),
   INDEX idx_leads_commercial_profile_version (commercial_profile_version, id),
+  INDEX idx_leads_priority_score_updated (deleted_at, is_lost, status, lead_priority_score, updated_at, id),
+  INDEX idx_leads_mapping_score_updated (deleted_at, is_lost, status, mapping_urgency_score, updated_at, id),
+  INDEX idx_leads_agency_updated (deleted_at, has_external_agency, updated_at, id),
+  INDEX idx_leads_expansion_updated (deleted_at, has_expansion_opportunity, updated_at, id),
   FULLTEXT INDEX ft_leads_search_text (search_text)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -152,7 +160,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
   summary MEDIUMTEXT NULL,
   created_at VARCHAR(40) NOT NULL DEFAULT '',
   INDEX idx_audit_created_at (created_at),
-  INDEX idx_audit_entity (entity_type, entity_id)
+  INDEX idx_audit_entity (entity_type, entity_id),
+  INDEX idx_audit_actor_created (actor_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS lead_notes (
@@ -198,6 +207,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   INDEX idx_tasks_status_due (status, due_at),
   INDEX idx_tasks_created (created_at),
   INDEX idx_tasks_responsible_due_dt (responsible_user_id, status, due_at_dt),
+  INDEX idx_tasks_status_due_dt_owner (status, due_at_dt, responsible_user_id, priority),
   INDEX idx_tasks_status_due_dt (status, due_at_dt),
   INDEX idx_tasks_completed_dt (status, completed_at_dt)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -270,6 +280,45 @@ CREATE TABLE IF NOT EXISTS async_jobs (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
+CREATE TABLE IF NOT EXISTS mutation_receipts (
+  id CHAR(64) NOT NULL PRIMARY KEY,
+  actor_id VARCHAR(64) NOT NULL DEFAULT '',
+  operation VARCHAR(64) NOT NULL DEFAULT '',
+  request_id VARCHAR(120) NOT NULL DEFAULT '',
+  resource_id VARCHAR(64) NOT NULL DEFAULT '',
+  status VARCHAR(20) NOT NULL DEFAULT 'started',
+  response_json JSON NULL,
+  created_at VARCHAR(40) NOT NULL DEFAULT '',
+  updated_at VARCHAR(40) NOT NULL DEFAULT '',
+  completed_at VARCHAR(40) NOT NULL DEFAULT '',
+  INDEX idx_mutation_receipts_actor_created (actor_id, created_at),
+  INDEX idx_mutation_receipts_status_updated (status, updated_at),
+  INDEX idx_mutation_receipts_resource (resource_id, operation, created_at),
+  INDEX idx_mutation_receipts_updated (updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE IF NOT EXISTS operational_health_snapshots (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  process_role VARCHAR(24) NOT NULL DEFAULT 'unknown',
+  status VARCHAR(24) NOT NULL DEFAULT 'ok',
+  rss_mb DECIMAL(12,2) NOT NULL DEFAULT 0,
+  heap_used_mb DECIMAL(12,2) NOT NULL DEFAULT 0,
+  cpu_pct DECIMAL(8,2) NOT NULL DEFAULT 0,
+  event_loop_p95_ms DECIMAL(12,2) NOT NULL DEFAULT 0,
+  pool_connections INT UNSIGNED NOT NULL DEFAULT 0,
+  pool_free INT UNSIGNED NOT NULL DEFAULT 0,
+  pool_pending INT UNSIGNED NOT NULL DEFAULT 0,
+  pool_limit INT UNSIGNED NOT NULL DEFAULT 0,
+  active_requests INT UNSIGNED NOT NULL DEFAULT 0,
+  active_jobs INT UNSIGNED NOT NULL DEFAULT 0,
+  warnings_json JSON NULL,
+  captured_at DATETIME(3) NOT NULL,
+  INDEX idx_ops_health_captured (captured_at),
+  INDEX idx_ops_health_role_captured (process_role, captured_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
 CREATE TABLE IF NOT EXISTS kanban_pipelines (
   id VARCHAR(64) NOT NULL PRIMARY KEY,
   name VARCHAR(160) NOT NULL DEFAULT '',
@@ -311,7 +360,8 @@ CREATE TABLE IF NOT EXISTS integration_events (
   updated_at VARCHAR(40) NOT NULL DEFAULT '',
   INDEX idx_integration_events_external (provider, tenant_id, external_lead_id),
   INDEX idx_integration_events_lead (lead_id),
-  INDEX idx_integration_events_updated (updated_at)
+  INDEX idx_integration_events_updated (updated_at),
+  INDEX idx_integration_events_status_updated (status, updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS lead_external_origins (

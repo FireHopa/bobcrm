@@ -9,6 +9,7 @@ import {
 
 export function createCommercialProfileRuntime({ queryFirst, execute, nowIso, logger = console }) {
   let ready = false;
+  let refreshPromise = null;
 
   return {
     isReady() {
@@ -16,19 +17,27 @@ export function createCommercialProfileRuntime({ queryFirst, execute, nowIso, lo
     },
 
     async refreshReadiness({ logTransition = false, client } = {}) {
-      const staleLead = await queryFirst(
-        "SELECT id FROM leads WHERE commercial_profile_version <> ? LIMIT 1",
-        [COMMERCIAL_PROFILE_VERSION],
-        client,
-      );
-      const nextReady = !staleLead;
-      if (logTransition && nextReady !== ready) {
-        logger.log(nextReady
-          ? "Inteligência comercial materializada: ATIVA. Resumos e filtros usarão colunas persistidas."
-          : "Inteligência comercial materializada: EM BACKFILL. Consultas comerciais permanecem no modo legado até concluir 100% dos leads.");
-      }
-      ready = nextReady;
-      return ready;
+      if (refreshPromise) return refreshPromise;
+
+      refreshPromise = (async () => {
+        const staleLead = await queryFirst(
+          "SELECT id FROM leads WHERE commercial_profile_version <> ? LIMIT 1",
+          [COMMERCIAL_PROFILE_VERSION],
+          client,
+        );
+        const nextReady = !staleLead;
+        if (logTransition && nextReady !== ready) {
+          logger.log(nextReady
+            ? "Inteligência comercial materializada: ATIVA. Resumos e filtros usarão colunas persistidas."
+            : "Inteligência comercial materializada: EM BACKFILL. Consultas comerciais permanecem no modo legado até concluir 100% dos leads.");
+        }
+        ready = nextReady;
+        return ready;
+      })().finally(() => {
+        refreshPromise = null;
+      });
+
+      return refreshPromise;
     },
 
     async refreshLead(leadId, client) {

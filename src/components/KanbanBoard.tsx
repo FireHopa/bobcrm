@@ -523,6 +523,7 @@ export const KanbanBoard = memo(function KanbanBoard({
         stageId: targetStageId,
         beforeLeadId,
         afterLeadId,
+        expectedUpdatedAt: sourceCard.updatedAt,
       });
       setBoard((currentBoard) => currentBoard ? replaceCardInBoard(currentBoard, savedLead) : currentBoard);
       onLeadUpdated?.(savedLead);

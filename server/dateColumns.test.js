@@ -19,6 +19,8 @@ test("conversão SQL aceita data, ISO com e sem milissegundos e rejeita formato 
   const expression = buildIsoToMysqlDateExpression("NEW.updated_at");
   assert.match(expression, /%Y-%m-%d/);
   assert.match(expression, /%Y-%m-%d %H:%i:%s\.%f/);
+  assert.match(expression, /SUBSTRING\([^\n]+, 1, 23\)/);
+  assert.doesNotMatch(expression, /SUBSTRING\([^\n]+, 1, 26\)/);
   assert.match(expression, /%Y-%m-%d %H:%i:%s/);
   assert.match(expression, /ELSE NULL/);
 });
@@ -40,4 +42,27 @@ test("runtime só ativa DATETIME quando não há legado pendente", async () => {
   assert.equal(runtime.isReady(), true);
   assert.equal(await runtime.refreshReadiness(), true);
   assert.equal(calls.length, 2, "depois de pronto não deve fazer scan periódico novamente");
+});
+
+test("runtime de DATETIME não sobrepõe scans de prontidão", async () => {
+  let release;
+  let calls = 0;
+  const blocker = new Promise((resolve) => { release = resolve; });
+  const runtime = createDateColumnRuntime({
+    queryFirst: async () => {
+      calls += 1;
+      await blocker;
+      return { id: "1", source: "leads" };
+    },
+    logger: { log() {} },
+  });
+
+  const first = runtime.refreshReadiness();
+  const second = runtime.refreshReadiness();
+  await Promise.resolve();
+  assert.equal(calls, 1);
+  release();
+  assert.equal(await first, false);
+  assert.equal(await second, false);
+  assert.equal(calls, 1);
 });

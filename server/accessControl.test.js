@@ -43,13 +43,11 @@ test("atribuição própria força carteira do vendedor e bloqueia outro respons
   );
 });
 
-test("SQL de escopo nunca inclui leads sem responsável para vendedor", () => {
+test("SQL da carteira própria usa somente responsible_user_id indexável", () => {
   const result = buildLeadAccessSql(seller, [], "l");
-  assert.match(result.clause, /responsible_user_id/);
-  assert.match(result.clause, /responsible/);
-  assert.equal(result.params.includes("u1"), true);
-  assert.match(result.clause, /TRIM\(COALESCE\(l\.responsible_user_id, ''\)\) = ''/);
-  assert.equal(result.clause.includes("OR TRIM(COALESCE(l.responsible, '')) = ''"), false);
+  assert.equal(result.clause, "l.responsible_user_id = ?");
+  assert.deepEqual(result.params, ["u1"]);
+  assert.doesNotMatch(result.clause, /TRIM|LOWER|COALESCE|\sOR\s/i);
 });
 
 test("metadado de escopo é explícito", () => {

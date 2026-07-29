@@ -58,3 +58,23 @@ test("mapeamento consolidado preserva contratos das duas APIs", () => {
   assert.equal(result.opportunitySummary.expansion, 9);
   assert.equal(result.opportunitySummary.serviceStatuses["Casa do Ads"], 30);
 });
+
+test("dashboard consolidado também materializa métricas operacionais da Tela Hoje", () => {
+  const sql = buildLeadDashboardSummarySql({ alias: "l", useDateColumns: true });
+  assert.match(sql, /metric_awaiting_first_contact/);
+  assert.match(sql, /metric_stalled/);
+  assert.match(sql, /updated_at_dt < DATE_SUB/);
+
+  const result = mapLeadDashboardSummaryRow({
+    metric_awaiting_first_contact: 4,
+    metric_without_owner: 2,
+    metric_without_next_step: 3,
+    metric_stalled: 5,
+  });
+  assert.deepEqual(result.operationalMetrics, {
+    awaitingFirstContact: 4,
+    withoutOwner: 2,
+    withoutNextStep: 3,
+    stalled: 5,
+  });
+});

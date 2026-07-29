@@ -195,6 +195,7 @@ export function LeadHandoffDialog({ lead, assignableUsers, onClose, onCompleted 
         consultantUserId,
         pipelineId,
         stageId,
+        expectedUpdatedAt: lead.updatedAt,
         task: {
           title: taskTitle.trim(),
           description: taskDescription.trim(),

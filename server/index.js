@@ -6,28 +6,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import mysql from "mysql2/promise";
 import { createPerformanceMonitor } from "./performanceMetrics.js";
+import { createOperationalRuntime, resolveOperationalSettings } from "./operationalObservability.js";
 import { createTtlCache } from "./runtimeCache.js";
+import { decodeLeadCursor, encodeLeadCursor, leadCursorFilterKey } from "./leadCursor.js";
+import { buildLeadOwnerOptionsSql } from "./leadFilterOptionsSql.js";
 import { normalizeZapePayload, phoneKeyVariants, safeSecretEquals } from "./zapeIntegration.js";
-import {
-  description as leadScopeMigrationDescription,
-  up as runLeadScopeMigration,
-  version as leadScopeMigrationVersion,
-} from "./migrations/20260706_02_lead_scope_teams.js";
-import {
-  description as commercialRolesMigrationDescription,
-  up as runCommercialRolesMigration,
-  version as commercialRolesMigrationVersion,
-} from "./migrations/20260706_03_commercial_roles_notes.js";
-import {
-  description as tasksTodayMigrationDescription,
-  up as runTasksTodayMigration,
-  version as tasksTodayMigrationVersion,
-} from "./migrations/20260706_04_tasks_today.js";
-import {
-  description as operationalIntegrityMigrationDescription,
-  up as runOperationalIntegrityMigration,
-  version as operationalIntegrityMigrationVersion,
-} from "./migrations/20260707_05_operational_integrity.js";
+import { description as leadScopeMigrationDescription, up as runLeadScopeMigration, version as leadScopeMigrationVersion } from "./migrations/20260706_02_lead_scope_teams.js";
+import { description as commercialRolesMigrationDescription, up as runCommercialRolesMigration, version as commercialRolesMigrationVersion } from "./migrations/20260706_03_commercial_roles_notes.js";
+import { description as tasksTodayMigrationDescription, up as runTasksTodayMigration, version as tasksTodayMigrationVersion } from "./migrations/20260706_04_tasks_today.js";
+import { description as operationalIntegrityMigrationDescription, up as runOperationalIntegrityMigration, version as operationalIntegrityMigrationVersion } from "./migrations/20260707_05_operational_integrity.js";
 import {
   description as backupIntegrityMigrationDescription,
   up as runBackupIntegrityMigration,
@@ -49,6 +36,12 @@ import {
   version as commercialProfileMigrationVersion,
 } from "./migrations/20260723_09_commercial_profile_materialization.js";
 import { description as datetimeColumnsMigrationDescription, up as runDatetimeColumnsMigration, version as datetimeColumnsMigrationVersion } from "./migrations/20260724_10_parallel_datetime_columns.js";
+import { description as datetimeBridgeFixMigrationDescription, up as runDatetimeBridgeFixMigration, version as datetimeBridgeFixMigrationVersion } from "./migrations/20260727_11_fix_datetime_bridge_iso8601.js";
+import { description as consultantPortfolioPerformanceMigrationDescription, up as runConsultantPortfolioPerformanceMigration, version as consultantPortfolioPerformanceMigrationVersion } from "./migrations/20260727_12_consultant_portfolio_performance.js";
+import { description as antiFallPhase1MigrationDescription, up as runAntiFallPhase1Migration, version as antiFallPhase1MigrationVersion } from "./migrations/20260727_13_anti_fall_phase1.js";
+import { description as scalabilityPhase2MigrationDescription, up as runScalabilityPhase2Migration, version as scalabilityPhase2MigrationVersion } from "./migrations/20260727_14_scalability_phase2.js";
+import { description as integrityConcurrencyPhase3MigrationDescription, up as runIntegrityConcurrencyPhase3Migration, version as integrityConcurrencyPhase3MigrationVersion } from "./migrations/20260727_15_integrity_concurrency_phase3.js";
+import { description as observabilityMaintenancePhase4MigrationDescription, up as runObservabilityMaintenancePhase4Migration, version as observabilityMaintenancePhase4MigrationVersion } from "./migrations/20260727_16_observability_maintenance_phase4.js";
 import {
   createEncryptedMysqlBackup,
   removeBackupArtifact,
@@ -94,6 +87,7 @@ import {
   isClosedLead,
 } from "./operationalIntegrity.js";
 import { buildLeadDashboardSummarySql, mapLeadDashboardSummaryRow } from "./dashboardSummarySql.js";
+import { assertResourceFresh, claimMutationReceipt, completeMutationReceipt } from "./mutationReceipts.js";
 import {
   buildAdminLeadOverviewSql,
   buildOpportunityQuickFilterSql,
@@ -135,8 +129,10 @@ import {
 } from "./mysqlRateLimit.js";
 import {
   buildMysqlPoolOptions,
+  isMysqlPoolQueueLimitError,
   isRetryableMysqlConnectionError,
   isRetryableMysqlTransactionError,
+  markMysqlCapacityError,
   withMysqlRetry,
   withMysqlTransactionRetry,
 } from "./mysqlReliability.js";
@@ -154,6 +150,7 @@ import {
   rowToJob,
   updateJobProgress,
 } from "./jobQueue.js";
+import { createHeavyJobSerialExecutor } from "./jobExecutionPolicy.js";
 import {
   createJobStorageKey,
   describeJobArtifact,
@@ -202,32 +199,30 @@ import {
   getImportPrimaryKey,
   persistImportLeadBatch,
 } from "./domains/leads/importBatch.js";
-import { buildLeadSearchPlan, chooseLeadSearchPlan } from "./domains/leads/leadSearchSql.js";
+import { LEAD_SEARCH_MODES, buildLeadSearchPlan, chooseLeadSearchPlan } from "./domains/leads/leadSearchSql.js";
 import { buildLeadSearchIndexBatchUpdate } from "./domains/leads/leadSearchIndex.js";
 import { buildKanbanBoardMetadataSql, buildKanbanInitialCardsSql, buildKanbanPipelinesSql, buildKanbanStagePageSql } from "./kanbanBoardSql.js";
+import { createKanbanWriteService } from "./kanbanWriteService.js";
 import { COMMERCIAL_PROFILE_VERSION } from "./domains/leads/leadCommercialProfile.js";
 import { createCommercialProfileRuntime } from "./domains/leads/commercialProfileRuntime.js";
 import { createDateColumnRuntime, sqlDateColumn } from "./dateColumns.js";
 import { buildTodayTemporalSql } from "./todayTemporalSql.js";
+import { isMysqlStatementTimeout, resolveInteractiveSqlTimeout, withMaxExecutionTimeHint } from "./sqlExecutionGuard.js";
 import { buildRoleReadiness, findMissingWorkerTables, getProcessRoleCapabilities, normalizeProcessRole, PROCESS_ROLES, REQUIRED_WORKER_TABLES } from "./runtimeRole.js";
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, "..");
 const distDir = path.join(projectRoot, "dist");
 const packageMetadata = JSON.parse(readFileSync(path.join(projectRoot, "package.json"), "utf8"));
 const APP_VERSION = String(packageMetadata.version || "0.0.0");
-
 loadEnvFile(path.join(projectRoot, ".env"));
 loadEnvFile(path.join(__dirname, ".env"));
-
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const configuredProcessRole = String(process.env.PROCESS_ROLE || PROCESS_ROLES.COMBINED).trim().toLowerCase();
 const PROCESS_ROLE = normalizeProcessRole(configuredProcessRole);
 if (configuredProcessRole && configuredProcessRole !== PROCESS_ROLE) console.warn(`PROCESS_ROLE inválido (${configuredProcessRole}); usando ${PROCESS_ROLE}.`);
 const PROCESS_CAPABILITIES = getProcessRoleCapabilities(PROCESS_ROLE);
 const TRUST_PROXY_ENABLED = process.env.TRUST_PROXY === "1";
-
 function readBoundedEnvironmentInteger(name, fallback, min, max) {
   const rawValue = process.env[name];
   const parsedValue = parseSecurityBoundedInteger(rawValue, fallback, min, max);
@@ -236,7 +231,6 @@ function readBoundedEnvironmentInteger(name, fallback, min, max) {
   }
   return parsedValue;
 }
-
 const PORT = readBoundedEnvironmentInteger("SERVER_PORT", Number(process.env.PORT || 3001), 1, 65535);
 const SESSION_TTL_HOURS = readBoundedEnvironmentInteger("SESSION_TTL_HOURS", 12, 1, 168);
 const SESSION_COOKIE_NAME = String(process.env.SESSION_COOKIE_NAME || "crm_casa_ads_session").trim() || "crm_casa_ads_session";
@@ -258,11 +252,15 @@ const EXPORT_PAGE_SIZE = readBoundedEnvironmentInteger("EXPORT_PAGE_SIZE", 5000,
 const MAX_LEADS_PAGE_LIMIT = readBoundedEnvironmentInteger("MAX_LEADS_PAGE_LIMIT", 1000, 1, 1000);
 const DEFAULT_LEADS_PAGE_LIMIT = readBoundedEnvironmentInteger("DEFAULT_LEADS_PAGE_LIMIT", 150, 1, MAX_LEADS_PAGE_LIMIT);
 const MAX_LEADS_OFFSET = readBoundedEnvironmentInteger("MAX_LEADS_OFFSET", 10000, 1000, 100000);
-const LEAD_SUMMARY_CACHE_MS = readBoundedEnvironmentInteger("LEAD_SUMMARY_CACHE_MS", 15000, 1000, 300000);
+const LEAD_SUMMARY_CACHE_MS = readBoundedEnvironmentInteger("LEAD_SUMMARY_CACHE_MS", 30000, 1000, 300000);
+const LEAD_SUMMARY_STALE_MS = readBoundedEnvironmentInteger("LEAD_SUMMARY_STALE_MS", 300000, 10000, 1800000);
 const METADATA_CACHE_MS = readBoundedEnvironmentInteger("METADATA_CACHE_MS", 30000, 1000, 300000);
 const FILTER_OPTIONS_CACHE_MS = readBoundedEnvironmentInteger("FILTER_OPTIONS_CACHE_MS", 15000, 1000, 120000);
 const COMMERCIAL_PROFILE_READINESS_CHECK_MS = readBoundedEnvironmentInteger("COMMERCIAL_PROFILE_READINESS_CHECK_MS", 30000, 5000, 300000);
 const DATETIME_COLUMNS_READINESS_CHECK_MS = readBoundedEnvironmentInteger("DATETIME_COLUMNS_READINESS_CHECK_MS", 30000, 5000, 300000);
+const CONSULTANT_INTERACTIVE_SQL_TIMEOUT_MS = readBoundedEnvironmentInteger("CONSULTANT_INTERACTIVE_SQL_TIMEOUT_MS", 4000, 1000, 15000);
+const INTERACTIVE_SQL_TIMEOUT_MS = readBoundedEnvironmentInteger("INTERACTIVE_SQL_TIMEOUT_MS", 8000, 1000, 30000);
+const ADMIN_INTERACTIVE_SQL_TIMEOUT_MS = readBoundedEnvironmentInteger("ADMIN_INTERACTIVE_SQL_TIMEOUT_MS", 10000, 1000, 60000);
 const SEARCH_INDEX_REBUILD_BATCH_SIZE = readBoundedEnvironmentInteger("SEARCH_INDEX_REBUILD_BATCH_SIZE", 750, 50, 5000);
 const IMPORT_DB_BATCH_SIZE = readBoundedEnvironmentInteger("IMPORT_DB_BATCH_SIZE", 500, 100, 1000);
 const SEARCH_INDEX_REBUILD_ON_START = process.env.SEARCH_INDEX_REBUILD_ON_START === "1";
@@ -279,16 +277,21 @@ const JOB_POLL_INTERVAL_MS = readBoundedEnvironmentInteger("JOB_POLL_INTERVAL_MS
 const JOB_HEARTBEAT_INTERVAL_MS = readBoundedEnvironmentInteger("JOB_HEARTBEAT_INTERVAL_MS", 10000, 1000, 60000);
 const JOB_STALE_AFTER_MS = readBoundedEnvironmentInteger("JOB_STALE_AFTER_MS", 120000, 30000, 3600000);
 const JOB_CLEANUP_INTERVAL_MS = readBoundedEnvironmentInteger("JOB_CLEANUP_INTERVAL_MS", 15 * 60 * 1000, 60000, 24 * 60 * 60 * 1000);
+const OPERATIONAL_SETTINGS = resolveOperationalSettings(process.env);
 const MYSQL_POOL_CONNECTION_LIMIT = PROCESS_ROLE === PROCESS_ROLES.API
   ? readBoundedEnvironmentInteger("MYSQL_API_CONNECTION_LIMIT", 8, 1, 100)
   : PROCESS_ROLE === PROCESS_ROLES.WORKER
     ? readBoundedEnvironmentInteger("MYSQL_WORKER_CONNECTION_LIMIT", 2, 1, 50)
     : readBoundedEnvironmentInteger("MYSQL_CONNECTION_LIMIT", 10, 1, 100);
+const MYSQL_POOL_QUEUE_LIMIT = PROCESS_ROLE === PROCESS_ROLES.API
+  ? readBoundedEnvironmentInteger("MYSQL_API_QUEUE_LIMIT", 32, 4, 500)
+  : PROCESS_ROLE === PROCESS_ROLES.WORKER
+    ? readBoundedEnvironmentInteger("MYSQL_WORKER_QUEUE_LIMIT", 8, 2, 100)
+    : readBoundedEnvironmentInteger("MYSQL_QUEUE_LIMIT", 40, 4, 500);
 const GRACEFUL_SHUTDOWN_TIMEOUT_MS = readBoundedEnvironmentInteger("GRACEFUL_SHUTDOWN_TIMEOUT_MS", 30000, 5000, 120000);
 const HTTP_REQUEST_TIMEOUT_MS = readBoundedEnvironmentInteger("HTTP_REQUEST_TIMEOUT_MS", 120000, 10000, 600000);
 const HTTP_HEADERS_TIMEOUT_MS = readBoundedEnvironmentInteger("HTTP_HEADERS_TIMEOUT_MS", 65000, 5000, 120000);
 const HTTP_KEEP_ALIVE_TIMEOUT_MS = readBoundedEnvironmentInteger("HTTP_KEEP_ALIVE_TIMEOUT_MS", 5000, 1000, 30000);
-
 const MYSQL_HOST = process.env.MYSQL_HOST || "127.0.0.1";
 const MYSQL_PORT = Number(process.env.MYSQL_PORT || 3306);
 const MYSQL_USER = process.env.MYSQL_USER || "root";
@@ -305,9 +308,7 @@ const mysqlBackupDatabase = {
   database: MYSQL_DATABASE,
 };
 const schemaFile = path.join(__dirname, "schema.mysql.sql");
-
 const roleLabels = ROLE_LABELS;
-
 const DEFAULT_KANBAN_STAGES = [
   { name: "Novo lead", color: "#2563EB", stageType: "open", statusKey: "Novo lead" },
   { name: "Contato feito", color: "#0EA5E9", stageType: "open", statusKey: "Contato feito" },
@@ -329,7 +330,6 @@ const OPEN_KANBAN_STATUS_KEYS = new Set([
   "Proposta enviada",
   "Em negociação",
 ]);
-
 let pool;
 let httpServer = null;
 let jobWorker = null;
@@ -337,6 +337,7 @@ let securityCleanupTimer = null;
 let jobCleanupTimer = null;
 let commercialProfileReadinessTimer = null;
 let datetimeColumnsReadinessTimer = null;
+let operationalRuntime = null;
 let databaseReady = false;
 let isShuttingDown = false;
 let activeRequestCount = 0;
@@ -352,11 +353,9 @@ const EXPECTED_SHUTDOWN_ERROR_CODES = new Set([
   "PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR",
   "SERVER_SHUTTING_DOWN",
 ]);
-
 function isExpectedShutdownError(error) {
   return Boolean(isShuttingDown && EXPECTED_SHUTDOWN_ERROR_CODES.has(String(error?.code || error?.name || "")));
 }
-
 function createDatabaseUnavailableError() {
   const error = new Error(isShuttingDown
     ? "Servidor em encerramento gracioso. Tente novamente em instantes."
@@ -365,18 +364,17 @@ function createDatabaseUnavailableError() {
   error.code = isShuttingDown ? "SERVER_SHUTTING_DOWN" : "MYSQL_POOL_UNAVAILABLE";
   return error;
 }
-
 function requireDatabaseClient(client) {
   if (client) return client;
   throw createDatabaseUnavailableError();
 }
-
-const leadDashboardSummaryCache = createTtlCache({ ttlMs: LEAD_SUMMARY_CACHE_MS, maxEntries: 100 });
+const leadDashboardSummaryCache = createTtlCache({ ttlMs: LEAD_SUMMARY_CACHE_MS, staleTtlMs: LEAD_SUMMARY_STALE_MS, maxEntries: 100 });
 const metadataCache = createTtlCache({ ttlMs: METADATA_CACHE_MS, maxEntries: 250 });
 const filterOptionsCache = createTtlCache({ ttlMs: FILTER_OPTIONS_CACHE_MS, maxEntries: 100 });
 let leadSearchFullTextEnabled = false;
 let defaultKanbanCache = null;
 const performanceMonitor = createPerformanceMonitor();
+const runHeavyJobSerially = createHeavyJobSerialExecutor();
 const commercialProfileRuntime = createCommercialProfileRuntime({
   queryFirst: (sql, params, client) => statementFirstRow(sql, params, client),
   execute: (sql, params, client) => execute(sql, params, client),
@@ -385,28 +383,22 @@ const commercialProfileRuntime = createCommercialProfileRuntime({
 const dateColumnRuntime = createDateColumnRuntime({ queryFirst: (sql, params, client) => statementFirstRow(sql, params, client) });
 function loadEnvFile(filePath) {
   if (!existsSync(filePath)) return;
-
   const content = readFileSync(filePath, "utf8");
   content.split(/\r?\n/).forEach((line) => {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) return;
-
     const separatorIndex = trimmed.indexOf("=");
     if (separatorIndex === -1) return;
-
     const key = trimmed.slice(0, separatorIndex).trim();
     const rawValue = trimmed.slice(separatorIndex + 1).trim();
     const value = rawValue.replace(/^[']|[']$/g, "").replace(/^[\"]|[\"]$/g, "");
-
     if (!process.env[key]) process.env[key] = value;
   });
 }
-
 function sanitizeIdentifier(value) {
   const safe = String(value || "").replace(/[^a-zA-Z0-9_]/g, "");
   return safe || "crm_casa_ads";
 }
-
 async function initializeDatabase({ manageSchema = true } = {}) {
   databaseReady = false;
   const retryOptions = {
@@ -422,7 +414,6 @@ async function initializeDatabase({ manageSchema = true } = {}) {
       });
     },
   };
-
   if (manageSchema) {
     const bootstrapPool = mysql.createPool(buildMysqlPoolOptions({
       host: MYSQL_HOST,
@@ -433,7 +424,6 @@ async function initializeDatabase({ manageSchema = true } = {}) {
       connectTimeout: MYSQL_CONNECT_TIMEOUT_MS,
       multipleStatements: true,
     }));
-
     try {
       await withMysqlRetry(
         () => bootstrapPool.query(`CREATE DATABASE IF NOT EXISTS \`${MYSQL_DATABASE}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`),
@@ -443,7 +433,6 @@ async function initializeDatabase({ manageSchema = true } = {}) {
       await bootstrapPool.end().catch(() => undefined);
     }
   }
-
   pool = mysql.createPool(buildMysqlPoolOptions({
     host: MYSQL_HOST,
     port: MYSQL_PORT,
@@ -451,10 +440,10 @@ async function initializeDatabase({ manageSchema = true } = {}) {
     password: MYSQL_PASSWORD,
     database: MYSQL_DATABASE,
     connectionLimit: MYSQL_POOL_CONNECTION_LIMIT,
+    queueLimit: MYSQL_POOL_QUEUE_LIMIT,
     connectTimeout: MYSQL_CONNECT_TIMEOUT_MS,
     multipleStatements: true,
   }));
-
   try {
     await withMysqlRetry(() => pool.query("SELECT 1 AS ready"), retryOptions);
     await Promise.all([
@@ -483,7 +472,6 @@ async function initializeDatabase({ manageSchema = true } = {}) {
     throw error;
   }
 }
-
 async function getTableColumns(tableName) {
   const rows = await queryRows(
     `SELECT COLUMN_NAME AS column_name FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`,
@@ -491,14 +479,12 @@ async function getTableColumns(tableName) {
   );
   return new Set(rows.map((row) => row.column_name));
 }
-
 async function addColumnIfMissing(tableName, columnName, definition) {
   const columns = await getTableColumns(tableName);
   if (!columns.has(columnName)) {
     await pool.query(`ALTER TABLE \`${tableName}\` ADD COLUMN ${columnName} ${definition}`);
   }
 }
-
 async function getTableIndexes(tableName) {
   const rows = await queryRows(
     `SELECT INDEX_NAME AS index_name FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`,
@@ -506,14 +492,12 @@ async function getTableIndexes(tableName) {
   );
   return new Set(rows.map((row) => row.index_name));
 }
-
 async function addIndexIfMissing(tableName, indexName, definition) {
   const indexes = await getTableIndexes(tableName);
   if (!indexes.has(indexName)) {
     await pool.query(`ALTER TABLE \`${tableName}\` ADD ${definition}`);
   }
 }
-
 async function runVersionedMigration(version, description, operation) {
   const applied = await statementFirstRow("SELECT version FROM schema_migrations WHERE version = ? LIMIT 1", [version]);
   if (applied) return false;
@@ -524,32 +508,18 @@ async function runVersionedMigration(version, description, operation) {
   );
   return true;
 }
-
 async function backfillLeadResponsibleUserIds(client = pool) {
-  const users = await queryRows("SELECT id, name, email FROM users", [], client);
-  const identityOwners = new Map();
-
-  users.forEach((user) => {
-    [user.name, user.email].forEach((identity) => {
-      const key = String(identity || "").trim().toLowerCase();
-      if (!key) return;
-      const current = identityOwners.get(key) || new Set();
-      current.add(user.id);
-      identityOwners.set(key, current);
-    });
-  });
-
-  for (const [identity, userIds] of identityOwners.entries()) {
-    if (userIds.size !== 1) continue;
-    const [userId] = userIds;
-    await execute(
-      "UPDATE leads SET responsible_user_id = ? WHERE responsible_user_id = '' AND LOWER(TRIM(responsible)) = ?",
-      [userId, identity],
-      client,
-    );
-  }
+  await execute(`UPDATE leads l
+    INNER JOIN (
+      SELECT identity_key, MIN(user_id) AS user_id FROM (
+        SELECT id AS user_id, LOWER(TRIM(name)) AS identity_key FROM users WHERE TRIM(COALESCE(name, '')) != ''
+        UNION ALL
+        SELECT id AS user_id, LOWER(TRIM(email)) AS identity_key FROM users WHERE TRIM(COALESCE(email, '')) != ''
+      ) identities GROUP BY identity_key HAVING COUNT(DISTINCT user_id) = 1
+    ) resolved ON resolved.identity_key = LOWER(TRIM(l.responsible))
+    SET l.responsible_user_id = resolved.user_id
+    WHERE l.responsible_user_id = '' AND TRIM(COALESCE(l.responsible, '')) != ''`, [], client);
 }
-
 async function runSchemaMigrations() {
   await addColumnIfMissing("leads", "email_key", "VARCHAR(255) NOT NULL DEFAULT '' AFTER email");
   await addColumnIfMissing("leads", "phone_key", "VARCHAR(80) NOT NULL DEFAULT '' AFTER phone");
@@ -564,7 +534,6 @@ async function runSchemaMigrations() {
   await addColumnIfMissing("leads", "pipeline_stage_id", "VARCHAR(64) NOT NULL DEFAULT ''");
   await addColumnIfMissing("leads", "kanban_position", "DECIMAL(30,10) NOT NULL DEFAULT 0");
   await addColumnIfMissing("leads", "pipeline_entered_at", "VARCHAR(40) NOT NULL DEFAULT ''");
-
   await pool.query("UPDATE leads SET email_key = LOWER(TRIM(email)) WHERE email_key = '' AND email != ''");
   await pool.query("UPDATE leads SET phone_key = REGEXP_REPLACE(phone, '[^0-9]', '') WHERE phone_key = '' AND phone != ''").catch(() => undefined);
   await addIndexIfMissing("leads", "idx_leads_search_email", "INDEX idx_leads_search_email (deleted_at, email_key)").catch(() => undefined);
@@ -613,16 +582,25 @@ async function runSchemaMigrations() {
     asyncJobsMigrationDescription,
     () => runAsyncJobsMigration({ execute }),
   );
-
   await runVersionedMigration(
     commercialProfileMigrationVersion,
     commercialProfileMigrationDescription,
     () => runCommercialProfileMigration({ addColumnIfMissing, addIndexIfMissing }),
   );
-
   await runVersionedMigration(datetimeColumnsMigrationVersion, datetimeColumnsMigrationDescription,
     () => runDatetimeColumnsMigration({ addColumnIfMissing, addIndexIfMissing, execute }));
-
+  await runVersionedMigration(datetimeBridgeFixMigrationVersion, datetimeBridgeFixMigrationDescription,
+    () => runDatetimeBridgeFixMigration({ execute }));
+  await runVersionedMigration(consultantPortfolioPerformanceMigrationVersion, consultantPortfolioPerformanceMigrationDescription,
+    () => runConsultantPortfolioPerformanceMigration({ addIndexIfMissing, backfillLeadResponsibleUserIds }));
+  await runVersionedMigration(antiFallPhase1MigrationVersion, antiFallPhase1MigrationDescription,
+    () => runAntiFallPhase1Migration({ addIndexIfMissing, execute }));
+  await runVersionedMigration(scalabilityPhase2MigrationVersion, scalabilityPhase2MigrationDescription,
+    () => runScalabilityPhase2Migration({ addIndexIfMissing }));
+  await runVersionedMigration(integrityConcurrencyPhase3MigrationVersion, integrityConcurrencyPhase3MigrationDescription,
+    () => runIntegrityConcurrencyPhase3Migration({ execute, addIndexIfMissing }));
+  await runVersionedMigration(observabilityMaintenancePhase4MigrationVersion, observabilityMaintenancePhase4MigrationDescription,
+    () => runObservabilityMaintenancePhase4Migration({ execute, addIndexIfMissing }));
   try {
     await addIndexIfMissing("leads", "ft_leads_search_text", "FULLTEXT INDEX ft_leads_search_text (search_text)");
     leadSearchFullTextEnabled = true;
@@ -630,33 +608,27 @@ async function runSchemaMigrations() {
     leadSearchFullTextEnabled = false;
   }
 }
-
 async function seedDefaultAdminUser() {
   const existingUserCount = Number(await scalar("SELECT COUNT(*) AS total FROM users") || 0);
   if (existingUserCount > 0) return;
-
   const bootstrapAdmin = validateBootstrapAdminConfig({
     email: process.env.CRM_ADMIN_EMAIL,
     password: process.env.CRM_ADMIN_PASSWORD,
     name: process.env.CRM_ADMIN_NAME,
   });
-
   if (!bootstrapAdmin.valid) {
     const error = new Error(`Nenhum usuário existe no banco. Corrija as variáveis do administrador inicial: ${bootstrapAdmin.errors.join(" ")}`);
     error.code = "INSECURE_BOOTSTRAP_ADMIN";
     throw error;
   }
-
   const { email, password, name } = bootstrapAdmin.value;
   const at = nowIso();
-
   await execute(
     `INSERT INTO users (id, name, email, role, password_hash, is_active, created_at, updated_at, last_login_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, '')`,
     [randomUUID(), name, email, "admin", hashPassword(password), 1, at, at],
   );
 }
-
 async function seedDefaultKanban() {
   let pipeline = await statementFirstRow(
     "SELECT * FROM kanban_pipelines WHERE is_default = 1 AND is_archived = 0 ORDER BY position ASC LIMIT 1",
@@ -735,27 +707,53 @@ async function seedDefaultKanban() {
 
 async function withTransaction(operation) {
   const activePool = requireDatabaseClient(pool);
-  return withMysqlTransactionRetry(activePool, (client, transactionContext) => operation(client, transactionContext), {
-    maxAttempts: MYSQL_TRANSACTION_RETRY_ATTEMPTS, baseDelayMs: MYSQL_RETRY_BASE_DELAY_MS, maxDelayMs: MYSQL_RETRY_MAX_DELAY_MS,
-    signal: shutdownController.signal,
-    onRetry: ({ nextAttempt, delayMs, error }) => {
-      if (!isShuttingDown) console.warn("Transação MySQL refeita após falha transitória segura.", { nextAttempt, delayMs, code: error?.code || "MYSQL_TRANSACTION_RETRY" });
-    },
-  });
+  try {
+    return await withMysqlTransactionRetry(activePool, (client, transactionContext) => operation(client, transactionContext), {
+      maxAttempts: MYSQL_TRANSACTION_RETRY_ATTEMPTS, baseDelayMs: MYSQL_RETRY_BASE_DELAY_MS, maxDelayMs: MYSQL_RETRY_MAX_DELAY_MS,
+      signal: shutdownController.signal,
+      onRetry: ({ nextAttempt, delayMs, error }) => {
+        if (!isShuttingDown) console.warn("Transação MySQL refeita após falha transitória segura.", { nextAttempt, delayMs, code: error?.code || "MYSQL_TRANSACTION_RETRY" });
+      },
+    });
+  } catch (error) {
+    if (isMysqlPoolQueueLimitError(error)) markMysqlCapacityError(error);
+    throw error;
+  }
 }
 
 async function execute(sql, params = [], client = null) {
   const activeClient = requireDatabaseClient(client || pool);
-  const [result] = await performanceMonitor.measureSql(sql, () => activeClient.execute(sql, params));
-  return result;
+  try {
+    const [result] = await performanceMonitor.measureSql(sql, () => activeClient.execute(sql, params));
+    return result;
+  } catch (error) {
+    if (isMysqlPoolQueueLimitError(error)) markMysqlCapacityError(error);
+    throw error;
+  }
 }
 
 async function queryRows(sql, params = [], client = null) {
   const usingPool = !client || client === pool;
   const activeClient = requireDatabaseClient(client || pool);
+  const context = performanceMonitor.currentRequest?.();
+  const interactiveTimeoutMs = resolveInteractiveSqlTimeout(context, {
+    defaultMs: INTERACTIVE_SQL_TIMEOUT_MS,
+    adminMs: ADMIN_INTERACTIVE_SQL_TIMEOUT_MS,
+  });
+  const guardedSql = withMaxExecutionTimeHint(sql, interactiveTimeoutMs);
   const run = async () => {
-    const [rows] = await performanceMonitor.measureSql(sql, () => activeClient.execute(sql, params));
-    return Array.isArray(rows) ? rows : [];
+    try {
+      const [rows] = await performanceMonitor.measureSql(guardedSql, () => activeClient.execute(guardedSql, params));
+      return Array.isArray(rows) ? rows : [];
+    } catch (error) {
+      if (isMysqlStatementTimeout(error) && error && typeof error === "object") {
+        error.statusCode = 503;
+        error.publicMessage = "A consulta excedeu o limite operacional e foi interrompida para proteger o CRM. Tente novamente.";
+      } else if (isMysqlPoolQueueLimitError(error)) {
+        markMysqlCapacityError(error);
+      }
+      throw error;
+    }
   };
 
   if (!usingPool) return run();
@@ -950,14 +948,16 @@ async function getLeadDashboardSummary(query = {}, client = pool) {
   const where = query.where || "1 = 1";
   const params = query.params || [];
   const alias = query.alias || "";
+  const maxExecutionMs = Number(query.maxExecutionMs || 0);
+  const summarySql = buildLeadDashboardSummarySql({
+    where,
+    activeWhere: isActiveWhere(alias),
+    alias,
+    useMaterialized: commercialProfileRuntime.isReady(),
+    useDateColumns: dateColumnRuntime.isReady(),
+  });
   const row = await statementFirstRow(
-    buildLeadDashboardSummarySql({
-      where,
-      activeWhere: isActiveWhere(alias),
-      alias,
-      useMaterialized: commercialProfileRuntime.isReady(),
-      useDateColumns: dateColumnRuntime.isReady(),
-    }),
+    withMaxExecutionTimeHint(summarySql, maxExecutionMs),
     params,
     client,
   );
@@ -975,15 +975,25 @@ function leadDashboardCacheKey(accessContextOrUser) {
 }
 
 function invalidateLeadSummaryCache(accessContext = null) {
-  leadDashboardSummaryCache.deleteKey("all");
-  if (accessContext) leadDashboardSummaryCache.deleteKey(leadDashboardCacheKey(accessContext));
+  // Fase 2: mantém o último snapshot disponível e apenas o marca como stale.
+  // O próximo leitor recebe resposta imediata enquanto uma única recarga ocorre em background.
+  leadDashboardSummaryCache.markStale("all");
+  if (accessContext) leadDashboardSummaryCache.markStale(leadDashboardCacheKey(accessContext));
   filterOptionsCache.deleteKey(accessContext ? `owners:${leadDashboardCacheKey(accessContext)}` : "owners:all");
 }
 
 async function getLeadDashboardSummaryCached(options = {}) {
   const { force = false, accessContext, client = pool } = options;
-  const query = accessContext ? { where: accessContext.accessSql.clause, params: accessContext.accessSql.params } : {};
-  return leadDashboardSummaryCache.getOrLoad(leadDashboardCacheKey(accessContext), () => getLeadDashboardSummary(query, client), { force });
+  const query = accessContext ? {
+    where: accessContext.accessSql.clause,
+    params: accessContext.accessSql.params,
+    maxExecutionMs: accessContext.scope?.scope === "own" ? CONSULTANT_INTERACTIVE_SQL_TIMEOUT_MS : 0,
+  } : {};
+  return leadDashboardSummaryCache.getOrLoad(
+    leadDashboardCacheKey(accessContext),
+    () => getLeadDashboardSummary(query, client),
+    { force, staleWhileRevalidate: true },
+  );
 }
 
 async function getLeadSummaryCached(options = {}) {
@@ -1070,9 +1080,11 @@ async function getDuplicateGroupsPage(accessContext, options = {}, client = pool
   };
 }
 
-async function resolveLeadSearchClause({ search, baseWhere, baseParams, alias = "", client = pool }) {
+async function resolveLeadSearchClause({ search, baseWhere, baseParams, alias = "", client = pool, preferredMode = "" }) {
   const plan = buildLeadSearchPlan(search, { alias, fullTextEnabled: leadSearchFullTextEnabled });
   if (!plan || plan.mode === "none") return null;
+  if (preferredMode === LEAD_SEARCH_MODES.FALLBACK && plan.fallback) return plan.fallback;
+  if (plan.primary?.mode === preferredMode) return plan.primary;
   if (!plan.primary || !plan.requiresProbe) return chooseLeadSearchPlan(plan, false);
 
   const tableAlias = String(alias || "").replace(/[^a-zA-Z0-9_]/g, "");
@@ -1136,6 +1148,7 @@ async function buildLeadsPageQuery(params = {}, accessContext = null, alias = ""
     baseParams,
     alias,
     client,
+    preferredMode: params.preferredSearchMode || "",
   });
   if (searchClause?.clause) {
     whereParts.push(searchClause.clause);
@@ -1147,22 +1160,6 @@ async function buildLeadsPageQuery(params = {}, accessContext = null, alias = ""
     params: sqlParams,
     searchMode: searchClause?.mode || "none",
   };
-}
-
-function encodeLeadCursor(payload) {
-  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-}
-
-function decodeLeadCursor(value) {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(Buffer.from(String(value), "base64url").toString("utf8"));
-    return parsed && parsed.v === 1 && parsed.id ? parsed : null;
-  } catch {
-    const error = new Error("Cursor de paginação inválido.");
-    error.statusCode = 400;
-    throw error;
-  }
 }
 
 async function getLeadsPageFromRequest(requestUrl, currentUser) {
@@ -1182,7 +1179,16 @@ async function getLeadsPageFromRequest(requestUrl, currentUser) {
     responsible: searchParams.get("responsible") || "",
     quickFilter: searchParams.get("quickFilter") || "",
   };
-  const { where, params } = await buildLeadsPageQuery(filters, accessContext);
+  const filterKey = leadCursorFilterKey(filters);
+  if (cursor?.filterKey && cursor.filterKey !== filterKey) {
+    const error = new Error("O cursor não corresponde aos filtros atuais.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const { where, params, searchMode } = await buildLeadsPageQuery({
+    ...filters,
+    preferredSearchMode: cursor?.searchMode || "",
+  }, accessContext);
   const hasActiveFilters = Object.values(filters).some(Boolean);
   const needsDashboardSummary = includeSummary || includeOpportunitySummary;
   let scopedDashboardSummary = null;
@@ -1191,13 +1197,18 @@ async function getLeadsPageFromRequest(requestUrl, currentUser) {
   if (needsDashboardSummary) {
     scopedDashboardSummary = await getLeadDashboardSummaryCached({ accessContext });
     filteredDashboardSummary = hasActiveFilters
-      ? await getLeadDashboardSummary({ where, params })
+      ? await getLeadDashboardSummary({
+          where,
+          params,
+          maxExecutionMs: accessContext.scope?.scope === "own" ? CONSULTANT_INTERACTIVE_SQL_TIMEOUT_MS : 0,
+        })
       : scopedDashboardSummary;
   }
 
+  const cursorTotal = Number.isInteger(cursor?.total) && cursor.total >= 0 ? cursor.total : null;
   const total = filteredDashboardSummary
     ? Number(filteredDashboardSummary.summary.total || 0)
-    : Number(await scalar(`SELECT COUNT(*) AS total FROM leads WHERE ${where}`, params) || 0);
+    : cursorTotal ?? Number(await scalar(`SELECT COUNT(*) AS total FROM leads WHERE ${where}`, params) || 0);
   const pageWhere = [where];
   const pageParams = [...params];
   const orderExpression = sort.column;
@@ -1215,8 +1226,9 @@ async function getLeadsPageFromRequest(requestUrl, currentUser) {
 
   const paginationSql = cursor ? "LIMIT ?" : "LIMIT ? OFFSET ?";
   const paginationParams = cursor ? [limit] : [limit, offset];
+  const leadListSql = `SELECT ${leadProjection} FROM leads WHERE ${pageWhere.join(" AND ")} ORDER BY ${orderExpression} ${sort.direction}, id ${sort.direction} ${paginationSql}`;
   const rows = await queryRows(
-    `SELECT ${leadProjection} FROM leads WHERE ${pageWhere.join(" AND ")} ORDER BY ${orderExpression} ${sort.direction}, id ${sort.direction} ${paginationSql}`,
+    withMaxExecutionTimeHint(leadListSql, accessContext.scope?.scope === "own" ? CONSULTANT_INTERACTIVE_SQL_TIMEOUT_MS : 0),
     [...pageParams, ...paginationParams],
   );
   const lastRow = rows.at(-1);
@@ -1227,6 +1239,9 @@ async function getLeadsPageFromRequest(requestUrl, currentUser) {
         sortDirection: sort.direction,
         value: String(lastRow[sort.column] || ""),
         id: String(lastRow.id),
+        total,
+        filterKey,
+        searchMode,
       })
     : "";
   const hasMore = cursor ? Boolean(nextCursor) : offset + rows.length < total;
@@ -1625,15 +1640,12 @@ function getStageStatusUpdate(stage, currentStatus = "Novo lead") {
   return { status: currentStatus || "Novo lead", isLost: 0 };
 }
 
+const kanbanWriteService = createKanbanWriteService({
+  queryRows, execute, scalar, getLeadAccessContext, getKanbanStageById, getStageStatusUpdate, recordAudit, nowIso,
+});
+
 async function rebalanceKanbanStagePositions(stageId, client = pool) {
-  const rows = await queryRows(
-    "SELECT id FROM leads WHERE pipeline_stage_id = ? AND deleted_at = '' ORDER BY kanban_position ASC, updated_at DESC, created_at DESC",
-    [stageId],
-    client,
-  );
-  for (let index = 0; index < rows.length; index += 1) {
-    await execute("UPDATE leads SET kanban_position = ? WHERE id = ?", [(index + 1) * 1000, rows[index].id], client);
-  }
+  return kanbanWriteService.rebalanceStagePositions(stageId, client);
 }
 
 async function calculateKanbanPosition({ leadId, stageId, beforeLeadId, afterLeadId }, client = pool, canRebalance = true) {
@@ -2500,7 +2512,7 @@ async function getTaskById(taskId, client = pool) {
 async function assertTaskAccess(user, taskId, client = pool) {
   const accessSql = buildTaskAccessSql(user, "t");
   const row = await statementFirstRow(
-    `SELECT t.id FROM tasks t WHERE t.id = ? AND ${accessSql.clause} LIMIT 1`,
+    `SELECT t.id FROM tasks t WHERE t.id = ? AND ${accessSql.clause} LIMIT 1 FOR UPDATE`,
     [taskId, ...accessSql.params],
     client,
   );
@@ -2592,7 +2604,7 @@ async function cancelPendingTasksForLead(leadId, reason, actor, client = pool, o
       changes: { reason: normalizedReason, affectedRows },
     }, client);
   }
-  await refreshLeadNextContactFromTasks(normalizedLeadId, client);
+  if (!options.deferLeadRefresh) await refreshLeadNextContactFromTasks(normalizedLeadId, client);
   return affectedRows;
 }
 
@@ -2732,46 +2744,41 @@ async function mergeLeadRelations(primaryLead, duplicateLead, actor, client = po
 async function createTaskRecord(payload, currentUser, client = pool, options = {}) {
   const validated = assertTaskPayload(payload);
   const leadId = String(payload.leadId || payload.lead_id || "").trim();
-  let lead = null;
-  if (leadId) {
+  let lead = options.leadSnapshot || null;
+  if (leadId && !options.leadAccessValidated) {
     await assertLeadAccess(currentUser, leadId, { forUpdate: true }, client);
+    lead = lead || await getLeadById(leadId, {}, client);
+  } else if (leadId && !lead) {
     lead = await getLeadById(leadId, {}, client);
-  } else if (!canManageAllTasks(currentUser)) {
+  } else if (!leadId && !canManageAllTasks(currentUser)) {
     const error = new Error("Consultores devem relacionar a tarefa a um lead da própria carteira.");
     error.statusCode = 400;
     throw error;
   }
 
-  const responsible = await resolveTaskResponsible(currentUser, payload.responsibleUserId, lead, client);
+  const responsible = options.resolvedResponsible
+    || await resolveTaskResponsible(currentUser, payload.responsibleUserId, lead, client);
   const id = options.id || randomUUID();
   const at = nowIso();
   const sourceKey = options.sourceKey || null;
-  await execute(
-    `INSERT INTO tasks (
-      id, type, title, description, responsible_user_id, responsible_name,
-      created_by, created_by_name, lead_id, due_at, priority, status,
-      recurrence, source, source_key, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
-    [
-      id,
-      validated.type,
-      validated.title,
-      validated.description,
-      responsible.id,
-      responsible.name || responsible.email,
-      currentUser.id,
-      currentUser.name || currentUser.email,
-      leadId,
-      validated.dueAt,
-      validated.priority,
-      String(payload.recurrence || "").slice(0, 80),
-      options.source || "manual",
-      sourceKey,
-      at,
-      at,
-    ],
-    client,
-  );
+  if (sourceKey) {
+    const existing = await statementFirstRow("SELECT id FROM tasks WHERE source_key = ? LIMIT 1 FOR UPDATE", [sourceKey], client);
+    if (existing) return getTaskById(existing.id, client);
+  }
+  try {
+    await execute(
+      `INSERT INTO tasks (
+        id, type, title, description, responsible_user_id, responsible_name,
+        created_by, created_by_name, lead_id, due_at, priority, status,
+        recurrence, source, source_key, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
+      [id, validated.type, validated.title, validated.description, responsible.id, responsible.name || responsible.email, currentUser.id, currentUser.name || currentUser.email, leadId, validated.dueAt, validated.priority, String(payload.recurrence || "").slice(0, 80), options.source || "manual", sourceKey, at, at], client);
+  } catch (error) {
+    if (!sourceKey || error?.code !== "ER_DUP_ENTRY") throw error;
+    const existing = await statementFirstRow("SELECT id FROM tasks WHERE source_key = ? LIMIT 1", [sourceKey], client);
+    if (existing) return getTaskById(existing.id, client);
+    throw error;
+  }
 
   await recordAudit({
     entityType: "task",
@@ -2790,7 +2797,7 @@ async function createTaskRecord(payload, currentUser, client = pool, options = {
       summary: `Criou tarefa: ${validated.title}`,
       changes: { taskId: id, dueAt: validated.dueAt },
     }, client);
-    await refreshLeadNextContactFromTasks(leadId, client);
+    if (!options.deferLeadRefresh) await refreshLeadNextContactFromTasks(leadId, client);
   }
   return getTaskById(id, client);
 }
@@ -2886,36 +2893,22 @@ async function getTodayDashboard(currentUser, client = pool) {
     client,
   );
 
-  const taskLists = {};
-  for (const bucket of ["overdue", "today", "upcoming"]) {
-    const where = getTaskBucketWhere(bucket, "t", { useDateColumns });
-    const rows = await queryRows(
-      `SELECT t.*, l.name AS lead_name, l.company AS lead_company, l.phone AS lead_phone
-       FROM tasks t
-       LEFT JOIN leads l ON l.id = t.lead_id
-       WHERE ${taskAccess.clause} AND ${where}
-       ORDER BY CASE t.priority WHEN 'urgente' THEN 1 WHEN 'alta' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END,
-                ${temporalSql.taskDueColumn} ASC
-       LIMIT 12`,
-      taskAccess.params,
-      client,
-    );
-    taskLists[bucket] = rows.map(rowToTask);
-  }
+  const taskRows = await queryRows(temporalSql.buildTaskListsSql(taskAccess.clause), taskAccess.params, client);
+  const taskLists = { overdue: [], today: [], upcoming: [] };
+  taskRows.forEach((row) => {
+    if (taskLists[row.__bucket]) taskLists[row.__bucket].push(rowToTask(row));
+  });
 
-  const leadAccess = buildLeadAccessSql(accessContext.user, accessContext.teamMembers, "l");
-  const operationalRow = await statementFirstRow(
-    temporalSql.buildOperationalSql(leadAccess.clause),
-    leadAccess.params,
-    client,
-  );
+  // Fase 2: a Tela Hoje reaproveita o mesmo snapshot consolidado do dashboard.
+  // Isso elimina um segundo scan completo de leads durante login/navegação.
+  const dashboardSnapshot = await getLeadDashboardSummaryCached({ accessContext, client });
 
   const role = normalizeUserRole(currentUser.role);
   const roleMetrics = {
-    awaitingFirstContact: Number(operationalRow?.awaiting_first_contact || 0),
-    withoutOwner: Number(operationalRow?.without_owner || 0),
-    withoutNextStep: Number(operationalRow?.without_next_step || 0),
-    stalled: Number(operationalRow?.stalled || 0),
+    awaitingFirstContact: Number(dashboardSnapshot.operationalMetrics?.awaitingFirstContact || 0),
+    withoutOwner: Number(dashboardSnapshot.operationalMetrics?.withoutOwner || 0),
+    withoutNextStep: Number(dashboardSnapshot.operationalMetrics?.withoutNextStep || 0),
+    stalled: Number(dashboardSnapshot.operationalMetrics?.stalled || 0),
   };
 
   let teamOverdue = [];
@@ -3051,7 +3044,11 @@ async function enforceBackupRetention() {
   return expired.length;
 }
 
-async function createManualBackup(actor) {
+async function createManualBackup(actor, operationId = "") {
+  if (operationId) {
+    const existing = await statementFirstRow("SELECT * FROM backups WHERE id = ? LIMIT 1", [operationId]);
+    if (existing) return existing;
+  }
   if (activeBackupPromise) {
     const error = new Error("Já existe um backup em execução. Aguarde a conclusão antes de iniciar outro.");
     error.statusCode = 409;
@@ -3075,7 +3072,7 @@ async function createManualBackup(actor) {
       await removeBackupArtifact({ storageRoot: backupSettings.storageRoot, storageKey: artifact.storageKey }).catch(() => undefined);
       throw error;
     });
-    const backupId = randomUUID();
+    const backupId = operationId || randomUUID();
     try {
       await execute(
         `INSERT INTO backups (
@@ -3624,7 +3621,8 @@ async function performLeadExportJob(job, format) {
       fileName,
       contentType,
     });
-    await recordAudit({
+    await recordAuditOnce({
+      id: `export:${job.id}`,
       entityType: "export",
       entityId: job.id,
       action: `export_${format}`,
@@ -3646,7 +3644,7 @@ async function performBackupJob(job) {
   const actor = await getActiveJobActor(job);
   requirePermission(actor, "backup_database");
   await updateJobProgress({ execute, jobId: job.id, lockToken: job.lockedBy, current: 0, total: 1, message: "Gerando dump MySQL criptografado" });
-  const backup = await createManualBackup(actor);
+  const backup = await createManualBackup(actor, job.id);
   await updateJobProgress({ execute, jobId: job.id, lockToken: job.lockedBy, current: 1, total: 1, message: "Backup verificado" });
   return { result: { backup: rowToBackup(backup) }, expiresAt: job.expiresAt };
 }
@@ -3700,11 +3698,11 @@ async function startPersistentJobWorker() {
   const staleBefore = new Date(Date.now() - JOB_STALE_AFTER_MS).toISOString();
   await recoverStaleJobs({ execute, staleBefore });
   const handlers = {
-    [JOB_TYPES.BACKUP]: performBackupJob,
-    [JOB_TYPES.IMPORT_LEADS]: performImportLeadsJob,
+    [JOB_TYPES.BACKUP]: (job) => runHeavyJobSerially(job, () => performBackupJob(job)),
+    [JOB_TYPES.IMPORT_LEADS]: (job) => runHeavyJobSerially(job, () => performImportLeadsJob(job)),
     [JOB_TYPES.EXPORT_LEADS_CSV]: (job) => performLeadExportJob(job, "csv"),
     [JOB_TYPES.EXPORT_LEADS_XLSX]: (job) => performLeadExportJob(job, "xlsx"),
-    [JOB_TYPES.REBUILD_SEARCH_INDEX]: performSearchIndexRebuildJob,
+    [JOB_TYPES.REBUILD_SEARCH_INDEX]: (job) => runHeavyJobSerially(job, () => performSearchIndexRebuildJob(job)),
   };
 
   jobWorker = createJobWorker({
@@ -3785,7 +3783,8 @@ async function buildReadinessReport() {
     database = false;
   }
   const roleReadiness = buildRoleReadiness({ database, localWorkerRunning: jobWorker?.isRunning, capabilities: PROCESS_CAPABILITIES });
-  return { ...roleReadiness, database, processRole: PROCESS_ROLE, activeJobs: Number(jobWorker?.activeCount || 0), latencyMs: Date.now() - startedAt };
+  const perf = performanceMonitor.getSnapshot();
+  return { ...roleReadiness, database, processRole: PROCESS_ROLE, activeJobs: Number(jobWorker?.activeCount || 0), latencyMs: Date.now() - startedAt, observability: { runtime: perf.runtime, alerts: perf.alerts.slice(0, 3) } };
 }
 
 function buildLivenessReport() {
@@ -3959,7 +3958,13 @@ async function handleApi(request, response, requestUrl) {
   if (pathname === "/api/tasks" && method === "POST") {
     requireAnyPermission(currentUser, ["manage_all_tasks", "manage_own_tasks"]);
     const body = await readRequestBody(request);
-    const task = await withTransaction((client) => createTaskRecord(body, currentUser, client));
+    const task = await withTransaction(async (client) => {
+      const receipt = await claimMutationReceipt({ execute, queryRows, client, actorId: currentUser.id, operation: "task:create", requestId: body.requestId, resourceId: body.leadId, nowIso });
+      if (receipt.replay) return receipt.response;
+      const created = await createTaskRecord(body, currentUser, client);
+      await completeMutationReceipt({ execute, client, receipt, response: created, nowIso });
+      return created;
+    });
     sendJson(response, 201, task);
     return;
   }
@@ -3973,11 +3978,16 @@ async function handleApi(request, response, requestUrl) {
 
     const result = await withTransaction(async (client) => {
       await assertTaskAccess(currentUser, taskId, client);
+      const receipt = await claimMutationReceipt({ execute, queryRows, client, actorId: currentUser.id, operation: "task:complete", requestId: body.requestId, resourceId: taskId, nowIso });
+      if (receipt.replay) return receipt.response;
       const task = await getTaskById(taskId, client);
+      if (task?.status === "completed") {
+        const replay = { task, nextTask: task.nextTaskId ? await getTaskById(task.nextTaskId, client) : null, idempotentReplay: true };
+        await completeMutationReceipt({ execute, client, receipt, response: replay, nowIso });
+        return replay;
+      }
       if (!task || task.status !== "pending") {
-        const error = new Error("A tarefa já foi concluída ou cancelada.");
-        error.statusCode = 400;
-        throw error;
+        const error = new Error("A tarefa já foi cancelada."); error.statusCode = 400; throw error;
       }
 
       const completedAt = nowIso();
@@ -4030,7 +4040,9 @@ async function handleApi(request, response, requestUrl) {
         summary: `Concluiu tarefa: ${task.title}`,
         changes: { result: resultText, nextTaskId: nextTask?.id || "" },
       }, client);
-      return { task: await getTaskById(taskId, client), nextTask };
+      const completed = { task: await getTaskById(taskId, client), nextTask };
+      await completeMutationReceipt({ execute, client, receipt, response: completed, nowIso });
+      return completed;
     });
     invalidateLeadSummaryCache(currentUser);
     sendJson(response, 200, result);
@@ -4045,6 +4057,7 @@ async function handleApi(request, response, requestUrl) {
     const task = await withTransaction(async (client) => {
       await assertTaskAccess(currentUser, taskId, client);
       const before = await getTaskById(taskId, client);
+      assertResourceFresh(body.expectedUpdatedAt, before?.updatedAt, "tarefa");
       if (!before || before.status !== "pending") {
         const error = new Error("Somente tarefas pendentes podem ser editadas.");
         error.statusCode = 400;
@@ -4076,10 +4089,9 @@ async function handleApi(request, response, requestUrl) {
     await withTransaction(async (client) => {
       await assertTaskAccess(currentUser, taskId, client);
       const task = await getTaskById(taskId, client);
+      if (task?.status === "canceled") return;
       if (!task || task.status !== "pending") {
-        const error = new Error("Somente tarefas pendentes podem ser canceladas.");
-        error.statusCode = 400;
-        throw error;
+        const error = new Error("Somente tarefas pendentes podem ser canceladas."); error.statusCode = 400; throw error;
       }
       await execute("UPDATE tasks SET status = 'canceled', source_key = NULL, updated_at = ? WHERE id = ?", [nowIso(), taskId], client);
       if (task.leadId) await refreshLeadNextContactFromTasks(task.leadId, client);
@@ -4537,7 +4549,10 @@ async function handleApi(request, response, requestUrl) {
 
     const movedLead = await withTransaction(async (client) => {
       const accessContext = await assertLeadAccess(currentUser, leadId, { forUpdate: true }, client);
+      const receipt = await claimMutationReceipt({ execute, queryRows, client, actorId: currentUser.id, operation: "kanban:move", requestId: body.requestId, resourceId: leadId, nowIso });
+      if (receipt.replay) return receipt.response;
       const lead = await getLeadById(leadId, {}, client);
+      assertResourceFresh(body.expectedUpdatedAt, lead?.updatedAt, "lead");
       const stage = await getKanbanStageById(stageId, client, { forUpdate: true });
       if (!lead) {
         const error = new Error("Lead não encontrado.");
@@ -4576,6 +4591,7 @@ async function handleApi(request, response, requestUrl) {
         summary: `Moveu ${result?.name || leadId} para ${stage.name}`,
         changes: { fromPipelineId: lead.pipelineId, fromStageId: lead.pipelineStageId, toPipelineId: pipelineId, toStageId: stageId },
       }, client);
+      await completeMutationReceipt({ execute, client, receipt, response: result, nowIso });
       return result;
     });
 
@@ -4598,38 +4614,12 @@ async function handleApi(request, response, requestUrl) {
     }
 
     const assignedLeads = await withTransaction(async (client) => {
-      const stage = await getKanbanStageById(stageId, client, { forUpdate: true });
-      if (!stage || stage.pipeline_id !== pipelineId) {
-        const error = new Error("Etapa de destino inválida.");
-        error.statusCode = 400;
-        throw error;
-      }
-      let nextPosition = Number(await scalar("SELECT COALESCE(MAX(kanban_position), 0) AS max_position FROM leads WHERE pipeline_stage_id = ?", [stageId], client) || 0) + 1000;
-      const results = [];
-      const accessContext = await getLeadAccessContext(currentUser, client);
-      for (const leadId of leadIds) {
-        await assertLeadAccess(currentUser, leadId, { accessContext, forUpdate: true }, client);
-        const lead = await getLeadById(leadId, {}, client);
-        if (!lead) continue;
-        const statusUpdate = getStageStatusUpdate(stage, lead.status);
-        const at = nowIso();
-        await execute(
-          `UPDATE leads SET pipeline_id = ?, pipeline_stage_id = ?, kanban_position = ?, pipeline_entered_at = ?,
-           status = ?, is_lost = ?, updated_at = ? WHERE id = ? AND deleted_at = ''`,
-          [pipelineId, stageId, nextPosition, at, statusUpdate.status, statusUpdate.isLost, at, leadId],
-          client,
-        );
-        nextPosition += 1000;
-        const savedLead = await getLeadById(leadId, {}, client);
-        if (savedLead) {
-          await reconcileLeadTasksForLifecycle(savedLead, currentUser, client);
-          results.push(savedLead);
-        }
-      }
-      await recordAudit({ entityType: "pipeline", entityId: pipelineId, action: "kanban_cards_bulk_assigned", actor: currentUser, summary: `Moveu ${results.length} card(s) para ${stage.name}`, changes: { leadIds: results.map((lead) => lead.id), stageId } }, client);
-      return results;
+      const receipt = await claimMutationReceipt({ execute, queryRows, client, actorId: currentUser.id, operation: "kanban:bulk-assign", requestId: body.requestId, resourceId: stageId, nowIso });
+      if (receipt.replay) return receipt.response;
+      const result = await kanbanWriteService.assignCardsInBulk({ currentUser, leadIds, pipelineId, stageId }, client);
+      await completeMutationReceipt({ execute, client, receipt, response: result, nowIso });
+      return result;
     });
-
     invalidateLeadSummaryCache(currentUser);
     invalidateKanbanCountsCache();
     sendJson(response, 200, assignedLeads);
@@ -4642,10 +4632,11 @@ async function handleApi(request, response, requestUrl) {
     const scopedAccess = buildLeadAccessSql(accessContext.user, accessContext.teamMembers, "l");
     const cacheKey = `owners:${leadDashboardCacheKey(accessContext)}`;
     const owners = await filterOptionsCache.getOrLoad(cacheKey, async () => {
+      const ownersSql = buildLeadOwnerOptionsSql(scopedAccess.clause);
       const rows = await queryRows(
-        `SELECT TRIM(l.responsible) AS name, COUNT(*) AS total FROM leads l
-         WHERE l.deleted_at = '' AND TRIM(COALESCE(l.responsible, '')) != '' AND ${scopedAccess.clause}
-         GROUP BY TRIM(l.responsible) ORDER BY name ASC LIMIT 500`, scopedAccess.params);
+        withMaxExecutionTimeHint(ownersSql, accessContext.scope?.scope === "own" ? CONSULTANT_INTERACTIVE_SQL_TIMEOUT_MS : 0),
+        scopedAccess.params,
+      );
       return rows.map((row) => ({ name: String(row.name || ""), total: Number(row.total || 0) }));
     });
     sendJson(response, 200, { owners, scope: accessContext.scope });
@@ -4679,6 +4670,13 @@ async function handleApi(request, response, requestUrl) {
       scope: accessContext.scope,
       generatedAt: nowIso(),
     });
+    return;
+  }
+
+  if (pathname === "/api/admin/observability" && method === "GET") {
+    requirePermission(currentUser, "read_audit");
+    if (!operationalRuntime) { sendJson(response, 503, { ok: false, message: "Observabilidade operacional ainda não inicializada." }); return; }
+    sendJson(response, 200, { ok: true, processRole: PROCESS_ROLE, activeRequests: activeRequestCount, activeJobs: Number(jobWorker?.activeCount || 0), ...operationalRuntime.getSnapshot(), history: await operationalRuntime.getHistory(48) });
     return;
   }
 
@@ -4770,12 +4768,7 @@ async function handleApi(request, response, requestUrl) {
       throw error;
     }
     const type = format === "xlsx" ? JOB_TYPES.EXPORT_LEADS_XLSX : JOB_TYPES.EXPORT_LEADS_CSV;
-    const queued = await enqueuePersistentJob({
-      type,
-      payload: { format },
-      actor: currentUser,
-      maxAttempts: 3,
-    });
+    const queued = await enqueuePersistentJob({ type, payload: { format }, actor: currentUser, dedupeKey: `export:${currentUser.id}:${format}`, maxAttempts: 3 });
     sendJson(response, 202, publicJob(queued.job));
     return;
   }
@@ -4784,10 +4777,8 @@ async function handleApi(request, response, requestUrl) {
     requirePermission(currentUser, "export_leads");
     const format = pathname.endsWith(".xlsx") ? "xlsx" : "csv";
     const queued = await enqueuePersistentJob({
-      type: format === "xlsx" ? JOB_TYPES.EXPORT_LEADS_XLSX : JOB_TYPES.EXPORT_LEADS_CSV,
-      payload: { format, compatibilityRoute: pathname },
-      actor: currentUser,
-      maxAttempts: 3,
+      type: format === "xlsx" ? JOB_TYPES.EXPORT_LEADS_XLSX : JOB_TYPES.EXPORT_LEADS_CSV, payload: { format, compatibilityRoute: pathname },
+      actor: currentUser, dedupeKey: `export:${currentUser.id}:${format}`, maxAttempts: 3,
     });
     response.setHeader("Deprecation", "true");
     response.setHeader("Link", '</api/exports/leads>; rel="successor-version"');
@@ -4964,6 +4955,8 @@ async function handleApi(request, response, requestUrl) {
     const lead = body.lead || body;
 
     const savedLead = await withTransaction(async (client, transactionContext) => {
+      const receipt = await claimMutationReceipt({ execute, queryRows, client, actorId: currentUser.id, operation: "lead:create", requestId: body.requestId, resourceId: lead.id, nowIso });
+      if (receipt.replay) return receipt.response;
       const accessContext = await getLeadAccessContext(currentUser, client);
       const before = lead.id ? await getLeadById(lead.id, { forUpdate: true }, client) : null;
       if (before) {
@@ -4979,6 +4972,7 @@ async function handleApi(request, response, requestUrl) {
       await recordAudit({ entityType: "lead", entityId: result.lead.id, action: before ? "lead_updated" : result.action === "merged" ? "lead_merged_on_create" : "lead_created", actor: currentUser, summary: before ? `Atualizou lead: ${result.lead.name}` : `Criou lead: ${result.lead.name}`, changes }, client);
       await syncLeadNextContactTask(result.lead, currentUser, client);
       await reconcileLeadTasksForLifecycle(result.lead, currentUser, client);
+      await completeMutationReceipt({ execute, client, receipt, response: result.lead, nowIso });
       return result.lead;
     });
     invalidateLeadSummaryCache(currentUser);
@@ -4997,18 +4991,16 @@ async function handleApi(request, response, requestUrl) {
       throw error;
     }
 
-    const payloadArtifact = await writeJsonJobPayload({
-      storageRoot: jobArtifactSettings.storageRoot,
-      payload: { leads },
-    });
+    const importHash = createHash("sha256");
+    for (const lead of leads) importHash.update(JSON.stringify(lead)).update("\n");
+    const importDedupeKey = `import:${currentUser.id}:${importHash.digest("hex").slice(0, 48)}`;
+    const payloadArtifact = await writeJsonJobPayload({ storageRoot: jobArtifactSettings.storageRoot, payload: { leads } });
     try {
       const queued = await enqueuePersistentJob({
-        type: JOB_TYPES.IMPORT_LEADS,
-        payload: { received: leads.length },
-        payloadStorageKey: payloadArtifact.storageKey,
-        actor: currentUser,
-        maxAttempts: 3,
+        type: JOB_TYPES.IMPORT_LEADS, payload: { received: leads.length }, payloadStorageKey: payloadArtifact.storageKey,
+        actor: currentUser, dedupeKey: importDedupeKey, maxAttempts: 3,
       });
+      if (!queued.created) await removeJobArtifact({ storageRoot: jobArtifactSettings.storageRoot, storageKey: payloadArtifact.storageKey }).catch(() => undefined);
       sendJson(response, 202, publicJob(queued.job));
     } catch (error) {
       await removeJobArtifact({ storageRoot: jobArtifactSettings.storageRoot, storageKey: payloadArtifact.storageKey }).catch(() => undefined);
@@ -5042,6 +5034,7 @@ async function handleApi(request, response, requestUrl) {
       if (existingHandoffTask) {
         return { lead: before, task: await getTaskById(existingHandoffTask.id, client), idempotentReplay: true };
       }
+      assertResourceFresh(handoff.expectedUpdatedAt, before.updatedAt, "lead");
 
       const consultant = await getUserById(handoff.consultantUserId, client);
       if (!consultant || !consultant.isActive || normalizeUserRole(consultant.role) !== USER_ROLES.SALES_CONSULTANT) {
@@ -5065,7 +5058,7 @@ async function handleApi(request, response, requestUrl) {
         `Tarefa cancelada porque o lead foi encaminhado para ${consultant.name || consultant.email}.`,
         currentUser,
         client,
-        { excludeSourceKey: handoffSourceKey },
+        { excludeSourceKey: handoffSourceKey, deferLeadRefresh: true },
       );
       const nextPosition = Number(await scalar(
         "SELECT COALESCE(MAX(kanban_position), 0) AS max_position FROM leads WHERE pipeline_stage_id = ? AND deleted_at = ''",
@@ -5093,14 +5086,22 @@ async function handleApi(request, response, requestUrl) {
         ],
         client,
       );
-      await commercialProfileRuntime.refreshLead(leadId, client);
 
       const task = await createTaskRecord({
         ...handoff.task,
         leadId,
         responsibleUserId: consultant.id,
-      }, currentUser, client, { source: "lead_handoff", sourceKey: handoffSourceKey });
+      }, currentUser, client, {
+        source: "lead_handoff",
+        sourceKey: handoffSourceKey,
+        leadAccessValidated: true,
+        leadSnapshot: before,
+        resolvedResponsible: consultant,
+        deferLeadRefresh: true,
+      });
 
+      // Consolida next_contact_at + perfil comercial uma única vez ao final do handoff.
+      await refreshLeadNextContactFromTasks(leadId, client);
       const savedLead = await getLeadById(leadId, {}, client);
       await recordAudit({
         entityType: "lead",
@@ -5308,12 +5309,16 @@ async function handleApi(request, response, requestUrl) {
     requireAnyPermission(currentUser, ["edit_leads_full", "edit_lead_sales_fields"]);
     const leadId = decodeURIComponent(leadMatch[1]);
     const body = await readRequestBody(request);
-    const lead = normalizeLead({ ...(body.lead || body), id: leadId });
+    const rawLead = body.lead || body;
+    const lead = normalizeLead({ ...rawLead, id: leadId });
 
     const savedLead = await withTransaction(async (client, transactionContext) => {
       await acquireLeadIdentityMutationLock(client, transactionContext);
       const accessContext = await assertLeadAccess(currentUser, leadId, { includeDeleted: true, forUpdate: true }, client);
+      const receipt = await claimMutationReceipt({ execute, queryRows, client, actorId: currentUser.id, operation: "lead:update", requestId: body.requestId, resourceId: leadId, nowIso });
+      if (receipt.replay) return receipt.response;
       const before = await getLeadById(leadId, { includeDeleted: true }, client);
+      assertResourceFresh(rawLead.updatedAt, before?.updatedAt, "lead");
       const changedFields = getChangedLeadFields(before, lead, auditableLeadFields);
       assertLeadFieldUpdateAllowed(currentUser, changedFields);
       assertAssignmentUsesHandoff({ changedFields, lead });
@@ -5324,6 +5329,7 @@ async function handleApi(request, response, requestUrl) {
       await recordAudit({ entityType: "lead", entityId: leadId, action: before ? "lead_updated" : "lead_created", actor: currentUser, summary: before ? `Atualizou lead: ${result.name}` : `Criou lead: ${result.name}`, changes }, client);
       await syncLeadNextContactTask(result, currentUser, client);
       await reconcileLeadTasksForLifecycle(result, currentUser, client);
+      await completeMutationReceipt({ execute, client, receipt, response: result, nowIso });
       return result;
     });
     invalidateLeadSummaryCache(currentUser);
@@ -5461,6 +5467,7 @@ async function gracefulShutdown(signal) {
   if (jobCleanupTimer) clearInterval(jobCleanupTimer);
   if (commercialProfileReadinessTimer) clearInterval(commercialProfileReadinessTimer);
   if (datetimeColumnsReadinessTimer) clearInterval(datetimeColumnsReadinessTimer);
+  operationalRuntime?.stop();
   performanceMonitor.stop();
   shutdownController.abort();
 
@@ -5494,6 +5501,8 @@ async function startRuntime() {
     await startPersistentJobWorker();
   }
   performanceMonitor.startRuntimeSampler(() => pool);
+  operationalRuntime = createOperationalRuntime({ settings: OPERATIONAL_SETTINGS, queryRows, execute, databaseName: MYSQL_DATABASE, processRole: PROCESS_ROLE, performanceMonitor, getActiveRequests: () => activeRequestCount, getActiveJobs: () => Number(jobWorker?.activeCount || 0) });
+  operationalRuntime.start({ runMaintenanceHere: PROCESS_CAPABILITIES.runsJobWorker });
 
   if (PROCESS_CAPABILITIES.runsHttpServer) {
     securityCleanupTimer = setInterval(() => {
