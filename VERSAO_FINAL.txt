@@ -1,5 +1,4 @@
-BobCRM — Pacote Final de Performance
-Fases cumulativas: 0 a 13
-Data do pacote: 2026-07-24
-Base: BobCRM_Fase13_Teste_Carga_repositorio_completo.zip
-Inclui DEPLOY_FINAL.md e PERFORMANCE_FINAL_REPORT.md
+BobCRM — Base consolidada Fases 1 a 5
+Gerada em: 2026-07-29
+Última migration: 20260729_17_hot_cold_leads_phase5
+Hot leads padrão: 30000

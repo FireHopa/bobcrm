@@ -2,6 +2,8 @@ export const HEAVY_JOB_TYPES = Object.freeze(new Set([
   "backup_mysql",
   "import_leads",
   "rebuild_search_index",
+  "archive_cold_leads",
+  "export_archived_leads_csv",
 ]));
 
 export function createHeavyJobSerialExecutor({ heavyTypes = HEAVY_JOB_TYPES } = {}) {

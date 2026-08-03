@@ -42,6 +42,7 @@ import { description as antiFallPhase1MigrationDescription, up as runAntiFallPha
 import { description as scalabilityPhase2MigrationDescription, up as runScalabilityPhase2Migration, version as scalabilityPhase2MigrationVersion } from "./migrations/20260727_14_scalability_phase2.js";
 import { description as integrityConcurrencyPhase3MigrationDescription, up as runIntegrityConcurrencyPhase3Migration, version as integrityConcurrencyPhase3MigrationVersion } from "./migrations/20260727_15_integrity_concurrency_phase3.js";
 import { description as observabilityMaintenancePhase4MigrationDescription, up as runObservabilityMaintenancePhase4Migration, version as observabilityMaintenancePhase4MigrationVersion } from "./migrations/20260727_16_observability_maintenance_phase4.js";
+import { description as hotColdPhase5MigrationDescription, up as runHotColdPhase5Migration, version as hotColdPhase5MigrationVersion } from "./migrations/20260729_17_hot_cold_leads_phase5.js";
 import {
   createEncryptedMysqlBackup,
   removeBackupArtifact,
@@ -208,6 +209,7 @@ import { createCommercialProfileRuntime } from "./domains/leads/commercialProfil
 import { createDateColumnRuntime, sqlDateColumn } from "./dateColumns.js";
 import { buildTodayTemporalSql } from "./todayTemporalSql.js";
 import { isMysqlStatementTimeout, resolveInteractiveSqlTimeout, withMaxExecutionTimeHint } from "./sqlExecutionGuard.js";
+import { createHotColdLeadService } from "./hotColdLeads.js";
 import { buildRoleReadiness, findMissingWorkerTables, getProcessRoleCapabilities, normalizeProcessRole, PROCESS_ROLES, REQUIRED_WORKER_TABLES } from "./runtimeRole.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -381,6 +383,11 @@ const commercialProfileRuntime = createCommercialProfileRuntime({
   nowIso,
 });
 const dateColumnRuntime = createDateColumnRuntime({ queryFirst: (sql, params, client) => statementFirstRow(sql, params, client) });
+const hotColdRuntime = createHotColdLeadService({
+  queryRows, execute, scalar, withTransaction, enqueuePersistentJob, publicJob, requirePermission, readRequestBody, sendJson,
+  recordAudit, recordAuditOnce, jobArtifactSettings, databaseName: MYSQL_DATABASE, nowIso,
+  invalidateLeadCaches: () => { invalidateLeadSummaryCache(); invalidateKanbanCountsCache(); filterOptionsCache.clear(); },
+});
 function loadEnvFile(filePath) {
   if (!existsSync(filePath)) return;
   const content = readFileSync(filePath, "utf8");
@@ -601,6 +608,8 @@ async function runSchemaMigrations() {
     () => runIntegrityConcurrencyPhase3Migration({ execute, addIndexIfMissing }));
   await runVersionedMigration(observabilityMaintenancePhase4MigrationVersion, observabilityMaintenancePhase4MigrationDescription,
     () => runObservabilityMaintenancePhase4Migration({ execute, addIndexIfMissing }));
+  await runVersionedMigration(hotColdPhase5MigrationVersion, hotColdPhase5MigrationDescription,
+    () => runHotColdPhase5Migration({ execute, addColumnIfMissing, addIndexIfMissing }));
   try {
     await addIndexIfMissing("leads", "ft_leads_search_text", "FULLTEXT INDEX ft_leads_search_text (search_text)");
     leadSearchFullTextEnabled = true;
@@ -633,13 +642,11 @@ async function seedDefaultKanban() {
   let pipeline = await statementFirstRow(
     "SELECT * FROM kanban_pipelines WHERE is_default = 1 AND is_archived = 0 ORDER BY position ASC LIMIT 1",
   );
-
   if (!pipeline) {
     pipeline = await statementFirstRow(
       "SELECT * FROM kanban_pipelines WHERE is_archived = 0 ORDER BY position ASC, created_at ASC LIMIT 1",
     );
   }
-
   const at = nowIso();
   if (!pipeline) {
     const pipelineId = randomUUID();
@@ -654,12 +661,10 @@ async function seedDefaultKanban() {
     await execute("UPDATE kanban_pipelines SET is_default = 1, updated_at = ? WHERE id = ?", [at, pipeline.id]);
     pipeline.is_default = 1;
   }
-
   let stages = await queryRows(
     "SELECT * FROM kanban_stages WHERE pipeline_id = ? AND is_archived = 0 ORDER BY position ASC",
     [pipeline.id],
   );
-
   if (!stages.length) {
     for (let index = 0; index < DEFAULT_KANBAN_STAGES.length; index += 1) {
       const stage = DEFAULT_KANBAN_STAGES[index];
@@ -674,10 +679,8 @@ async function seedDefaultKanban() {
       [pipeline.id],
     );
   }
-
   const fallbackStage = stages.find((stage) => stage.stage_type === "open") || stages[0];
   const byStatus = new Map(stages.filter((stage) => stage.status_key).map((stage) => [stage.status_key, stage]));
-
   for (const [status, stage] of byStatus.entries()) {
     await execute(
       `UPDATE leads
@@ -687,7 +690,6 @@ async function seedDefaultKanban() {
       [pipeline.id, stage.id, at, status],
     );
   }
-
   if (fallbackStage) {
     await execute(
       `UPDATE leads
@@ -697,14 +699,12 @@ async function seedDefaultKanban() {
       [pipeline.id, fallbackStage.id, at],
     );
   }
-
   defaultKanbanCache = {
     pipelineId: pipeline.id,
     fallbackStageId: fallbackStage?.id || "",
     stagesByStatus: Object.fromEntries(Array.from(byStatus.entries()).map(([status, stage]) => [status, stage.id])),
   };
 }
-
 async function withTransaction(operation) {
   const activePool = requireDatabaseClient(pool);
   try {
@@ -720,7 +720,6 @@ async function withTransaction(operation) {
     throw error;
   }
 }
-
 async function execute(sql, params = [], client = null) {
   const activeClient = requireDatabaseClient(client || pool);
   try {
@@ -731,7 +730,6 @@ async function execute(sql, params = [], client = null) {
     throw error;
   }
 }
-
 async function queryRows(sql, params = [], client = null) {
   const usingPool = !client || client === pool;
   const activeClient = requireDatabaseClient(client || pool);
@@ -755,7 +753,6 @@ async function queryRows(sql, params = [], client = null) {
       throw error;
     }
   };
-
   if (!usingPool) return run();
   return withMysqlRetry(run, {
     maxAttempts: MYSQL_RETRY_ATTEMPTS,
@@ -765,32 +762,26 @@ async function queryRows(sql, params = [], client = null) {
     signal: shutdownController.signal,
   });
 }
-
 async function statementFirstRow(sql, params = [], client = null) {
   const rows = await queryRows(sql, params, client);
   return rows[0] || null;
 }
-
 async function scalar(sql, params = [], client = null) {
   const row = await statementFirstRow(sql, params, client);
   if (!row) return null;
   const firstKey = Object.keys(row)[0];
   return row[firstKey];
 }
-
 function getRequestProtocol(request) {
   return resolveRequestProtocol(request, TRUST_PROXY_POLICY);
 }
-
 function getRequestOrigin(request) {
   return `${getRequestProtocol(request)}://${request.headers.host || `localhost:${PORT}`}`;
 }
-
 function applySecurityHeaders(request, response) {
   const headers = buildSecurityHeaders({ isHttps: getRequestProtocol(request) === "https" });
   Object.entries(headers).forEach(([name, value]) => response.setHeader(name, value));
 }
-
 function applyCorsHeaders(request, response) {
   const result = evaluateCorsOrigin({
     origin: request.headers.origin,
@@ -798,7 +789,6 @@ function applyCorsHeaders(request, response) {
     configuredOrigins: process.env.CORS_ORIGIN || "",
     isProduction: IS_PRODUCTION,
   });
-
   Object.entries(result.headers).forEach(([name, value]) => response.setHeader(name, value));
   if (!result.allowed) {
     const error = new Error("Origem não autorizada para acessar a API.");
@@ -806,7 +796,6 @@ function applyCorsHeaders(request, response) {
     throw error;
   }
 }
-
 function sendJson(response, statusCode, payload) {
   sendBufferResponse({
     request: response[RESPONSE_REQUEST],
@@ -819,7 +808,6 @@ function sendJson(response, statusCode, payload) {
     },
   });
 }
-
 function sendTextDownload(response, statusCode, content, fileName, contentType) {
   response.writeHead(statusCode, {
     "Content-Type": contentType,
@@ -828,7 +816,6 @@ function sendTextDownload(response, statusCode, content, fileName, contentType) 
   });
   response.end(content);
 }
-
 function sendBinaryDownload(response, statusCode, buffer, fileName, contentType) {
   response.writeHead(statusCode, {
     "Content-Type": contentType,
@@ -838,7 +825,6 @@ function sendBinaryDownload(response, statusCode, buffer, fileName, contentType)
   });
   response.end(buffer);
 }
-
 async function sendFileDownload(response, filePath, fileName, contentType, extraHeaders = {}) {
   const fileStat = await stat(filePath);
   response.writeHead(200, {
@@ -856,11 +842,9 @@ async function sendFileDownload(response, filePath, fileName, contentType, extra
     stream.pipe(response);
   });
 }
-
 async function readRequestBody(request, maxBytes = MAX_BODY_BYTES) {
   const chunks = [];
   let totalBytes = 0;
-
   for await (const chunk of request) {
     totalBytes += chunk.length;
     if (totalBytes > maxBytes) {
@@ -3533,6 +3517,8 @@ async function performImportLeadsJob(job) {
     total: report.received,
     message: "Importação concluída",
   });
+  await hotColdRuntime.refreshStats().catch(() => undefined);
+  await hotColdRuntime.queueAutoArchive({ id: "system", name: "Sistema" }).catch(() => undefined);
   return { result: { report }, expiresAt: job.expiresAt };
 }
 
@@ -3703,6 +3689,8 @@ async function startPersistentJobWorker() {
     [JOB_TYPES.EXPORT_LEADS_CSV]: (job) => performLeadExportJob(job, "csv"),
     [JOB_TYPES.EXPORT_LEADS_XLSX]: (job) => performLeadExportJob(job, "xlsx"),
     [JOB_TYPES.REBUILD_SEARCH_INDEX]: (job) => runHeavyJobSerially(job, () => performSearchIndexRebuildJob(job)),
+    [JOB_TYPES.ARCHIVE_COLD_LEADS]: (job) => runHeavyJobSerially(job, () => hotColdRuntime.performArchiveJob(job)),
+    [JOB_TYPES.EXPORT_ARCHIVED_LEADS_CSV]: (job) => runHeavyJobSerially(job, () => hotColdRuntime.performArchiveCsvExportJob(job)),
   };
 
   jobWorker = createJobWorker({
@@ -4673,6 +4661,8 @@ async function handleApi(request, response, requestUrl) {
     return;
   }
 
+  if (await hotColdRuntime.handleApi({ pathname, method, request, requestUrl, response, currentUser })) return;
+
   if (pathname === "/api/admin/observability" && method === "GET") {
     requirePermission(currentUser, "read_audit");
     if (!operationalRuntime) { sendJson(response, 503, { ok: false, message: "Observabilidade operacional ainda não inicializada." }); return; }
@@ -4954,6 +4944,7 @@ async function handleApi(request, response, requestUrl) {
     const body = await readRequestBody(request);
     const lead = body.lead || body;
 
+    let createdHotLead = false;
     const savedLead = await withTransaction(async (client, transactionContext) => {
       const receipt = await claimMutationReceipt({ execute, queryRows, client, actorId: currentUser.id, operation: "lead:create", requestId: body.requestId, resourceId: lead.id, nowIso });
       if (receipt.replay) return receipt.response;
@@ -4968,6 +4959,7 @@ async function handleApi(request, response, requestUrl) {
       assertAssignmentUsesHandoff({ isNew: !before, changedFields, lead: normalizedInput });
       const assignedLead = enforceLeadAssignmentForUser(normalizedInput, accessContext.user, accessContext.teamMembers);
       const result = await saveLeadWithDuplicateProtection(assignedLead, client, accessContext, transactionContext);
+      createdHotLead = !before && result.action !== "merged";
       const changes = before ? diffLeads(before, result.lead) : result.lead;
       await recordAudit({ entityType: "lead", entityId: result.lead.id, action: before ? "lead_updated" : result.action === "merged" ? "lead_merged_on_create" : "lead_created", actor: currentUser, summary: before ? `Atualizou lead: ${result.lead.name}` : `Criou lead: ${result.lead.name}`, changes }, client);
       await syncLeadNextContactTask(result.lead, currentUser, client);
@@ -4976,6 +4968,7 @@ async function handleApi(request, response, requestUrl) {
       return result.lead;
     });
     invalidateLeadSummaryCache(currentUser);
+    if (createdHotLead) void hotColdRuntime.adjustStats({ activeDelta: 1 }).then(() => hotColdRuntime.queueAutoArchive({ id: "system", name: "Sistema" })).catch(() => undefined);
 
     sendJson(response, 201, savedLead);
     return;
@@ -5255,6 +5248,7 @@ async function handleApi(request, response, requestUrl) {
       return result;
     });
 
+    void hotColdRuntime.adjustStats({ activeDelta: 1 }).then(() => hotColdRuntime.queueAutoArchive({ id: "system", name: "Sistema" })).catch(() => undefined);
     sendJson(response, 200, restoredLead);
     return;
   }
@@ -5352,6 +5346,7 @@ async function handleApi(request, response, requestUrl) {
     });
     invalidateLeadSummaryCache(currentUser);
     invalidateKanbanCountsCache();
+    void hotColdRuntime.adjustStats({ activeDelta: -1 }).catch(() => undefined);
 
     sendJson(response, 200, { ok: true });
     return;
@@ -5524,7 +5519,10 @@ async function startRuntime() {
     }, DATETIME_COLUMNS_READINESS_CHECK_MS);
     datetimeColumnsReadinessTimer.unref?.();
 
-    await Promise.allSettled([cleanupSecurityState()]);
+    await Promise.allSettled([
+      cleanupSecurityState(),
+      hotColdRuntime.queueAutoArchive({ id: "system", name: "Sistema" }),
+    ]);
   }
 
   if (PROCESS_CAPABILITIES.runsJobWorker) {

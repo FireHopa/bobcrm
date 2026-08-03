@@ -10,6 +10,9 @@ import {
   downloadDatabaseBackup,
   downloadLeadsCsvExport,
   downloadLeadsXlsxExport,
+  downloadArchivedLeadsCsvExport,
+  fetchArchivedLeadsFromServer,
+  fetchLeadArchiveStatsFromServer,
   fetchAdminLeadOverviewFromServer,
   fetchBackupsFromServer,
   fetchDeletedLeadsFromServer,
@@ -21,12 +24,16 @@ import {
   mergeLeadsOnServer,
   permanentlyDeleteLeadFromServer,
   restoreLeadOnServer,
+  restoreArchivedLeadOnServer,
+  runLeadArchiveNow,
   updateTeamOnServer,
   updateUserOnServer,
   type AdminLeadOverview,
   type DuplicateGroup,
   type DuplicateGroupsPage,
   type DeletedLeadPagination,
+  type ArchivedLead,
+  type LeadArchiveStats,
 } from "../utils/api";
 import { useConfirmationDialog } from "./ConfirmationDialog";
 
@@ -50,7 +57,7 @@ type UserFormState = {
   leadAccessScope: CRMUser["leadAccessScope"];
 };
 
-type AdminTab = "summary" | "users" | "backups" | "trash" | "duplicates" | "audit" | "system";
+type AdminTab = "summary" | "users" | "backups" | "archive" | "trash" | "duplicates" | "audit" | "system";
 
 
 const emptyAdminLeadOverview: AdminLeadOverview = {
@@ -136,6 +143,11 @@ export function SettingsCenter({
   const [teamName, setTeamName] = useState("");
   const [deletedLeads, setDeletedLeads] = useState<Lead[]>([]);
   const [deletedPagination, setDeletedPagination] = useState<DeletedLeadPagination>(emptyDeletedPagination);
+  const [archivedLeads, setArchivedLeads] = useState<ArchivedLead[]>([]);
+  const [archivePagination, setArchivePagination] = useState<DeletedLeadPagination>(emptyDeletedPagination);
+  const [archiveStats, setArchiveStats] = useState<LeadArchiveStats | null>(null);
+  const [archiveSearch, setArchiveSearch] = useState("");
+  const [archiveLoaded, setArchiveLoaded] = useState(false);
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [adminOverview, setAdminOverview] = useState<AdminLeadOverview>(emptyAdminLeadOverview);
@@ -182,6 +194,13 @@ export function SettingsCenter({
     });
   }, [activeAdminTab, duplicatesLoaded]);
 
+  useEffect(() => {
+    if (activeAdminTab !== "archive" || archiveLoaded || !canManageUsers) return;
+    void Promise.all([loadArchivePage(0, false), refreshArchiveStats()]).then(() => setArchiveLoaded(true)).catch((error) => {
+      setPanelError(error instanceof Error ? error.message : "Não foi possível carregar o arquivo de leads.");
+    });
+  }, [activeAdminTab, archiveLoaded, canManageUsers]);
+
   async function runPanelAction(action: () => Promise<void>, successMessage?: string) {
     setPanelError("");
     setPanelMessage("");
@@ -216,6 +235,55 @@ export function SettingsCenter({
     if (canAudit) tasks.push(fetchRecentAuditFromServer().then(setAuditEntries));
 
     await Promise.all(tasks).catch((error) => setPanelError(error instanceof Error ? error.message : "Não foi possível carregar dados de produção."));
+  }
+
+  async function refreshArchiveStats(refresh = false) {
+    if (!canManageUsers) return;
+    const stats = await fetchLeadArchiveStatsFromServer(refresh);
+    setArchiveStats(stats);
+  }
+
+  async function loadArchivePage(offset = 0, append = false, searchValue = archiveSearch) {
+    if (!canManageUsers) return;
+    const result = await fetchArchivedLeadsFromServer({ search: searchValue, limit: 100, offset });
+    setArchivedLeads((current) => append ? [...current, ...result.leads] : result.leads);
+    setArchivePagination(result.pagination);
+  }
+
+  async function handleRunArchive() {
+    await runPanelAction(async () => {
+      await runLeadArchiveNow();
+      await Promise.all([refreshArchiveStats(true), loadArchivePage(0, false)]);
+      setArchiveLoaded(true);
+      await Promise.resolve(onRefreshLeads());
+    }, "Arquivamento Hot/Cold concluído.");
+  }
+
+  async function handleRestoreArchivedLead(lead: ArchivedLead) {
+    const confirmed = await confirm({
+      title: "Restaurar lead arquivado?",
+      message: lead.name || lead.company || lead.email || "Lead arquivado",
+      detail: "O lead voltará imediatamente para a base operacional e poderá aparecer no Kanban e nas buscas normais.",
+      confirmLabel: "Restaurar lead",
+      tone: "default",
+    });
+    if (!confirmed) return;
+    await runPanelAction(async () => {
+      const restored = await restoreArchivedLeadOnServer(lead.id);
+      setArchivedLeads((current) => current.filter((item) => item.id !== lead.id));
+      setArchivePagination((current) => ({ ...current, total: Math.max(0, current.total - 1) }));
+      onLeadRestored(restored);
+      await Promise.all([refreshArchiveStats(), Promise.resolve(onRefreshLeads())]);
+    }, "Lead restaurado para a base operacional.");
+  }
+
+  async function handleArchiveSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await runPanelAction(async () => { await loadArchivePage(0, false, archiveSearch); });
+  }
+
+  async function handleDownloadArchive() {
+    await runPanelAction(async () => { await downloadArchivedLeadsCsvExport(); }, "Arquivo CSV gerado e baixado.");
   }
 
   async function handleCreateUser(event: FormEvent<HTMLFormElement>) {
@@ -365,6 +433,7 @@ export function SettingsCenter({
     { id: "summary" as AdminTab, label: "Resumo", count: 0 },
     ...(canManageUsers ? [{ id: "users" as AdminTab, label: "Usuários", count: users.length }] : []),
     ...(canBackup ? [{ id: "backups" as AdminTab, label: "Backups", count: backups.length }] : []),
+    ...(canManageUsers ? [{ id: "archive" as AdminTab, label: "Arquivo de Leads", count: archiveStats?.archivedLeads || 0 }] : []),
     ...(canRestore ? [{ id: "trash" as AdminTab, label: "Lixeira", count: deletedPagination.total }] : []),
     { id: "duplicates" as AdminTab, label: "Duplicados", count: adminOverview.duplicateGroups },
     ...(canAudit ? [{ id: "audit" as AdminTab, label: "Auditoria", count: auditEntries.length }] : []),
@@ -414,6 +483,11 @@ export function SettingsCenter({
 
           <div className="adminSummaryGroupTitleV34">Administração</div>
           <div className="adminSummaryGridV32 adminSummaryGridV34 adminSupportGridV34">
+            <article className="panel adminSummaryCardV32">
+              <span>Base operacional</span>
+              <strong>{archiveStats ? `${archiveStats.activeLeads.toLocaleString("pt-BR")} / ${archiveStats.hotLimit.toLocaleString("pt-BR")}` : "30.000"}</strong>
+              <button className="secondaryButton" type="button" onClick={() => setActiveAdminTab("archive")} disabled={!canManageUsers}>Arquivo de leads</button>
+            </article>
             <article className="panel adminSummaryCardV32">
               <span>Leads na lixeira</span>
               <strong>{canRestore ? deletedPagination.total : "-"}</strong>
@@ -597,6 +671,60 @@ export function SettingsCenter({
               </article>
             )) : <div className="operationEmptyCompact"><strong>Nenhum backup listado ainda.</strong></div>}
           </div>
+        </section>
+      ) : null}
+
+      {activeAdminTab === "archive" && canManageUsers ? (
+        <section className="panel productionPanel productionPanelV32">
+          <div className="sectionTitleRow">
+            <div>
+              <h3>Arquivo de Leads</h3>
+              <p>Base fria. Estes leads ficam fora das consultas operacionais e só são acessados quando você solicita.</p>
+            </div>
+            <div className="settingsActions">
+              <button className="secondaryButton" type="button" onClick={() => void refreshArchiveStats(true)} disabled={isBusy}>Atualizar números</button>
+              <button className="primaryButton" type="button" onClick={handleRunArchive} disabled={isBusy || !archiveStats?.overflow}>Arquivar excedente</button>
+              <button className="secondaryButton" type="button" onClick={handleDownloadArchive} disabled={isBusy || !archiveStats?.archivedLeads}>Baixar CSV</button>
+            </div>
+          </div>
+
+          <div className="adminSummaryGridV32 adminSummaryGridV34 archiveSummaryGridV5">
+            <article className="panel adminSummaryCardV32"><span>Base operacional</span><strong>{(archiveStats?.activeLeads || 0).toLocaleString("pt-BR")}</strong><small>Limite: {(archiveStats?.hotLimit || 30000).toLocaleString("pt-BR")}</small></article>
+            <article className="panel adminSummaryCardV32"><span>Arquivados</span><strong>{(archiveStats?.archivedLeads || 0).toLocaleString("pt-BR")}</strong><small>Fora do fluxo diário</small></article>
+            <article className="panel adminSummaryCardV32"><span>Excedente</span><strong>{(archiveStats?.overflow || 0).toLocaleString("pt-BR")}</strong><small>{archiveStats?.protectedOverflow ? `${archiveStats.protectedOverflow.toLocaleString("pt-BR")} protegidos pelas regras` : "Pronto para arquivar"}</small></article>
+          </div>
+
+          <div className="systemNotice systemNoticeMigration archiveSafetyNoticeV5">
+            <strong>Proteção automática</strong>
+            <span>Leads com tarefa pendente, próximo contato futuro ou atividade comercial protegida não são removidos da base operacional só para atingir o limite.</span>
+          </div>
+
+          <form className="archiveSearchV5" onSubmit={handleArchiveSearch}>
+            <input value={archiveSearch} onChange={(event) => setArchiveSearch(event.target.value)} placeholder="Buscar no arquivo por nome, empresa, e-mail, telefone ou responsável" />
+            <button className="secondaryButton" type="submit" disabled={isBusy}>Buscar no arquivo</button>
+          </form>
+
+          <div className="productionRows productionRowsV32">
+            {archivedLeads.length ? archivedLeads.map((lead) => (
+              <article className="productionRow" key={lead.id}>
+                <div>
+                  <strong>{lead.name || lead.company || lead.phone || "Lead sem nome"}</strong>
+                  <span>{lead.company || lead.email || lead.phone || "Sem dados"}</span>
+                  <small>Arquivado em: {formatDateTime(lead.archivedAt)} • Motivo: {lead.archiveReason === "closed_or_lost" ? "Encerrado/perdido e inativo" : "Inativo e sem responsável"}</small>
+                </div>
+                <div className="tableActions tableActionsV32">
+                  <button className="tableActionButton successTableAction" type="button" onClick={() => handleRestoreArchivedLead(lead)}>Restaurar</button>
+                </div>
+              </article>
+            )) : <div className="operationEmptyCompact"><strong>Nenhum lead arquivado encontrado.</strong></div>}
+          </div>
+
+          {archivePagination.hasMore ? (
+            <div className="paginationFooter">
+              <span>Exibindo {archivedLeads.length} de {archivePagination.total.toLocaleString("pt-BR")} arquivado(s).</span>
+              <button className="secondaryButton" type="button" onClick={() => void loadArchivePage(archivedLeads.length, true)} disabled={isBusy}>Carregar mais</button>
+            </div>
+          ) : null}
         </section>
       ) : null}
 

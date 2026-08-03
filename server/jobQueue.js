@@ -14,6 +14,8 @@ export const JOB_TYPES = Object.freeze({
   EXPORT_LEADS_CSV: "export_leads_csv",
   EXPORT_LEADS_XLSX: "export_leads_xlsx",
   REBUILD_SEARCH_INDEX: "rebuild_search_index",
+  ARCHIVE_COLD_LEADS: "archive_cold_leads",
+  EXPORT_ARCHIVED_LEADS_CSV: "export_archived_leads_csv",
 });
 
 function nowIso(now = new Date()) {

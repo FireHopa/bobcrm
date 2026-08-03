@@ -58,7 +58,8 @@
     "test:phase3-integrity": "node --test server/mutationReceipts.test.js server/migrations/20260727_15_integrity_concurrency_phase3.test.js server/phase3IntegrityConcurrency20260727.test.js scripts/operational-integrity.test.mjs",
     "test:phase4-observability": "node --test server/performanceMetrics.test.js server/operationalObservability.test.js server/migrations/20260727_16_observability_maintenance_phase4.test.js server/phase4ObservabilityMaintenance20260727.test.js",
     "ops:check": "node scripts/operational-health.mjs",
-    "ops:maintenance": "node scripts/operational-maintenance.mjs"
+    "ops:maintenance": "node scripts/operational-maintenance.mjs",
+    "test:phase5-hot-cold": "node --test server/hotColdLeads.test.js server/migrations/20260729_17_hot_cold_leads_phase5.test.js server/phase5HotColdWiring.test.js"
   },
   "dependencies": {
     "dotenv": "^17.4.2",

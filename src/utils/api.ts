@@ -229,6 +229,29 @@ export type DeletedLeadsPageResult = {
   pagination: DeletedLeadPagination;
 };
 
+export type ArchivedLead = Lead & {
+  archivedAt: string;
+  archivedBy: string;
+  archiveReason: string;
+  archiveBatchId: string;
+};
+
+export type LeadArchiveStats = {
+  activeLeads: number;
+  archivedLeads: number;
+  protectedOverflow: number;
+  hotLimit: number;
+  overflow: number;
+  lastArchiveAt: string;
+  autoArchive: boolean;
+  batchSize: number;
+};
+
+export type ArchivedLeadsPageResult = {
+  leads: ArchivedLead[];
+  pagination: DeletedLeadPagination;
+};
+
 type ApiRequestOptions = RequestInit & {
   timeoutMs?: number;
 };
@@ -904,6 +927,44 @@ export async function importLeadBatchToServer(leads: Lead[]): Promise<ImportLead
 export async function importLeadsToServer(leads: Lead[]): Promise<Lead[]> {
   const result = await importLeadBatchToServer(leads);
   return result.leads;
+}
+
+export async function fetchArchivedLeadsFromServer(params: { search?: string; limit?: number; offset?: number } = {}): Promise<ArchivedLeadsPageResult> {
+  const search = new URLSearchParams();
+  search.set("limit", String(params.limit ?? 100));
+  search.set("offset", String(params.offset ?? 0));
+  if (params.search?.trim()) search.set("search", params.search.trim());
+  const response = await requestApi<{ leads?: Array<Partial<Lead> & Partial<ArchivedLead>>; pagination?: Partial<DeletedLeadPagination> }>(`/api/leads/archive?${search.toString()}`, { timeoutMs: 60000 });
+  const leads = Array.isArray(response.leads) ? response.leads.map((lead) => ({
+    ...normalizeLeadFromApi(lead),
+    archivedAt: String(lead.archivedAt || ""),
+    archivedBy: String(lead.archivedBy || ""),
+    archiveReason: String(lead.archiveReason || ""),
+    archiveBatchId: String(lead.archiveBatchId || ""),
+  })) : [];
+  const pagination = response.pagination || {};
+  const limit = Number(pagination.limit ?? params.limit ?? 100);
+  const offset = Number(pagination.offset ?? params.offset ?? 0);
+  const total = Number(pagination.total ?? leads.length);
+  return { leads, pagination: { total, limit, offset, hasMore: Boolean(pagination.hasMore ?? offset + leads.length < total) } };
+}
+
+export async function fetchLeadArchiveStatsFromServer(refresh = false): Promise<LeadArchiveStats> {
+  return requestApi<LeadArchiveStats>(`/api/leads/archive/stats${refresh ? "?refresh=1" : ""}`, { timeoutMs: 60000 });
+}
+
+export async function runLeadArchiveNow(): Promise<AsyncJob> {
+  return enqueueAndWaitForJob("/api/leads/archive/run", {}, 30 * 60 * 1000);
+}
+
+export async function restoreArchivedLeadOnServer(leadId: string): Promise<Lead> {
+  const lead = await requestApi<Partial<Lead>>(`/api/leads/archive/${encodeURIComponent(leadId)}/restore`, { method: "POST" });
+  return normalizeLeadFromApi(lead);
+}
+
+export async function downloadArchivedLeadsCsvExport(): Promise<void> {
+  const completed = await enqueueAndWaitForJob("/api/exports/leads-archive", {}, 30 * 60 * 1000);
+  await downloadFile(`/api/jobs/${encodeURIComponent(completed.id)}/download`, `crm-casa-do-ads-leads-arquivados-${new Date().toISOString().slice(0, 10)}.csv`);
 }
 
 export async function fetchDeletedLeadsFromServer(params: { limit?: number; offset?: number } = {}): Promise<DeletedLeadsPageResult> {
