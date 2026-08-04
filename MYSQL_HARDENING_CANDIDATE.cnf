@@ -1,0 +1,12 @@
+# CANDIDATO DE CONFIGURAÇÃO — NÃO APLICAR AUTOMATICAMENTE
+# Gere novamente em horário de pico e valide RAM/IO antes de editar my.cnf.
+[mysqld]
+slow_query_log = ON
+long_query_time = 0.5
+
+# NÃO alterado automaticamente:
+# innodb_buffer_pool_size = 134217728
+# max_connections = 151
+# tmp_table_size = 16777216
+# max_heap_table_size = 16777216
+# Esses parâmetros dependem da evidência coletada e da RAM disponível no host.

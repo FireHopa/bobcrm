@@ -1,5 +1,7 @@
-import { ChangeEvent, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import type { Lead, LeadSource, LeadStatus, LeadTemperature } from "../types/Lead";
+import type { KanbanPipeline, KanbanStage } from "../types/Kanban";
+import { fetchKanbanPipelines } from "../utils/api";
 import type { ImportDeduplicationReport } from "../utils/commercial";
 import { formatDate } from "../utils/formatters";
 import {
@@ -35,6 +37,22 @@ import {
   type RawRow,
 } from "../features/import/importModel";
 
+function getPreferredImportStage(pipeline: KanbanPipeline, status: LeadStatus) {
+  return pipeline.stages.find((stage) => stage.statusKey === status)
+    || pipeline.stages.find((stage) => stage.stageType === "open")
+    || pipeline.stages[0]
+    || null;
+}
+
+function applyImportStageToPreview(lead: Lead, stage: KanbanStage | null) {
+  if (!stage) return lead;
+  if (stage.stageType === "won") return { ...lead, status: "Fechado" as LeadStatus, isLost: false };
+  if (stage.stageType === "lost") return { ...lead, status: "Perdido" as LeadStatus, isLost: true };
+  if (stage.statusKey) return { ...lead, status: stage.statusKey as LeadStatus, isLost: stage.statusKey === "Perdido" };
+  if (lead.status === "Fechado" || lead.status === "Perdido") return { ...lead, status: "Novo lead" as LeadStatus, isLost: false };
+  return lead;
+}
+
 export function ImportLeads({ onImportLeads, onImportFinished }: ImportLeadsProps) {
   const [fileName, setFileName] = useState("");
   const [headers, setHeaders] = useState<string[]>([]);
@@ -47,11 +65,43 @@ export function ImportLeads({ onImportLeads, onImportFinished }: ImportLeadsProp
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4 | 5>(1);
+  const [pipelines, setPipelines] = useState<KanbanPipeline[]>([]);
+  const [pipelineLoadError, setPipelineLoadError] = useState("");
+  const [targetPipelineId, setTargetPipelineId] = useState("");
+  const [targetStageId, setTargetStageId] = useState("");
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    void fetchKanbanPipelines(controller.signal)
+      .then((availablePipelines) => {
+        setPipelines(availablePipelines);
+        setPipelineLoadError("");
+      })
+      .catch((caughtError) => {
+        if (controller.signal.aborted) return;
+        setPipelineLoadError(caughtError instanceof Error ? caughtError.message : "Não foi possível carregar os funis.");
+      });
+
+    return () => controller.abort();
+  }, []);
+
+  const selectedPipeline = useMemo(
+    () => pipelines.find((pipeline) => pipeline.id === targetPipelineId) || null,
+    [pipelines, targetPipelineId],
+  );
+  const selectedStage = useMemo(
+    () => selectedPipeline?.stages.find((stage) => stage.id === targetStageId) || null,
+    [selectedPipeline, targetStageId],
+  );
 
   const previewSourceRows = largeCsvMeta ? largeCsvMeta.sampleRows : rows.slice(0, CSV_PROFILE_SAMPLE_ROWS);
   const previewLeads = useMemo(
-    () => previewSourceRows.map((row) => buildLeadFromRow(row, mapping, bulkDefaults)).filter(isValidLead).slice(0, 8),
-    [previewSourceRows, mapping, bulkDefaults],
+    () => previewSourceRows
+      .map((row) => applyImportStageToPreview(buildLeadFromRow(row, mapping, bulkDefaults), selectedStage))
+      .filter(isValidLead)
+      .slice(0, 8),
+    [previewSourceRows, mapping, bulkDefaults, selectedStage],
   );
   const totalRows = largeCsvMeta?.totalRows ?? rows.length;
   const validRowsCount = useMemo(() => {
@@ -63,7 +113,8 @@ export function ImportLeads({ onImportLeads, onImportFinished }: ImportLeadsProp
   const duplicatedMappingLabels = useMemo(() => getDuplicatedMappingLabels(mapping), [mapping]);
   const hasFile = headers.length > 0;
   const hasRequiredName = mapping.name !== "";
-  const canImport = hasRequiredName && totalRows > 0 && !isImporting;
+  const hasValidKanbanTarget = !targetPipelineId || Boolean(selectedPipeline && selectedStage);
+  const canImport = hasRequiredName && totalRows > 0 && hasValidKanbanTarget && !isImporting;
   const isLargeImport = Boolean(largeCsvMeta);
   const progressPercent = importProgress?.totalRows
     ? Math.min(100, Math.round((importProgress.processedRows / importProgress.totalRows) * 100))
@@ -96,6 +147,12 @@ export function ImportLeads({ onImportLeads, onImportFinished }: ImportLeadsProp
       ...currentMapping,
       [field]: value,
     }));
+  }
+
+  function updateTargetPipeline(pipelineId: string) {
+    setTargetPipelineId(pipelineId);
+    const pipeline = pipelines.find((item) => item.id === pipelineId);
+    setTargetStageId(pipeline ? getPreferredImportStage(pipeline, bulkDefaults.status)?.id || "" : "");
   }
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -162,7 +219,11 @@ export function ImportLeads({ onImportLeads, onImportFinished }: ImportLeadsProp
   async function sendBatch(batch: Lead[], progress: ImportProgress, totalReport: ImportDeduplicationReport) {
     if (!batch.length) return;
 
-    const batchReport = normalizeBatchReport(await onImportLeads(batch, { chunked: true }), batch.length);
+    const batchReport = normalizeBatchReport(await onImportLeads(batch, {
+      chunked: true,
+      pipelineId: targetPipelineId,
+      stageId: targetStageId,
+    }), batch.length);
     totalReport.created += batchReport.created;
     totalReport.merged += batchReport.merged;
     totalReport.ignoredInsideFile += batchReport.ignoredInsideFile;
@@ -409,7 +470,7 @@ export function ImportLeads({ onImportLeads, onImportFinished }: ImportLeadsProp
 
           {!hasRequiredName ? <div className="importWarning">O campo Nome é obrigatório para continuar.</div> : null}
 
-          <details className="bulkDefaultsPanel bulkDefaultsPanelV32"><summary>Aplicar dados padrão aos leads importados</summary>
+          <details className="bulkDefaultsPanel bulkDefaultsPanelV32" open><summary>Definir destino e dados padrão da importação</summary>
             <div>
               <h3>Qualificação em massa</h3>
               <p>Use estes campos para preencher informações ausentes na planilha.</p>
@@ -417,14 +478,38 @@ export function ImportLeads({ onImportLeads, onImportFinished }: ImportLeadsProp
 
             <div className="bulkDefaultsGrid">
               <div className="leadAssignmentNoticeV43 importAssignmentNoticeV43">
-                <strong>Importação sem responsável</strong>
-                <span>Os leads entram sem consultor. Depois da triagem, use “Encaminhar para consultor” para definir carteira, funil, etapa e primeira tarefa.</span>
+                <strong>Destino da importação</strong>
+                <span>
+                  Os leads entram sem consultor. Você pode escolher abaixo o funil e a etapa de entrada. Se deixar no modo automático,
+                  o CRM usará o funil padrão e a etapa correspondente ao status.
+                </span>
               </div>
+              <label className="field">
+                <span>Funil de destino</span>
+                <select value={targetPipelineId} onChange={(event) => updateTargetPipeline(event.target.value)} disabled={isImporting || !pipelines.length}>
+                  <option value="">Automático pelo status</option>
+                  {pipelines.map((pipeline) => <option key={pipeline.id} value={pipeline.id}>{pipeline.name}{pipeline.isDefault ? " (padrão)" : ""}</option>)}
+                </select>
+              </label>
+              <label className="field">
+                <span>Etapa inicial</span>
+                <select value={targetStageId} onChange={(event) => setTargetStageId(event.target.value)} disabled={isImporting || !selectedPipeline}>
+                  <option value="">{selectedPipeline ? "Selecione a etapa" : "Definida automaticamente"}</option>
+                  {selectedPipeline?.stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
+                </select>
+              </label>
               <label className="field"><span>Origem padrão</span><select value={bulkDefaults.source} onChange={(event) => setBulkDefaults({ ...bulkDefaults, source: event.target.value as LeadSource })} disabled={isImporting}>{sourceOptions.map((source) => <option key={source || "empty"} value={source}>{source || "Selecione"}</option>)}</select></label>
               <label className="field"><span>Temperatura padrão</span><select value={bulkDefaults.temperature} onChange={(event) => setBulkDefaults({ ...bulkDefaults, temperature: event.target.value as LeadTemperature })} disabled={isImporting}>{temperatureOptions.map((temperature) => <option key={temperature || "empty"} value={temperature}>{temperature || "Selecione"}</option>)}</select></label>
-              <label className="field"><span>Status padrão</span><select value={bulkDefaults.status} onChange={(event) => setBulkDefaults({ ...bulkDefaults, status: event.target.value as LeadStatus })} disabled={isImporting}>{statusOptions.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
+              <label className="field"><span>{selectedStage ? "Status definido pela etapa" : "Status padrão"}</span><select value={bulkDefaults.status} onChange={(event) => setBulkDefaults({ ...bulkDefaults, status: event.target.value as LeadStatus })} disabled={isImporting || Boolean(selectedStage)}>{statusOptions.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
               <label className="field"><span>Próximo passo padrão</span><input type="date" value={bulkDefaults.nextContactAt} onChange={(event) => setBulkDefaults({ ...bulkDefaults, nextContactAt: event.target.value })} disabled={isImporting} /></label>
             </div>
+            {pipelineLoadError ? <div className="importWarning">Não foi possível carregar os funis: {pipelineLoadError}. A importação continuará usando o funil padrão.</div> : null}
+            {targetPipelineId && !targetStageId ? <div className="importWarning">Selecione a etapa inicial do funil para continuar.</div> : null}
+            {selectedPipeline && selectedStage ? (
+              <div className="importWarning">
+                Destino definido: <strong>{selectedPipeline.name} → {selectedStage.name}</strong>. Leads novos e duplicados mesclados serão enviados para esta etapa, e o status seguirá a configuração da etapa.
+              </div>
+            ) : null}
           </details>
         </section>
       ) : null}
@@ -438,11 +523,12 @@ export function ImportLeads({ onImportLeads, onImportFinished }: ImportLeadsProp
             </div>
           </div>
 
-          <div className="summaryBarV8 summaryBarV33">
+          <div className="summaryBarV8 summaryBarV33 importSummaryWithDestination">
             <article><span>Colunas</span><strong>{headers.length}</strong></article>
             <article><span>Linhas lidas</span><strong>{totalRows.toLocaleString("pt-BR")}</strong></article>
             <article><span>Leads válidos</span><strong>{isLargeImport ? "Durante envio" : validRowsCount.toLocaleString("pt-BR")}</strong></article>
             <article><span>Ignoradas</span><strong>{isLargeImport ? "Durante envio" : invalidRowsCount.toLocaleString("pt-BR")}</strong></article>
+            <article><span>Destino</span><strong>{selectedPipeline && selectedStage ? `${selectedPipeline.name} / ${selectedStage.name}` : "Automático"}</strong></article>
           </div>
 
           <div className="previewCardsV8">
@@ -482,7 +568,7 @@ export function ImportLeads({ onImportLeads, onImportFinished }: ImportLeadsProp
             <article><span>Linhas do arquivo</span><strong>{totalRows.toLocaleString("pt-BR")}</strong></article>
             <article><span>Lote</span><strong>{IMPORT_BATCH_SIZE.toLocaleString("pt-BR")}</strong></article>
             <article><span>Arquivo</span><strong>{fileName || "Não informado"}</strong></article>
-            <article><span>Nome</span><strong>{hasRequiredName ? "Mapeado" : "Pendente"}</strong></article>
+            <article><span>Destino</span><strong>{selectedPipeline && selectedStage ? `${selectedPipeline.name} / ${selectedStage.name}` : "Automático"}</strong></article>
           </div>
 
           {importProgress ? (

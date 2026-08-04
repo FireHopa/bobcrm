@@ -910,8 +910,15 @@ export async function deleteLeadFromServer(leadId: string): Promise<void> {
   });
 }
 
-export async function importLeadBatchToServer(leads: Lead[]): Promise<ImportLeadsBatchResult> {
-  const completed = await enqueueAndWaitForJob("/api/leads/import", { leads }, LONG_API_TIMEOUT_MS);
+export async function importLeadBatchToServer(
+  leads: Lead[],
+  target: { pipelineId?: string; stageId?: string } = {},
+): Promise<ImportLeadsBatchResult> {
+  const completed = await enqueueAndWaitForJob("/api/leads/import", {
+    leads,
+    targetPipelineId: String(target.pipelineId || ""),
+    targetStageId: String(target.stageId || ""),
+  }, LONG_API_TIMEOUT_MS);
   const rawReport = (completed.result?.report || {}) as Partial<ServerImportReport>;
   return {
     leads: [],

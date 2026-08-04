@@ -146,6 +146,45 @@ export function getImportPrimaryKey(rawLead) {
   return `id:${lead.id}`;
 }
 
+export function applyImportKanbanTarget(rawLead, target = {}, enteredAt = new Date().toISOString()) {
+  const lead = normalizeLead(rawLead);
+  const pipelineId = String(target.pipelineId || target.pipeline_id || "").trim();
+  const stageId = String(target.stageId || target.stage_id || target.pipelineStageId || "").trim();
+  if (!pipelineId || !stageId) return lead;
+
+  const stageType = String(target.stageType || target.stage_type || "open").trim().toLowerCase();
+  const statusKey = String(target.statusKey || target.status_key || "").trim();
+  let status = lead.status || "Novo lead";
+  let isLost = false;
+
+  if (stageType === "won") {
+    status = "Fechado";
+  } else if (stageType === "lost") {
+    status = "Perdido";
+    isLost = true;
+  } else if (statusKey) {
+    status = statusKey;
+    isLost = statusKey === "Perdido";
+  } else if (status === "Fechado" || status === "Perdido") {
+    status = "Novo lead";
+  }
+
+  const sameStage = lead.pipelineId === pipelineId && lead.pipelineStageId === stageId;
+  const requestedPosition = Number(target.kanbanPosition || 0);
+
+  return normalizeLead({
+    ...lead,
+    pipelineId,
+    pipelineStageId: stageId,
+    status,
+    isLost,
+    kanbanPosition: sameStage && lead.kanbanPosition
+      ? lead.kanbanPosition
+      : requestedPosition || Date.now() * 1000 + Math.floor(Math.random() * 1000),
+    pipelineEnteredAt: sameStage && lead.pipelineEnteredAt ? lead.pipelineEnteredAt : enteredAt,
+  });
+}
+
 export function buildLeadBatchUpsert(leads = [], updatedAt) {
   if (!leads.length) return { sql: "", params: [] };
   const params = leads.flatMap((lead) => leadToDbParams(lead, { updatedAt }));
@@ -215,6 +254,7 @@ export async function persistImportLeadBatch({
   ensureLeadKanbanAssignment,
   execute,
   nowIso,
+  importKanbanTarget = null,
   invalidateLeadSummaryCache = () => undefined,
 }) {
   await acquireIdentityLock(client, transactionContext);
@@ -246,6 +286,10 @@ export async function persistImportLeadBatch({
     } else {
       preparedLead = await ensureLeadKanbanAssignment(normalizedLead, client);
       report.created += 1;
+    }
+
+    if (importKanbanTarget) {
+      preparedLead = applyImportKanbanTarget(preparedLead, importKanbanTarget, nowIso());
     }
 
     finalLeadsById.set(preparedLead.id, preparedLead);

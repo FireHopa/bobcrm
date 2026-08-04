@@ -321,14 +321,17 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [activeTab, assignableUsers.length, currentUser?.id, refreshAssignableUsers]);
 
-  async function importLeads(importedLeads: Lead[], options: { chunked?: boolean } = {}): Promise<ImportDeduplicationReport | void> {
+  async function importLeads(
+    importedLeads: Lead[],
+    options: { chunked?: boolean; pipelineId?: string; stageId?: string } = {},
+  ): Promise<ImportDeduplicationReport | void> {
     if (!hasPermission(currentUser, "import_leads")) return;
     setIsSaving(true);
     setApiError("");
 
     try {
       if (options.chunked) {
-        const result = await importLeadBatchToServer(importedLeads);
+        const result = await importLeadBatchToServer(importedLeads, options);
         setServerStatus("online");
         return {
           received: result.report.received,
@@ -338,7 +341,7 @@ export default function App() {
         };
       }
 
-      const result = await importLeadBatchToServer(importedLeads);
+      const result = await importLeadBatchToServer(importedLeads, options);
       const finalReport: ImportDeduplicationReport = {
         received: result.report.received,
         created: result.report.created,

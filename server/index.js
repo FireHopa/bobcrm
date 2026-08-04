@@ -200,6 +200,7 @@ import {
   getImportPrimaryKey,
   persistImportLeadBatch,
 } from "./domains/leads/importBatch.js";
+import { buildImportAudit, buildImportJobPayload, resolveImportKanbanTarget, updateImportDedupeHash } from "./domains/leads/importKanbanTarget.js";
 import { LEAD_SEARCH_MODES, buildLeadSearchPlan, chooseLeadSearchPlan } from "./domains/leads/leadSearchSql.js";
 import { buildLeadSearchIndexBatchUpdate } from "./domains/leads/leadSearchIndex.js";
 import { buildKanbanBoardMetadataSql, buildKanbanInitialCardsSql, buildKanbanPipelinesSql, buildKanbanStagePageSql } from "./kanbanBoardSql.js";
@@ -3408,6 +3409,7 @@ async function performImportLeadsJob(job) {
     maxBytes: MAX_BODY_BYTES * 4,
   });
   const leads = Array.isArray(payload.leads) ? payload.leads : [];
+  const importKanbanTarget = await resolveImportKanbanTarget(payload, { getPipelineById: getKanbanPipelineById, getStageById: getKanbanStageById });
   const checkpoint = job.result?.checkpoint || {};
   const savedReport = job.result?.report || {};
   const checkpointIndex = Math.max(0, Math.min(leads.length, Number(checkpoint.nextIndex || 0)));
@@ -3449,7 +3451,8 @@ async function performImportLeadsJob(job) {
         transactionContext,
         seenPrimaryKeys,
         acquireIdentityLock: acquireLeadIdentityMutationLock, queryRows, mergeLeadData, resolveLeadResponsibleLink,
-        ensureLeadKanbanAssignment, execute, nowIso, invalidateLeadSummaryCache: () => invalidateLeadSummaryCache(accessContext),
+        ensureLeadKanbanAssignment, execute, nowIso, importKanbanTarget,
+        invalidateLeadSummaryCache: () => invalidateLeadSummaryCache(accessContext),
       });
 
       const newFollowUps = buildNewLeadFollowUpTaskInsert(batchResult.newLeads, currentUser, nowIso());
@@ -3498,15 +3501,15 @@ async function performImportLeadsJob(job) {
     report = outcome.nextReport;
     nextIndex = batchEnd;
   }
-
+  const importAudit = buildImportAudit(report, importKanbanTarget);
   await recordAuditOnce({
     id: `import:${job.id}`,
     entityType: "import",
     entityId: job.id,
     action: "leads_imported",
     actor: currentUser,
-    summary: `Importou ${report.received} lead(s). Criados: ${report.created}. Mesclados: ${report.merged}. Ignorados: ${report.ignoredInsideFile}.`,
-    changes: report,
+    summary: importAudit.summary,
+    changes: importAudit.changes,
   });
 
   await updateJobProgress({
@@ -3519,9 +3522,8 @@ async function performImportLeadsJob(job) {
   });
   await hotColdRuntime.refreshStats().catch(() => undefined);
   await hotColdRuntime.queueAutoArchive({ id: "system", name: "Sistema" }).catch(() => undefined);
-  return { result: { report }, expiresAt: job.expiresAt };
+  return { result: { report, importDestination: importKanbanTarget }, expiresAt: job.expiresAt };
 }
-
 async function createLeadExportPageFetcher(actor) {
   const accessContext = await getLeadAccessContext(actor);
   const scopedAccess = buildLeadAccessSql(accessContext.user, accessContext.teamMembers, "l");
@@ -4984,10 +4986,14 @@ async function handleApi(request, response, requestUrl) {
       throw error;
     }
 
-    const importHash = createHash("sha256");
-    for (const lead of leads) importHash.update(JSON.stringify(lead)).update("\n");
+    const importKanbanTarget = await resolveImportKanbanTarget(body, { getPipelineById: getKanbanPipelineById, getStageById: getKanbanStageById });
+
+    const importHash = updateImportDedupeHash(createHash("sha256"), leads, importKanbanTarget);
     const importDedupeKey = `import:${currentUser.id}:${importHash.digest("hex").slice(0, 48)}`;
-    const payloadArtifact = await writeJsonJobPayload({ storageRoot: jobArtifactSettings.storageRoot, payload: { leads } });
+    const payloadArtifact = await writeJsonJobPayload({
+      storageRoot: jobArtifactSettings.storageRoot,
+      payload: buildImportJobPayload(leads, importKanbanTarget),
+    });
     try {
       const queued = await enqueuePersistentJob({
         type: JOB_TYPES.IMPORT_LEADS, payload: { received: leads.length }, payloadStorageKey: payloadArtifact.storageKey,

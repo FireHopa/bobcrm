@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   addLeadToImportDuplicateIndex,
+  applyImportKanbanTarget,
   buildImportDuplicateLookup,
   buildLeadBatchUpsert,
   buildNewLeadFollowUpTaskInsert,
@@ -85,10 +86,48 @@ test("follow-ups de leads novos são gerados em INSERT único", () => {
   assert.ok(batch.params.includes("lead-next-contact:1"));
 });
 
+test("destino escolhido na importação define funil, etapa e status do lead", () => {
+  const targeted = applyImportKanbanTarget(lead({
+    id: "lead-target",
+    status: "Novo lead",
+    pipelineId: "pipeline-antigo",
+    pipelineStageId: "stage-antigo",
+  }), {
+    pipelineId: "pipeline-eventos",
+    stageId: "stage-inscricao",
+    stageType: "open",
+    statusKey: "Contato feito",
+    kanbanPosition: 5000,
+  }, "2026-08-03T15:00:00.000Z");
+
+  assert.equal(targeted.pipelineId, "pipeline-eventos");
+  assert.equal(targeted.pipelineStageId, "stage-inscricao");
+  assert.equal(targeted.status, "Contato feito");
+  assert.equal(targeted.isLost, false);
+  assert.equal(targeted.kanbanPosition, 5000);
+  assert.equal(targeted.pipelineEnteredAt, "2026-08-03T15:00:00.000Z");
+});
+
+test("etapa perdida escolhida na importação encerra o lead corretamente", () => {
+  const targeted = applyImportKanbanTarget(lead({ id: "lead-lost", status: "Em negociação" }), {
+    pipelineId: "pipeline-vendas",
+    stageId: "stage-perdido",
+    stageType: "lost",
+  }, "2026-08-03T15:00:00.000Z");
+
+  assert.equal(targeted.status, "Perdido");
+  assert.equal(targeted.isLost, true);
+});
+
 test("wiring da fase 7 usa batches transacionais e checkpoint atômico", () => {
   const source = readFileSync(path.join(__dirname, "index.js"), "utf8");
+  const targetSource = readFileSync(path.join(__dirname, "domains/leads/importKanbanTarget.js"), "utf8");
+  const importWiring = `${source}\n${targetSource}`;
   assert.match(source, /IMPORT_DB_BATCH_SIZE/);
   assert.match(source, /persistImportLeadBatch\(/);
+  assert.match(importWiring, /resolveImportKanbanTarget\(/);
+  assert.match(importWiring, /targetPipelineId/);
+  assert.match(importWiring, /targetStageId/);
   assert.match(source, /progress_current = \?, progress_total = \?, progress_message = \?, result_json = \?/);
   assert.doesNotMatch(source, /buildDuplicateIndex\(/);
   assert.doesNotMatch(source, /saveLeadsWithBatchDuplicateProtection\(/);

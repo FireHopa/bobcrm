@@ -7308,6 +7308,10 @@ body::after,
   gap: 8px;
 }
 
+.summaryBarV33.importSummaryWithDestination {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
 .summaryBarV33 article {
   padding: 10px 12px;
   border: 1px solid var(--v33-border);

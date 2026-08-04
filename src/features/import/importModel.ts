@@ -153,6 +153,8 @@ const customFieldMapping: Record<"immersionDates" | "hasWebsite" | "referredBy",
 
 export type ImportLeadsOptions = {
   chunked?: boolean;
+  pipelineId?: string;
+  stageId?: string;
 };
 
 export type ImportLeadsProps = {
