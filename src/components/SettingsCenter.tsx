@@ -36,6 +36,7 @@ import {
   type LeadArchiveStats,
 } from "../utils/api";
 import { useConfirmationDialog } from "./ConfirmationDialog";
+import { IntegrationDashboard } from "./IntegrationDashboard";
 
 type SettingsCenterProps = {
   currentUser: CRMUser;
@@ -57,7 +58,7 @@ type UserFormState = {
   leadAccessScope: CRMUser["leadAccessScope"];
 };
 
-type AdminTab = "summary" | "users" | "backups" | "archive" | "trash" | "duplicates" | "audit" | "system";
+type AdminTab = "summary" | "users" | "backups" | "archive" | "trash" | "duplicates" | "audit" | "integrations" | "system";
 
 
 const emptyAdminLeadOverview: AdminLeadOverview = {
@@ -437,6 +438,7 @@ export function SettingsCenter({
     ...(canRestore ? [{ id: "trash" as AdminTab, label: "Lixeira", count: deletedPagination.total }] : []),
     { id: "duplicates" as AdminTab, label: "Duplicados", count: adminOverview.duplicateGroups },
     ...(canAudit ? [{ id: "audit" as AdminTab, label: "Auditoria", count: auditEntries.length }] : []),
+    ...(canAudit ? [{ id: "integrations" as AdminTab, label: "Integrações", count: 0 }] : []),
     { id: "system" as AdminTab, label: "Sistema", count: 0 },
   ];
 
@@ -862,6 +864,10 @@ export function SettingsCenter({
             )) : <div className="operationEmptyCompact"><strong>Nenhum histórico registrado ainda.</strong></div>}
           </div>
         </section>
+      ) : null}
+
+      {activeAdminTab === "integrations" && canAudit ? (
+        <IntegrationDashboard onViewLead={onViewLead} />
       ) : null}
 
       {activeAdminTab === "system" ? (

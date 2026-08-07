@@ -62,6 +62,7 @@ export function normalizeZapePayload(body = {}) {
 
   return {
     eventKey,
+    eventType: String(body.eventType || "lead.created").trim().slice(0, 120),
     provider: "zape",
     tenantId,
     externalLeadId,
@@ -74,6 +75,10 @@ export function normalizeZapePayload(body = {}) {
       pipelineId: String(target.pipelineId || "").trim().slice(0, 64),
       stageId: String(target.stageId || "").trim().slice(0, 64),
       source: normalizeIntegrationSource(target.source),
+      profile: String(target.profile || "").trim().slice(0, 120),
+      temperature: String(target.temperature || "").trim().slice(0, 80),
+      priority: String(target.priority || "").trim().slice(0, 80),
+      commercialTreatment: String(target.commercialTreatment || "").trim().slice(0, 120),
     },
     lead: {
       name: String(lead.name || lead.nome || "").trim().slice(0, 255),

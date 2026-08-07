@@ -24,6 +24,10 @@ CREATE TABLE IF NOT EXISTS leads (
   expected_close_at VARCHAR(40) NOT NULL DEFAULT '',
   expected_close_at_dt DATETIME(3) NULL,
   estimated_budget VARCHAR(120) NOT NULL DEFAULT '',
+  expected_value DECIMAL(15,2) NOT NULL DEFAULT 0,
+  closed_value DECIMAL(15,2) NOT NULL DEFAULT 0,
+  won_at DATETIME(3) NULL,
+  lost_at DATETIME(3) NULL,
   is_lost TINYINT(1) NOT NULL DEFAULT 0,
   lost_reason VARCHAR(120) NOT NULL DEFAULT '',
   commercial_notes MEDIUMTEXT NULL,
@@ -91,6 +95,8 @@ CREATE TABLE IF NOT EXISTS leads (
   INDEX idx_leads_mapping_score_updated (deleted_at, is_lost, status, mapping_urgency_score, updated_at, id),
   INDEX idx_leads_agency_updated (deleted_at, has_external_agency, updated_at, id),
   INDEX idx_leads_expansion_updated (deleted_at, has_expansion_opportunity, updated_at, id),
+  INDEX idx_leads_won_at (won_at, pipeline_stage_id),
+  INDEX idx_leads_lost_at (lost_at, pipeline_stage_id),
   FULLTEXT INDEX ft_leads_search_text (search_text)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -340,12 +346,14 @@ CREATE TABLE IF NOT EXISTS kanban_stages (
   position INT NOT NULL DEFAULT 0,
   stage_type VARCHAR(20) NOT NULL DEFAULT 'open',
   status_key VARCHAR(80) NOT NULL DEFAULT '',
+  semantic_key VARCHAR(32) NOT NULL DEFAULT '',
   wip_limit INT NOT NULL DEFAULT 0,
   is_archived TINYINT(1) NOT NULL DEFAULT 0,
   created_at VARCHAR(40) NOT NULL DEFAULT '',
   updated_at VARCHAR(40) NOT NULL DEFAULT '',
   INDEX idx_kanban_stages_pipeline (pipeline_id, is_archived, position),
-  INDEX idx_kanban_stages_type (pipeline_id, stage_type)
+  INDEX idx_kanban_stages_type (pipeline_id, stage_type),
+  INDEX idx_kanban_stages_semantic (semantic_key, pipeline_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS integration_events (
@@ -361,7 +369,9 @@ CREATE TABLE IF NOT EXISTS integration_events (
   INDEX idx_integration_events_external (provider, tenant_id, external_lead_id),
   INDEX idx_integration_events_lead (lead_id),
   INDEX idx_integration_events_updated (updated_at),
-  INDEX idx_integration_events_status_updated (status, updated_at)
+  INDEX idx_integration_events_status_updated (status, updated_at),
+  INDEX idx_integration_events_provider_created (provider, created_at),
+  INDEX idx_integration_events_tenant_created (tenant_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS lead_external_origins (
@@ -379,4 +389,128 @@ CREATE TABLE IF NOT EXISTS lead_external_origins (
   UNIQUE KEY idx_lead_external_origin_unique (lead_id, provider, tenant_id, webhook_id),
   INDEX idx_lead_external_origin_lead (lead_id, last_seen_at),
   INDEX idx_lead_external_origin_webhook (provider, tenant_id, webhook_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS integration_health_snapshots (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  provider VARCHAR(40) NOT NULL DEFAULT 'zape',
+  health_status VARCHAR(24) NOT NULL DEFAULT 'healthy',
+  zape_online TINYINT(1) NOT NULL DEFAULT 0,
+  worker_running TINYINT(1) NOT NULL DEFAULT 0,
+  worker_processing TINYINT(1) NOT NULL DEFAULT 0,
+  queue_storage VARCHAR(24) NOT NULL DEFAULT '',
+  pending_count INT UNSIGNED NOT NULL DEFAULT 0,
+  sending_count INT UNSIGNED NOT NULL DEFAULT 0,
+  delivered_count INT UNSIGNED NOT NULL DEFAULT 0,
+  failed_count INT UNSIGNED NOT NULL DEFAULT 0,
+  oldest_pending_at VARCHAR(40) NOT NULL DEFAULT '',
+  last_delivered_at VARCHAR(40) NOT NULL DEFAULT '',
+  latency_ms INT UNSIGNED NOT NULL DEFAULT 0,
+  delivery_rate DECIMAL(7,2) NOT NULL DEFAULT 0,
+  average_delivery_ms INT UNSIGNED NOT NULL DEFAULT 0,
+  reasons_json JSON NULL,
+  payload_json JSON NULL,
+  captured_at DATETIME(3) NOT NULL,
+  INDEX idx_integration_health_provider_captured (provider, captured_at),
+  INDEX idx_integration_health_status_captured (health_status, captured_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS integration_incidents (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  provider VARCHAR(40) NOT NULL DEFAULT 'zape',
+  fingerprint VARCHAR(191) NOT NULL DEFAULT '',
+  incident_type VARCHAR(80) NOT NULL DEFAULT '',
+  severity VARCHAR(20) NOT NULL DEFAULT 'warning',
+  status VARCHAR(24) NOT NULL DEFAULT 'open',
+  tenant_id VARCHAR(120) NOT NULL DEFAULT '',
+  title VARCHAR(255) NOT NULL DEFAULT '',
+  description TEXT NULL,
+  occurrences INT UNSIGNED NOT NULL DEFAULT 1,
+  first_seen_at DATETIME(3) NOT NULL,
+  last_seen_at DATETIME(3) NOT NULL,
+  acknowledged_at DATETIME(3) NULL,
+  acknowledged_by VARCHAR(64) NOT NULL DEFAULT '',
+  resolved_at DATETIME(3) NULL,
+  resolved_by VARCHAR(64) NOT NULL DEFAULT '',
+  resolution_note TEXT NULL,
+  metadata_json JSON NULL,
+  created_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  INDEX idx_integration_incidents_provider_status (provider, status, last_seen_at),
+  INDEX idx_integration_incidents_fingerprint (provider, fingerprint, status),
+  INDEX idx_integration_incidents_tenant (tenant_id, status, last_seen_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE IF NOT EXISTS lead_whatsapp_attributions (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  lead_id VARCHAR(64) NOT NULL,
+  tenant_id VARCHAR(120) NOT NULL DEFAULT '',
+  channel VARCHAR(80) NOT NULL DEFAULT 'WhatsApp',
+  first_seen_at DATETIME(3) NOT NULL,
+  last_seen_at DATETIME(3) NOT NULL,
+  first_inbound_at DATETIME(3) NULL,
+  first_outbound_at DATETIME(3) NULL,
+  last_inbound_at DATETIME(3) NULL,
+  last_outbound_at DATETIME(3) NULL,
+  first_response_ms BIGINT UNSIGNED NULL,
+  interaction_count INT UNSIGNED NOT NULL DEFAULT 0,
+  inbound_count INT UNSIGNED NOT NULL DEFAULT 0,
+  outbound_count INT UNSIGNED NOT NULL DEFAULT 0,
+  is_first_touch TINYINT(1) NOT NULL DEFAULT 0,
+  is_last_touch TINYINT(1) NOT NULL DEFAULT 0,
+  created_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  UNIQUE KEY uq_lead_whatsapp_attribution (lead_id, tenant_id),
+  INDEX idx_whatsapp_attr_tenant_first (tenant_id, first_seen_at),
+  INDEX idx_whatsapp_attr_tenant_last (tenant_id, last_seen_at),
+  INDEX idx_whatsapp_attr_lead_touch (lead_id, is_first_touch, is_last_touch)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS lead_whatsapp_activity (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  event_key VARCHAR(255) NOT NULL,
+  lead_id VARCHAR(64) NOT NULL,
+  tenant_id VARCHAR(120) NOT NULL DEFAULT '',
+  direction VARCHAR(16) NOT NULL DEFAULT 'inbound',
+  channel VARCHAR(80) NOT NULL DEFAULT 'WhatsApp',
+  message_id VARCHAR(191) NOT NULL DEFAULT '',
+  conversation_id VARCHAR(191) NOT NULL DEFAULT '',
+  message_preview VARCHAR(500) NOT NULL DEFAULT '',
+  occurred_at DATETIME(3) NOT NULL,
+  created_at DATETIME(3) NOT NULL,
+  UNIQUE KEY uq_whatsapp_activity_event (event_key),
+  INDEX idx_whatsapp_activity_lead_time (lead_id, occurred_at),
+  INDEX idx_whatsapp_activity_tenant_time (tenant_id, occurred_at),
+  INDEX idx_whatsapp_activity_direction_time (direction, occurred_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS zape_reverse_sync_outbox (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  event_key VARCHAR(255) NOT NULL,
+  event_type VARCHAR(120) NOT NULL DEFAULT 'crm.lead.snapshot',
+  lead_id VARCHAR(64) NOT NULL,
+  tenant_id VARCHAR(120) NOT NULL DEFAULT '',
+  entity_version BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  payload_json JSON NOT NULL,
+  status VARCHAR(40) NOT NULL DEFAULT 'pending',
+  attempts INT UNSIGNED NOT NULL DEFAULT 0,
+  next_attempt_at DATETIME(3) NULL,
+  last_attempt_at DATETIME(3) NULL,
+  last_error TEXT NULL,
+  last_http_status INT NOT NULL DEFAULT 0,
+  response_json JSON NULL,
+  created_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  delivered_at DATETIME(3) NULL,
+  UNIQUE KEY uq_zape_reverse_sync_event (event_key),
+  INDEX idx_zape_reverse_sync_due (status, next_attempt_at, created_at),
+  INDEX idx_zape_reverse_sync_lead (lead_id, tenant_id, created_at),
+  INDEX idx_zape_reverse_sync_status (status, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS zape_reverse_sync_state (
+  state_key VARCHAR(120) NOT NULL PRIMARY KEY,
+  state_value JSON NULL,
+  updated_at DATETIME(3) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

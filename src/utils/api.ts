@@ -1196,3 +1196,116 @@ export async function downloadDatabaseBackup(): Promise<BackupEntry> {
   await downloadBackupById(backup.id);
   return backup;
 }
+
+export type IntegrationHealthStatus = "healthy" | "attention" | "critical";
+
+export type IntegrationDashboardEvent = {
+  id?: string; eventKey: string; eventType: string; tenantId: string; channel?: string; externalLeadId: string;
+  leadName: string; phoneMasked: string; status: string; crmStatus?: string; attempts: number; nextAttemptAt?: string;
+  lastAttemptAt?: string; lastHttpStatus: number; lastError: string; crmLeadId: string; crmAction: string;
+  responsible: string; responsibleUserId?: string; assignmentMode: string; duplicateMatched: boolean;
+  pipelineId?: string; stageId?: string; stageName?: string; stageType?: string; leadStatus?: string;
+  createdAt: string; updatedAt: string; deliveredAt?: string; deliveryTimeMs?: number | null;
+};
+
+export type IntegrationDashboardTenant = {
+  tenantId: string; total?: number; pending?: number; sending?: number; delivered?: number; failedPermanent?: number;
+  created?: number; updated?: number; reactivated?: number; lastDeliveredAt?: string; lastError?: string;
+  receivedByCrm?: number; completedByCrm?: number; withoutOwner?: number; lastReceivedAt?: string;
+};
+
+export type IntegrationIncident = {
+  id: string; fingerprint: string; type: string; severity: "warning" | "critical"; status: "open" | "acknowledged" | "resolved";
+  tenantId: string; title: string; description: string; occurrences: number; firstSeenAt: string; lastSeenAt: string;
+  acknowledgedAt: string; acknowledgedBy: string; resolvedAt: string; resolvedBy: string; resolutionNote: string;
+  metadata: Record<string, unknown>;
+};
+
+export type IntegrationCommercialMetrics = {
+  integratedLeads: number; contacted: number; meetings: number; proposals: number; won: number; lost: number; open: number;
+  conversionRate: number; meetingRate: number; proposalRate: number;
+  byTenant: Array<{ tenantId: string; leads: number; meetings: number; proposals: number; won: number; lost: number; conversionRate: number }>;
+  byOwner: Array<{ responsibleUserId: string; responsible: string; leads: number; meetings: number; proposals: number; won: number; lost: number; conversionRate: number }>;
+};
+
+export type IntegrationDashboardOverview = {
+  ok: boolean; generatedAt: string; period: { period: "24h" | "7d" | "30d" | "90d"; from: string; to: string };
+  health: { status: IntegrationHealthStatus; label: string; reasons: string[] };
+  zape: {
+    online: boolean; latencyMs: number; error: string; code: string; configured: boolean; targetBaseUrl: string;
+    worker: null | { running: boolean; processing: boolean; startedAt: string; lastCycleStartedAt: string; lastCycleCompletedAt: string; lastCycleProcessed: number; lastCycleError: string; totalProcessed: number; lastDeliveryAt: string; lastFailureAt: string; lastHttpStatus: number; lastLatencyMs: number };
+    queue: null | { counts: { total: number; pending: number; sending: number; delivered: number; failedPermanent: number }; oldestPendingAt: string; lastDeliveredAt: string; pendingAgeMinutes: number };
+    storage: null | { configuredMode: string; activeMode: string; mysqlConnected: boolean; fallbackReason: string; migration?: { attempted: boolean; imported: number; skipped: number; archivedTo: string; error: string } };
+  };
+  reverseSync: { enabled: boolean; total: number; pending: number; sending: number; delivered: number; failed: number; lastDeliveredAt: string; lastUpdatedAt: string };
+  summary: { detected: number; delivered: number; pending: number; failed: number; deliveryRate: number; averageDeliveryMs: number; created: number; updated: number; reactivated: number; duplicatesAvoided: number; assigned: number; withoutOwner: number };
+  commercial: IntegrationCommercialMetrics;
+  trends: {
+    queue: Array<{ date: string; detected: number; delivered: number; failed: number; pending: number; averageDeliveryMs: number }>;
+    health: Array<{ bucket: string; pending_avg: number; pending_max: number; failed_avg: number; failed_max: number; latency_avg: number; delivery_rate_avg: number; critical_samples: number; attention_samples: number; samples: number }>;
+  };
+  incidents: IntegrationIncident[];
+  tenants: IntegrationDashboardTenant[]; events: IntegrationDashboardEvent[];
+  pagination: { total: number; limit: number; offset: number; hasMore: boolean };
+  filters: { tenants: string[]; eventTypes: string[] };
+};
+
+export type IntegrationEventDetail = {
+  ok: boolean; eventKey: string;
+  zape: Record<string, unknown> & { attemptHistory?: Array<{ attempt: number; startedAt: string; completedAt: string; latencyMs: number; httpStatus: number; outcome: string; error: string }> };
+  crm: null | { status: string; action: string; leadId: string; lead: { name: string; phoneMasked: string; email: string; company: string; status: string; responsible: string; responsibleUserId: string; pipelineId: string; stageId: string; stageName: string; stageType: string }; response: Record<string, unknown>; createdAt: string; updatedAt: string };
+  origins: Array<Record<string, unknown>>; audit: Array<Record<string, unknown>>; tasks: Array<Record<string, unknown>>;
+};
+
+export type IntegrationDashboardFilters = { period?: "24h" | "7d" | "30d" | "90d"; status?: string; tenantId?: string; eventType?: string; search?: string; limit?: number; offset?: number };
+
+function integrationFilterParams(filters: IntegrationDashboardFilters = {}): URLSearchParams {
+  const params = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => { if (value !== undefined && value !== null && String(value).trim() !== "") params.set(key, String(value)); });
+  return params;
+}
+
+export async function fetchIntegrationDashboardFromServer(filters: IntegrationDashboardFilters = {}): Promise<IntegrationDashboardOverview> {
+  return requestApi<IntegrationDashboardOverview>(`/api/admin/integrations/zape/overview?${integrationFilterParams(filters).toString()}`, { timeoutMs: 30000 });
+}
+
+export async function fetchIntegrationEventDetailFromServer(eventKey: string): Promise<IntegrationEventDetail> {
+  return requestApi<IntegrationEventDetail>(`/api/admin/integrations/zape/events/${encodeURIComponent(eventKey)}`, { timeoutMs: 30000 });
+}
+
+export async function downloadIntegrationEventsCsv(filters: IntegrationDashboardFilters = {}): Promise<void> {
+  await downloadFile(`/api/admin/integrations/zape/export.csv?${integrationFilterParams(filters).toString()}`, `integracao-zape-${new Date().toISOString().slice(0, 10)}.csv`);
+}
+
+export async function retryIntegrationEventsOnServer(payload: { eventKey?: string; tenantId?: string }): Promise<{ ok: boolean; retried: number }> {
+  return requestApi<{ ok: boolean; retried: number }>("/api/admin/integrations/zape/retry", { method: "POST", body: JSON.stringify(payload), timeoutMs: 30000 });
+}
+
+export async function updateIntegrationIncidentOnServer(id: string, action: "acknowledge" | "resolve" | "reopen", note = ""): Promise<{ ok: boolean; incident: IntegrationIncident }> {
+  return requestApi<{ ok: boolean; incident: IntegrationIncident }>(`/api/admin/integrations/zape/incidents/${encodeURIComponent(id)}/${action}`, { method: "POST", body: JSON.stringify({ note }), timeoutMs: 30000 });
+}
+
+
+
+export type WhatsappAccountConversionRow = {
+  tenantId: string; leads: number; inboundMessages: number; outboundMessages: number; contacted: number; qualified: number;
+  meetings: number; proposals: number; won: number; lost: number; revenue: number; conversionRate: number; qualificationRate: number;
+  meetingRate: number; averageFirstResponseMs: number; within5Rate: number; within15Rate: number;
+};
+export type WhatsappAccountConversionReport = {
+  ok: boolean; period: { period: "24h" | "7d" | "30d" | "90d"; from: string; to: string };
+  attribution: "first_touch" | "last_touch" | "assisted"; view: "acquisition" | "production";
+  totals: { leads: number; inboundMessages: number; outboundMessages: number; contacted: number; qualified: number; meetings: number; proposals: number; won: number; lost: number; revenue: number; conversionRate: number; ticketAverage: number };
+  byTenant: WhatsappAccountConversionRow[];
+  byOwner: Array<{ tenantId: string; responsibleUserId: string; responsible: string; leads: number; won: number; revenue: number; conversionRate: number }>;
+  trend: Array<{ date: string; leads: number; won: number; revenue: number }>;
+};
+
+export async function fetchWhatsappAccountConversionReport(filters: { period?: string; attribution?: string; view?: string } = {}): Promise<WhatsappAccountConversionReport> {
+  const params = new URLSearchParams(); Object.entries(filters).forEach(([key,value]) => { if (value) params.set(key,String(value)); });
+  return requestApi<WhatsappAccountConversionReport>(`/api/admin/integrations/zape/conversion?${params.toString()}`, { timeoutMs: 30000 });
+}
+export async function downloadWhatsappAccountConversionCsv(filters: { period?: string; attribution?: string; view?: string } = {}): Promise<void> {
+  const params = new URLSearchParams(); Object.entries(filters).forEach(([key,value]) => { if (value) params.set(key,String(value)); });
+  await downloadFile(`/api/admin/integrations/zape/conversion.csv?${params.toString()}`, `conversao-whatsapp-${new Date().toISOString().slice(0,10)}.csv`);
+}

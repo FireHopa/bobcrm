@@ -11,6 +11,11 @@ import { createTtlCache } from "./runtimeCache.js";
 import { decodeLeadCursor, encodeLeadCursor, leadCursorFilterKey } from "./leadCursor.js";
 import { buildLeadOwnerOptionsSql } from "./leadFilterOptionsSql.js";
 import { normalizeZapePayload, phoneKeyVariants, safeSecretEquals } from "./zapeIntegration.js";
+import { buildIntegrationEventsCsv, getIntegrationDashboardOverview, getIntegrationEventDetail, retryIntegrationEvents } from "./integrationDashboard.js";
+import { createIntegrationHealthCollector, updateIntegrationIncident } from "./integrationObservability.js";
+import { createZapeBidirectionalSyncRuntime } from "./zapeBidirectionalSync.js";
+import { ensureWhatsappAttribution, getWhatsappAccountConversionReport, recordWhatsappActivity, resolveWhatsappReportRange, whatsappConversionCsv } from "./whatsappAttribution.js";
+import { getAssignmentCandidatesForTenant, matchAssignmentUsers, nextRoundRobinUser, parseAssignmentCandidates, parseTenantAssignmentMap } from "./zapeAssignment.js";
 import { description as leadScopeMigrationDescription, up as runLeadScopeMigration, version as leadScopeMigrationVersion } from "./migrations/20260706_02_lead_scope_teams.js";
 import { description as commercialRolesMigrationDescription, up as runCommercialRolesMigration, version as commercialRolesMigrationVersion } from "./migrations/20260706_03_commercial_roles_notes.js";
 import { description as tasksTodayMigrationDescription, up as runTasksTodayMigration, version as tasksTodayMigrationVersion } from "./migrations/20260706_04_tasks_today.js";
@@ -43,6 +48,9 @@ import { description as scalabilityPhase2MigrationDescription, up as runScalabil
 import { description as integrityConcurrencyPhase3MigrationDescription, up as runIntegrityConcurrencyPhase3Migration, version as integrityConcurrencyPhase3MigrationVersion } from "./migrations/20260727_15_integrity_concurrency_phase3.js";
 import { description as observabilityMaintenancePhase4MigrationDescription, up as runObservabilityMaintenancePhase4Migration, version as observabilityMaintenancePhase4MigrationVersion } from "./migrations/20260727_16_observability_maintenance_phase4.js";
 import { description as hotColdPhase5MigrationDescription, up as runHotColdPhase5Migration, version as hotColdPhase5MigrationVersion } from "./migrations/20260729_17_hot_cold_leads_phase5.js";
+import { description as zapePhase2AssignmentMigrationDescription, up as runZapePhase2AssignmentMigration, version as zapePhase2AssignmentMigrationVersion } from "./migrations/20260804_18_zape_phase2_assignment.js";
+import { description as integrationObservabilityMigrationDescription, up as runIntegrationObservabilityMigration, version as integrationObservabilityMigrationVersion } from "./migrations/20260804_19_integration_observability_phase4.js";
+import { description as bidirectionalSyncMigrationDescription, up as runBidirectionalSyncMigration, version as bidirectionalSyncMigrationVersion } from "./migrations/20260806_20_bidirectional_sync_attribution_phase5.js";
 import {
   createEncryptedMysqlBackup,
   removeBackupArtifact,
@@ -268,6 +276,19 @@ const SEARCH_INDEX_REBUILD_BATCH_SIZE = readBoundedEnvironmentInteger("SEARCH_IN
 const IMPORT_DB_BATCH_SIZE = readBoundedEnvironmentInteger("IMPORT_DB_BATCH_SIZE", 500, 100, 1000);
 const SEARCH_INDEX_REBUILD_ON_START = process.env.SEARCH_INDEX_REBUILD_ON_START === "1";
 const ZAPE_INTEGRATION_KEY = String(process.env.ZAPE_INTEGRATION_KEY || "").trim();
+const ZAPE_MONITOR_URL = String(process.env.ZAPE_MONITOR_URL || "").trim();
+const ZAPE_MONITOR_KEY = String(process.env.ZAPE_MONITOR_KEY || "").trim();
+const ZAPE_MONITOR_TIMEOUT_MS = readBoundedEnvironmentInteger("ZAPE_MONITOR_TIMEOUT_MS", 10000, 1000, 60000);
+const ZAPE_WHATSAPP_IMMERSION_PROFILE = String(process.env.ZAPE_WHATSAPP_IMMERSION_PROFILE || "whatsapp_immersion_like").trim();
+const ZAPE_WHATSAPP_IMMERSION_PIPELINE_ID = String(process.env.ZAPE_WHATSAPP_IMMERSION_PIPELINE_ID || "").trim();
+const ZAPE_WHATSAPP_IMMERSION_STAGE_ID = String(process.env.ZAPE_WHATSAPP_IMMERSION_STAGE_ID || "").trim();
+const ZAPE_WHATSAPP_IMMERSION_TEMPERATURE = String(process.env.ZAPE_WHATSAPP_IMMERSION_TEMPERATURE || "Quente").trim();
+const ZAPE_WHATSAPP_ASSIGNMENT_MODE = String(process.env.ZAPE_WHATSAPP_ASSIGNMENT_MODE || "none").trim().toLowerCase();
+const ZAPE_WHATSAPP_ASSIGNMENT_CANDIDATES = parseAssignmentCandidates(process.env.ZAPE_WHATSAPP_ASSIGNMENT_CANDIDATES || "");
+const ZAPE_WHATSAPP_ASSIGNMENT_TENANT_MAP = parseTenantAssignmentMap(process.env.ZAPE_WHATSAPP_ASSIGNMENT_TENANT_MAP || "");
+const ZAPE_WHATSAPP_REACTIVATION_MOVE_EXISTING = process.env.ZAPE_WHATSAPP_REACTIVATION_MOVE_EXISTING === "1";
+const ZAPE_WHATSAPP_REACTIVATION_PIPELINE_ID = String(process.env.ZAPE_WHATSAPP_REACTIVATION_PIPELINE_ID || "").trim();
+const ZAPE_WHATSAPP_REACTIVATION_STAGE_ID = String(process.env.ZAPE_WHATSAPP_REACTIVATION_STAGE_ID || "").trim();
 const INTEGRATION_MAX_BODY_BYTES = readBoundedEnvironmentInteger("INTEGRATION_MAX_BODY_BYTES", 512 * 1024, 16 * 1024, 2 * 1024 * 1024);
 const MYSQL_CONNECT_TIMEOUT_MS = readBoundedEnvironmentInteger("MYSQL_CONNECT_TIMEOUT_MS", 10000, 1000, 60000);
 const MYSQL_RETRY_ATTEMPTS = readBoundedEnvironmentInteger("MYSQL_RETRY_ATTEMPTS", 4, 1, 10);
@@ -340,6 +361,8 @@ let securityCleanupTimer = null;
 let jobCleanupTimer = null;
 let commercialProfileReadinessTimer = null;
 let datetimeColumnsReadinessTimer = null;
+let integrationHealthCollector = null;
+let zapeBidirectionalSyncRuntime = null;
 let operationalRuntime = null;
 let databaseReady = false;
 let isShuttingDown = false;
@@ -611,6 +634,12 @@ async function runSchemaMigrations() {
     () => runObservabilityMaintenancePhase4Migration({ execute, addIndexIfMissing }));
   await runVersionedMigration(hotColdPhase5MigrationVersion, hotColdPhase5MigrationDescription,
     () => runHotColdPhase5Migration({ execute, addColumnIfMissing, addIndexIfMissing }));
+  await runVersionedMigration(zapePhase2AssignmentMigrationVersion, zapePhase2AssignmentMigrationDescription,
+    () => runZapePhase2AssignmentMigration({ execute }));
+  await runVersionedMigration(integrationObservabilityMigrationVersion, integrationObservabilityMigrationDescription,
+    () => runIntegrationObservabilityMigration({ execute, addIndexIfMissing }));
+  await runVersionedMigration(bidirectionalSyncMigrationVersion, bidirectionalSyncMigrationDescription,
+    () => runBidirectionalSyncMigration({ execute, addColumnIfMissing, addIndexIfMissing }));
   try {
     await addIndexIfMissing("leads", "ft_leads_search_text", "FULLTEXT INDEX ft_leads_search_text (search_text)");
     leadSearchFullTextEnabled = true;
@@ -2179,6 +2208,21 @@ async function getZapeIntegrationCatalog(client = pool) {
   return {
     configured: Boolean(ZAPE_INTEGRATION_KEY),
     defaultPipelineId: pipelines.find((pipeline) => pipeline.isDefault)?.id || pipelines[0]?.id || "",
+    profiles: [{
+      id: ZAPE_WHATSAPP_IMMERSION_PROFILE,
+      name: "WhatsApp com tratamento de imersão",
+      pipelineId: ZAPE_WHATSAPP_IMMERSION_PIPELINE_ID,
+      stageId: ZAPE_WHATSAPP_IMMERSION_STAGE_ID,
+      temperature: ZAPE_WHATSAPP_IMMERSION_TEMPERATURE,
+      assignmentMode: ZAPE_WHATSAPP_ASSIGNMENT_MODE,
+      assignmentConfigured: Boolean(ZAPE_WHATSAPP_ASSIGNMENT_CANDIDATES.length || Object.keys(ZAPE_WHATSAPP_ASSIGNMENT_TENANT_MAP).length),
+      reactivation: {
+        enabled: true,
+        moveExisting: ZAPE_WHATSAPP_REACTIVATION_MOVE_EXISTING,
+        pipelineId: ZAPE_WHATSAPP_REACTIVATION_PIPELINE_ID,
+        stageId: ZAPE_WHATSAPP_REACTIVATION_STAGE_ID,
+      },
+    }],
     pipelines: pipelines.map((pipeline) => ({
       id: pipeline.id,
       name: pipeline.name,
@@ -2194,8 +2238,27 @@ async function getZapeIntegrationCatalog(client = pool) {
 }
 
 async function resolveZapeKanbanTarget(target, client = pool) {
-  const requestedPipelineId = String(target?.pipelineId || "");
-  const requestedStageId = String(target?.stageId || "");
+  const profile = String(target?.profile || "").trim();
+  const profileUsesImmersionRule = profile && profile === ZAPE_WHATSAPP_IMMERSION_PROFILE;
+  const explicitPipelineId = String(target?.pipelineId || "").trim();
+  const explicitStageId = String(target?.stageId || "").trim();
+
+  if (Boolean(explicitPipelineId) !== Boolean(explicitStageId)) {
+    const error = new Error("A integração exige pipeline e etapa explícitos configurados em conjunto.");
+    error.statusCode = 422;
+    throw error;
+  }
+
+  const requestedPipelineId = explicitPipelineId
+    || (profileUsesImmersionRule ? ZAPE_WHATSAPP_IMMERSION_PIPELINE_ID : "");
+  const requestedStageId = explicitStageId
+    || (profileUsesImmersionRule ? ZAPE_WHATSAPP_IMMERSION_STAGE_ID : "");
+
+  if (Boolean(requestedPipelineId) !== Boolean(requestedStageId)) {
+    const error = new Error("O perfil de integração exige pipeline e etapa configurados em conjunto.");
+    error.statusCode = 422;
+    throw error;
+  }
 
   if (requestedPipelineId && requestedStageId) {
     const stage = await statementFirstRow(
@@ -2227,13 +2290,107 @@ async function resolveZapeKanbanTarget(target, client = pool) {
   };
 }
 
+function isZapeReactivationPayload(payload) {
+  return payload?.eventType === "whatsapp.inbound.reactivated"
+    || payload?.target?.commercialTreatment === "reactivation";
+}
+
+async function resolveZapeReactivationTarget(client = pool) {
+  if (!ZAPE_WHATSAPP_REACTIVATION_MOVE_EXISTING) return null;
+  if (Boolean(ZAPE_WHATSAPP_REACTIVATION_PIPELINE_ID) !== Boolean(ZAPE_WHATSAPP_REACTIVATION_STAGE_ID)) {
+    const error = new Error("Configure pipeline e etapa de reativação em conjunto.");
+    error.statusCode = 503;
+    throw error;
+  }
+  if (!ZAPE_WHATSAPP_REACTIVATION_PIPELINE_ID) return null;
+  const stage = await statementFirstRow(
+    `SELECT s.id, s.pipeline_id, s.stage_type, s.status_key
+     FROM kanban_stages s
+     INNER JOIN kanban_pipelines p ON p.id = s.pipeline_id
+     WHERE s.id = ? AND s.pipeline_id = ? AND s.is_archived = 0 AND p.is_archived = 0
+     LIMIT 1`,
+    [ZAPE_WHATSAPP_REACTIVATION_STAGE_ID, ZAPE_WHATSAPP_REACTIVATION_PIPELINE_ID],
+    client,
+  );
+  if (!stage) {
+    const error = new Error("Funil ou etapa de reativação configurados não existem mais.");
+    error.statusCode = 503;
+    throw error;
+  }
+  return {
+    pipelineId: stage.pipeline_id,
+    stageId: stage.id,
+    stageType: stage.stage_type,
+    statusKey: stage.status_key || "Novo lead",
+  };
+}
+
+async function resolveZapeLeadAssignment(tenantId, client = pool) {
+  if (ZAPE_WHATSAPP_ASSIGNMENT_MODE === "none" || ZAPE_WHATSAPP_ASSIGNMENT_MODE === "off") return null;
+  if (!["round_robin", "fixed"].includes(ZAPE_WHATSAPP_ASSIGNMENT_MODE)) {
+    const error = new Error(`Modo de distribuição Zape inválido: ${ZAPE_WHATSAPP_ASSIGNMENT_MODE}.`);
+    error.statusCode = 503;
+    throw error;
+  }
+
+  const identifiers = getAssignmentCandidatesForTenant({
+    tenantId,
+    globalCandidates: ZAPE_WHATSAPP_ASSIGNMENT_CANDIDATES,
+    tenantMap: ZAPE_WHATSAPP_ASSIGNMENT_TENANT_MAP,
+  });
+  if (!identifiers.length) {
+    const error = new Error(`Nenhum SDR foi configurado para distribuir leads da conta ${tenantId}.`);
+    error.statusCode = 503;
+    throw error;
+  }
+
+  const rows = await queryRows(
+    "SELECT id, name, email, role, is_active FROM users WHERE is_active = 1 AND role IN ('pre_venda', 'consultor_vendas', 'gerente', 'vendedor') ORDER BY name ASC, id ASC",
+    [],
+    client,
+  );
+  const candidates = matchAssignmentUsers(rows, identifiers);
+  if (!candidates.length) {
+    const error = new Error(`Nenhum SDR ativo do CRM corresponde à configuração da conta ${tenantId}.`);
+    error.statusCode = 503;
+    throw error;
+  }
+
+  if (ZAPE_WHATSAPP_ASSIGNMENT_MODE === "fixed") return candidates[0];
+
+  const scopeKey = `zape:whatsapp:${String(tenantId || "admin").toLowerCase()}`;
+  await execute(
+    `INSERT INTO integration_round_robin_state (scope_key, last_user_id, rotation_count, updated_at)
+     VALUES (?, '', 0, ?)
+     ON DUPLICATE KEY UPDATE scope_key = scope_key`,
+    [scopeKey, nowIso()],
+    client,
+  );
+  const state = await statementFirstRow(
+    "SELECT * FROM integration_round_robin_state WHERE scope_key = ? LIMIT 1 FOR UPDATE",
+    [scopeKey],
+    client,
+  );
+  const selected = nextRoundRobinUser(candidates, state?.last_user_id || "");
+  await execute(
+    "UPDATE integration_round_robin_state SET last_user_id = ?, rotation_count = rotation_count + 1, updated_at = ? WHERE scope_key = ?",
+    [selected.id, nowIso(), scopeKey],
+    client,
+  );
+  return selected;
+}
+
 async function upsertLeadExternalOrigin(leadId, payload, client = pool) {
   const at = nowIso();
   const metadata = {
     eventKey: payload.eventKey,
+    eventType: payload.eventType,
     externalLeadId: payload.externalLeadId,
     payloadType: payload.webhook.payloadType,
     tags: payload.lead.tags,
+    integrationProfile: payload.target.profile,
+    commercialTreatment: payload.target.commercialTreatment,
+    priority: payload.target.priority,
     ...payload.metadata,
   };
 
@@ -2264,6 +2421,60 @@ async function upsertLeadExternalOrigin(leadId, payload, client = pool) {
   );
 }
 
+
+function isZapeConversationEvent(payload) {
+  return ["zape.message.received", "zape.message.sent", "zape.conversation.opened", "zape.conversation.closed", "zape.conversation.transferred"].includes(String(payload?.eventType || ""));
+}
+
+async function resolveIntegratedLeadForZapeEvent(payload, client) {
+  const byExternal = await statementFirstRow(
+    `SELECT l.* FROM integration_events ie JOIN leads l ON l.id=ie.lead_id
+     WHERE ie.provider='zape' AND ie.tenant_id=? AND ie.external_lead_id=? AND ie.lead_id<>''
+       AND l.deleted_at='' ORDER BY ie.created_at DESC LIMIT 1`,
+    [payload.tenantId, payload.externalLeadId], client,
+  ).catch(() => null);
+  if (byExternal) return rowToLead(byExternal);
+  const candidate = normalizeLead({
+    id: randomUUID(), name: payload.lead.name, email: payload.lead.email, phone: payload.lead.phone,
+    company: payload.lead.company, website: payload.lead.website, source: payload.target.source,
+  });
+  return findDuplicateLead(candidate, client);
+}
+
+async function processZapeConversationEvent(payload, client) {
+  const lead = await resolveIntegratedLeadForZapeEvent(payload, client);
+  if (!lead) {
+    const error = new Error("O evento de conversa chegou antes de o lead ser vinculado ao BobCRM.");
+    error.statusCode = 409;
+    error.code = "ZAPE_LEAD_NOT_LINKED";
+    throw error;
+  }
+  const direction = payload.eventType === "zape.message.sent" ? "outbound" : "inbound";
+  const occurredAt = String(payload.metadata?.occurredAt || payload.metadata?.messageAt || payload.metadata?.lastMessageAt || nowIso());
+  await recordWhatsappActivity({
+    execute: (sql, params) => execute(sql, params, client),
+    queryRows: (sql, params) => queryRows(sql, params, client),
+    eventKey: payload.eventKey, leadId: lead.id, tenantId: payload.tenantId, direction,
+    channel: String(payload.metadata?.channel || payload.metadata?.transport || "WhatsApp"),
+    messageId: String(payload.metadata?.messageId || ""),
+    conversationId: String(payload.metadata?.conversationId || payload.metadata?.chatId || ""),
+    preview: String(payload.metadata?.messagePreview || payload.metadata?.textPreview || ""), occurredAt,
+  });
+  if (direction === "inbound") {
+    await execute("UPDATE leads SET last_contact_at=? WHERE id=?", [occurredAt, lead.id], client);
+  } else {
+    await execute("UPDATE leads SET contact_made_at=IF(contact_made_at='',?,contact_made_at),last_contact_at=? WHERE id=?", [occurredAt, occurredAt, lead.id], client);
+  }
+  const responsePayload = {
+    ok: true, action: direction === "inbound" ? "message_received" : "message_sent", leadId: lead.id,
+    eventKey: payload.eventKey, eventType: payload.eventType, tenantId: payload.tenantId,
+    direction, occurredAt,
+  };
+  await execute("UPDATE integration_events SET lead_id=?,status='completed',response_json=?,updated_at=? WHERE event_key=?",
+    [lead.id, JSON.stringify(responsePayload), nowIso(), payload.eventKey], client);
+  return responsePayload;
+}
+
 async function processZapeLeadIntegration(body, client = pool, transactionContext = null) {
   await acquireLeadIdentityMutationLock(client, transactionContext);
   const payload = normalizeZapePayload(body);
@@ -2289,7 +2500,20 @@ async function processZapeLeadIntegration(body, client = pool, transactionContex
     client,
   );
 
+  if (isZapeConversationEvent(payload)) {
+    return processZapeConversationEvent(payload, client);
+  }
+
   const target = await resolveZapeKanbanTarget(payload.target, client);
+  const isReactivation = isZapeReactivationPayload(payload);
+  const immersionLike = payload.target.profile === ZAPE_WHATSAPP_IMMERSION_PROFILE
+    || payload.target.commercialTreatment === "immersion_like";
+  const inactivityDays = Number(payload.metadata?.inactivityDays || 0);
+  const commercialNotes = isReactivation
+    ? `Lead reativado pelo WhatsApp da conta ${payload.tenantId}${inactivityDays ? ` após ${inactivityDays} dia(s) sem interação` : ""}.`
+    : immersionLike
+      ? `Entrada automática pelo WhatsApp da conta ${payload.tenantId}. Tratamento comercial equivalente a lead de imersão.`
+      : "";
   const incomingLead = normalizeLead({
     id: randomUUID(),
     name: payload.lead.name,
@@ -2300,6 +2524,9 @@ async function processZapeLeadIntegration(body, client = pool, transactionContex
     advertisesOnGoogle: payload.lead.advertisesOnGoogle || normalizeBooleanText(payload.lead.advertisesOnGoogleRaw),
     status: "Novo lead",
     source: payload.target.source,
+    lastContactAt: String(payload.metadata?.lastMessageAt || payload.metadata?.firstMessageAt || at),
+    temperature: payload.target.temperature || (immersionLike || isReactivation ? ZAPE_WHATSAPP_IMMERSION_TEMPERATURE : ""),
+    commercialNotes,
     createdAt: payload.lead.createdAt || at,
     updatedAt: at,
     pipelineId: target.pipelineId,
@@ -2308,14 +2535,46 @@ async function processZapeLeadIntegration(body, client = pool, transactionContex
   });
 
   const existingLead = await findDuplicateLead(incomingLead, client);
+  const shouldAssign = !existingLead || (!existingLead.responsibleUserId && !String(existingLead.responsible || "").trim());
+  const assignment = shouldAssign ? await resolveZapeLeadAssignment(payload.tenantId, client) : null;
+  if (assignment) {
+    incomingLead.responsibleUserId = assignment.id;
+    incomingLead.responsible = assignment.name || assignment.email || assignment.id;
+  }
+
   let savedLead;
   let action;
   let changes;
 
   if (existingLead) {
-    const mergedLead = mergeLeadData(existingLead, { ...incomingLead, id: existingLead.id });
+    let mergedLead = mergeLeadData(existingLead, { ...incomingLead, id: existingLead.id });
+    if (isReactivation) {
+      mergedLead = normalizeLead({
+        ...mergedLead,
+        lastContactAt: incomingLead.lastContactAt,
+        temperature: incomingLead.temperature || mergedLead.temperature,
+        updatedAt: at,
+      });
+      const reactivationTarget = await resolveZapeReactivationTarget(client);
+      if (reactivationTarget) {
+        const stageStatus = getStageStatusUpdate({
+          stage_type: reactivationTarget.stageType,
+          status_key: reactivationTarget.statusKey,
+        }, mergedLead.status);
+        mergedLead = normalizeLead({
+          ...mergedLead,
+          pipelineId: reactivationTarget.pipelineId,
+          pipelineStageId: reactivationTarget.stageId,
+          pipelineEnteredAt: at,
+          kanbanPosition: 0,
+          status: stageStatus.status,
+          isLost: Boolean(stageStatus.isLost),
+          lostReason: stageStatus.isLost ? mergedLead.lostReason : "",
+        });
+      }
+    }
     savedLead = await saveLead(mergedLead, client);
-    action = "updated";
+    action = isReactivation ? "reactivated" : "updated";
     changes = {
       ...diffLeads(existingLead, savedLead),
       externalOrigin: {
@@ -2339,17 +2598,32 @@ async function processZapeLeadIntegration(body, client = pool, transactionContex
   }
 
   await upsertLeadExternalOrigin(savedLead.id, payload, client);
+  await ensureWhatsappAttribution({
+    execute: (sql, params) => execute(sql, params, client),
+    leadId: savedLead.id,
+    tenantId: payload.tenantId,
+    channel: String(payload.metadata?.channel || payload.metadata?.transport || "WhatsApp"),
+    occurredAt: String(payload.metadata?.firstMessageAt || payload.metadata?.lastMessageAt || at),
+  });
 
   const actor = { id: "integration-zape", name: "Integração WhatsApp" };
   const leadLabel = savedLead.name || savedLead.phone || savedLead.email || savedLead.id;
+  const auditAction = action === "created"
+    ? "lead_created_by_whatsapp_integration"
+    : action === "reactivated"
+      ? "lead_reactivated_by_whatsapp"
+      : "lead_external_origin_received";
+  const auditSummary = action === "created"
+    ? `Lead criado pela integração WhatsApp: ${leadLabel}`
+    : action === "reactivated"
+      ? `Lead reativado pelo WhatsApp: ${leadLabel}`
+      : `Lead existente recebeu nova origem via WhatsApp: ${leadLabel}`;
   await recordAudit({
     entityType: "lead",
     entityId: savedLead.id,
-    action: action === "created" ? "lead_created_by_whatsapp_integration" : "lead_external_origin_received",
+    action: auditAction,
     actor,
-    summary: action === "created"
-      ? `Lead criado pela integração WhatsApp: ${leadLabel}`
-      : `Lead existente recebeu nova origem via WhatsApp: ${leadLabel}`,
+    summary: auditSummary,
     changes,
   }, client);
 
@@ -2360,7 +2634,14 @@ async function processZapeLeadIntegration(body, client = pool, transactionContex
     duplicateMatched: Boolean(existingLead),
     pipelineId: savedLead.pipelineId || "",
     stageId: savedLead.pipelineStageId || "",
+    responsibleUserId: savedLead.responsibleUserId || "",
+    responsible: savedLead.responsible || "",
+    assignmentMode: assignment ? ZAPE_WHATSAPP_ASSIGNMENT_MODE : "preserved",
     eventKey: payload.eventKey,
+    eventType: payload.eventType,
+    integrationProfile: payload.target.profile,
+    commercialTreatment: payload.target.commercialTreatment,
+    inactivityDays: isReactivation ? inactivityDays : 0,
   };
 
   await execute(
@@ -3872,6 +4153,67 @@ async function handleApi(request, response, requestUrl) {
     return;
   }
 
+  if (pathname === "/api/admin/integrations/zape/overview" && method === "GET") {
+    requirePermission(currentUser, "read_audit");
+    const query = Object.fromEntries(requestUrl.searchParams.entries());
+    const overview = await getIntegrationDashboardOverview({
+      queryRows,
+      monitorUrl: ZAPE_MONITOR_URL,
+      monitorKey: ZAPE_MONITOR_KEY,
+      timeoutMs: ZAPE_MONITOR_TIMEOUT_MS,
+      query,
+    });
+    sendJson(response, 200, overview);
+    return;
+  }
+
+  if (pathname === "/api/admin/integrations/zape/conversion" && method === "GET") {
+    requirePermission(currentUser, "read_audit");
+    const query = Object.fromEntries(requestUrl.searchParams.entries());
+    const range = resolveWhatsappReportRange(query.period);
+    const report = await getWhatsappAccountConversionReport({
+      queryRows,
+      from: range.from,
+      to: range.to,
+      attribution: String(query.attribution || "first_touch"),
+      view: String(query.view || "acquisition"),
+    });
+    sendJson(response, 200, { ok: true, period: range, ...report });
+    return;
+  }
+
+  if (pathname === "/api/admin/integrations/zape/conversion.csv" && method === "GET") {
+    requirePermission(currentUser, "read_audit");
+    const query = Object.fromEntries(requestUrl.searchParams.entries());
+    const range = resolveWhatsappReportRange(query.period);
+    const report = await getWhatsappAccountConversionReport({ queryRows, from: range.from, to: range.to, attribution: String(query.attribution || "first_touch"), view: String(query.view || "acquisition") });
+    const csv = whatsappConversionCsv(report);
+    response.writeHead(200, { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="conversao-whatsapp-${range.period}.csv"`, "Cache-Control": "no-store" });
+    response.end(csv);
+    return;
+  }
+
+  const integrationEventDetailMatch = pathname.match(/^\/api\/admin\/integrations\/zape\/events\/(.+)$/);
+  if (integrationEventDetailMatch && method === "GET") {
+    requirePermission(currentUser, "read_audit");
+    const eventKey = decodeURIComponent(integrationEventDetailMatch[1]);
+    sendJson(response, 200, await getIntegrationEventDetail({ queryRows, monitorUrl: ZAPE_MONITOR_URL, monitorKey: ZAPE_MONITOR_KEY, timeoutMs: ZAPE_MONITOR_TIMEOUT_MS, eventKey }));
+    return;
+  }
+
+  if (pathname === "/api/admin/integrations/zape/export.csv" && method === "GET") {
+    requirePermission(currentUser, "read_audit");
+    const query = Object.fromEntries(requestUrl.searchParams.entries());
+    const csv = await buildIntegrationEventsCsv({ queryRows, monitorUrl: ZAPE_MONITOR_URL, monitorKey: ZAPE_MONITOR_KEY, timeoutMs: ZAPE_MONITOR_TIMEOUT_MS, query });
+    response.writeHead(200, {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename="integracao-zape-${new Date().toISOString().slice(0,10)}.csv"`,
+      "Cache-Control": "no-store",
+    });
+    response.end(`\uFEFF${csv}`);
+    return;
+  }
+
   assertCsrfToken({
     method,
     providedToken: request.headers["x-csrf-token"],
@@ -3920,6 +4262,45 @@ async function handleApi(request, response, requestUrl) {
     }
     assertJobAccess(jobRow, currentUser);
     sendJson(response, 200, publicJob(jobRow));
+    return;
+  }
+
+  if (pathname === "/api/admin/integrations/zape/retry" && method === "POST") {
+    requirePermission(currentUser, "read_audit");
+    const body = await readRequestBody(request);
+    const eventKey = String(body.eventKey || "").trim();
+    const tenantId = String(body.tenantId || "").trim();
+    if (!eventKey && !tenantId) {
+      const error = new Error("Informe um evento ou uma conta para reprocessar.");
+      error.statusCode = 422;
+      throw error;
+    }
+    const result = await retryIntegrationEvents({
+      monitorUrl: ZAPE_MONITOR_URL,
+      monitorKey: ZAPE_MONITOR_KEY,
+      timeoutMs: ZAPE_MONITOR_TIMEOUT_MS,
+      eventKey,
+      tenantId,
+    });
+    await recordAudit({
+      entityType: "integration",
+      entityId: eventKey || tenantId,
+      action: "zape_integration_retry",
+      actor: currentUser,
+      summary: eventKey ? `Reprocessou evento da integração: ${eventKey}` : `Reprocessou falhas da conta: ${tenantId}`,
+      changes: { eventKey, tenantId, retried: Number(result.retried || 0) },
+    });
+    sendJson(response, 200, result);
+    return;
+  }
+
+  const integrationIncidentMatch = pathname.match(/^\/api\/admin\/integrations\/zape\/incidents\/([^/]+)\/(acknowledge|resolve|reopen)$/);
+  if (integrationIncidentMatch && method === "POST") {
+    requirePermission(currentUser, "read_audit");
+    const body = await readRequestBody(request);
+    const incident = await updateIntegrationIncident({ queryRows, execute, id: decodeURIComponent(integrationIncidentMatch[1]), action: integrationIncidentMatch[2], user: currentUser, note: body.note || "" });
+    await recordAudit({ entityType: "integration_incident", entityId: incident.id, action: `integration_incident_${integrationIncidentMatch[2]}`, actor: currentUser, summary: `${integrationIncidentMatch[2]}: ${incident.title}`, changes: { status: incident.status, note: body.note || "" } });
+    sendJson(response, 200, { ok: true, incident });
     return;
   }
 
@@ -5469,6 +5850,8 @@ async function gracefulShutdown(signal) {
   if (commercialProfileReadinessTimer) clearInterval(commercialProfileReadinessTimer);
   if (datetimeColumnsReadinessTimer) clearInterval(datetimeColumnsReadinessTimer);
   operationalRuntime?.stop();
+  integrationHealthCollector?.stop();
+  await zapeBidirectionalSyncRuntime?.stop?.();
   performanceMonitor.stop();
   shutdownController.abort();
 
@@ -5524,6 +5907,22 @@ async function startRuntime() {
       });
     }, DATETIME_COLUMNS_READINESS_CHECK_MS);
     datetimeColumnsReadinessTimer.unref?.();
+
+    integrationHealthCollector = createIntegrationHealthCollector({
+      queryRows,
+      execute,
+      monitorUrl: ZAPE_MONITOR_URL,
+      monitorKey: ZAPE_MONITOR_KEY,
+      timeoutMs: ZAPE_MONITOR_TIMEOUT_MS,
+      intervalMs: readBoundedEnvironmentInteger("ZAPE_MONITOR_SNAPSHOT_INTERVAL_MS", 60000, 30000, 3600000),
+      cleanupIntervalMs: readBoundedEnvironmentInteger("ZAPE_MONITOR_HISTORY_CLEANUP_INTERVAL_MS", 86400000, 3600000, 604800000),
+      snapshotRetentionDays: readBoundedEnvironmentInteger("ZAPE_MONITOR_SNAPSHOT_RETENTION_DAYS", 730, 30, 3650),
+      incidentRetentionDays: readBoundedEnvironmentInteger("ZAPE_MONITOR_INCIDENT_RETENTION_DAYS", 1095, 30, 3650),
+    });
+    integrationHealthCollector.start();
+
+    zapeBidirectionalSyncRuntime = createZapeBidirectionalSyncRuntime({ queryRows, execute });
+    zapeBidirectionalSyncRuntime.start();
 
     await Promise.allSettled([
       cleanupSecurityState(),
