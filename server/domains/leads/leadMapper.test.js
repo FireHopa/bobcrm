@@ -53,7 +53,7 @@ test("mapeamento de linha MySQL e parâmetros de persistência mantêm contrato"
   assert.deepEqual(lead.serviceInterests, ["Google Ads"]);
   assert.equal(lead.customFields["Indicado por"], "Evento");
   const params = leadToDbParams(lead, { updatedAt: "2026-07-08T11:00:00.000Z" });
-  assert.equal(params.length, 53);
+  assert.equal(params.length, 56);
   assert.equal(params[3], "teste@example.com");
   assert.equal(params[5], "11999990000");
 });

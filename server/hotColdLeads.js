@@ -47,10 +47,11 @@ function archiveRowToLead(row = {}) {
 function archiveCsvRow(row = {}) {
   const lead = archiveRowToLead(row);
   return [
-    lead.name, lead.email, lead.phone, lead.company, lead.website, lead.status, lead.responsible,
+    lead.name, lead.email, lead.phone, lead.company, lead.website, lead.instagram || "", lead.status, lead.responsible,
     lead.temperature, lead.pain, lead.source, lead.nextContactAt, lead.expectedCloseAt, lead.lastContactAt,
     lead.contactMadeAt, lead.estimatedBudget, lead.advertisesOnGoogle ? "Sim" : "Não",
-    lead.advertisesOnMeta ? "Sim" : "Não", lead.doesNotAdvertise ? "Sim" : "Não", lead.lostReason,
+    lead.advertisesOnMeta ? "Sim" : "Não", lead.doesNotAdvertiseOnGoogle ? "Sim" : "Não",
+    lead.doesNotAdvertiseOnMeta ? "Sim" : "Não", lead.doesNotAdvertise ? "Sim" : "Não", lead.lostReason,
     lead.commercialNotes, (lead.serviceInterests || []).join(" | "), JSON.stringify(lead.serviceStatusMap || {}),
     ...customFieldLabels.map((field) => lead.customFields?.[field] || ""),
     lead.createdAt, lead.updatedAt, lead.archivedAt, lead.archiveReason,
@@ -58,9 +59,9 @@ function archiveCsvRow(row = {}) {
 }
 
 const ARCHIVE_CSV_HEADERS = [
-  "Nome", "Email", "Telefone", "Empresa", "Website", "Status", "Responsavel", "Temperatura", "Dor", "Origem",
+  "Nome", "Email", "Telefone", "Empresa", "Website", "Instagram", "Status", "Responsavel", "Temperatura", "Dor", "Origem",
   "Proximo contato", "Fechamento previsto", "Ultimo contato", "Contato feito em", "Orcamento estimado", "Anuncia Google",
-  "Anuncia Meta", "Nao anuncia", "Motivo perda", "Observacao comercial", "Servicos", "Mapa de servicos",
+  "Anuncia Meta", "Nao anuncia Google", "Nao anuncia Meta", "Nao anuncia", "Motivo perda", "Observacao comercial", "Servicos", "Mapa de servicos",
   ...customFieldLabels, "Criado em", "Atualizado em", "Arquivado em", "Motivo do arquivo",
 ];
 

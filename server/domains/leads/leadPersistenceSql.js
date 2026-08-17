@@ -1,6 +1,6 @@
 export const LEAD_PERSISTENCE_COLUMNS = Object.freeze([
-  "id", "name", "email", "email_key", "phone", "phone_key", "company", "name_company_key", "website",
-  "advertises_on_meta", "advertises_on_google", "does_not_advertise",
+  "id", "name", "email", "email_key", "phone", "phone_key", "company", "name_company_key", "website", "instagram",
+  "advertises_on_meta", "advertises_on_google", "does_not_advertise", "does_not_advertise_on_meta", "does_not_advertise_on_google",
   "last_contact_at", "contact_made_at", "next_contact_at", "expected_close_at", "estimated_budget",
   "is_lost", "lost_reason", "commercial_notes", "status", "responsible", "responsible_user_id", "temperature",
   "pain", "source", "service_interests", "service_status_map", "custom_fields", "search_text", "created_at", "updated_at",
@@ -12,8 +12,8 @@ export const LEAD_PERSISTENCE_COLUMNS = Object.freeze([
 ]);
 
 export const LEAD_PERSISTENCE_UPDATE_COLUMNS = Object.freeze([
-  "name", "email", "email_key", "phone", "phone_key", "company", "name_company_key", "website",
-  "advertises_on_meta", "advertises_on_google", "does_not_advertise",
+  "name", "email", "email_key", "phone", "phone_key", "company", "name_company_key", "website", "instagram",
+  "advertises_on_meta", "advertises_on_google", "does_not_advertise", "does_not_advertise_on_meta", "does_not_advertise_on_google",
   "last_contact_at", "contact_made_at", "next_contact_at", "expected_close_at", "estimated_budget",
   "is_lost", "lost_reason", "commercial_notes", "status", "responsible", "responsible_user_id", "temperature",
   "pain", "source", "service_interests", "service_status_map", "custom_fields", "search_text",

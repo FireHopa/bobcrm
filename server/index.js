@@ -51,6 +51,7 @@ import { description as hotColdPhase5MigrationDescription, up as runHotColdPhase
 import { description as zapePhase2AssignmentMigrationDescription, up as runZapePhase2AssignmentMigration, version as zapePhase2AssignmentMigrationVersion } from "./migrations/20260804_18_zape_phase2_assignment.js";
 import { description as integrationObservabilityMigrationDescription, up as runIntegrationObservabilityMigration, version as integrationObservabilityMigrationVersion } from "./migrations/20260804_19_integration_observability_phase4.js";
 import { description as bidirectionalSyncMigrationDescription, up as runBidirectionalSyncMigration, version as bidirectionalSyncMigrationVersion } from "./migrations/20260806_20_bidirectional_sync_attribution_phase5.js";
+import { description as instagramChannelAdvertisingMigrationDescription, up as runInstagramChannelAdvertisingMigration, version as instagramChannelAdvertisingMigrationVersion } from "./migrations/20260807_21_instagram_channel_advertising.js";
 import {
   createEncryptedMysqlBackup,
   removeBackupArtifact,
@@ -640,6 +641,8 @@ async function runSchemaMigrations() {
     () => runIntegrationObservabilityMigration({ execute, addIndexIfMissing }));
   await runVersionedMigration(bidirectionalSyncMigrationVersion, bidirectionalSyncMigrationDescription,
     () => runBidirectionalSyncMigration({ execute, addColumnIfMissing, addIndexIfMissing }));
+  await runVersionedMigration(instagramChannelAdvertisingMigrationVersion, instagramChannelAdvertisingMigrationDescription,
+    () => runInstagramChannelAdvertisingMigration({ execute, addColumnIfMissing }));
   try {
     await addIndexIfMissing("leads", "ft_leads_search_text", "FULLTEXT INDEX ft_leads_search_text (search_text)");
     leadSearchFullTextEnabled = true;
@@ -1814,8 +1817,11 @@ function mergeLeadData(currentLead, incomingLead) {
     phone: shouldReplaceValue(currentLead.phone, incomingLead.phone) ? incomingLead.phone : currentLead.phone,
     company: shouldReplaceValue(currentLead.company, incomingLead.company) ? incomingLead.company : currentLead.company,
     website: shouldReplaceValue(currentLead.website, incomingLead.website) ? incomingLead.website : currentLead.website,
+    instagram: shouldReplaceValue(currentLead.instagram, incomingLead.instagram) ? incomingLead.instagram : currentLead.instagram,
     advertisesOnMeta: currentLead.advertisesOnMeta || incomingLead.advertisesOnMeta,
     advertisesOnGoogle: currentLead.advertisesOnGoogle || incomingLead.advertisesOnGoogle,
+    doesNotAdvertiseOnMeta: currentLead.doesNotAdvertiseOnMeta || incomingLead.doesNotAdvertiseOnMeta,
+    doesNotAdvertiseOnGoogle: currentLead.doesNotAdvertiseOnGoogle || incomingLead.doesNotAdvertiseOnGoogle,
     doesNotAdvertise: currentLead.doesNotAdvertise || incomingLead.doesNotAdvertise,
     lastContactAt: shouldReplaceValue(currentLead.lastContactAt, incomingLead.lastContactAt) ? incomingLead.lastContactAt : currentLead.lastContactAt,
     contactMadeAt: shouldReplaceValue(currentLead.contactMadeAt, incomingLead.contactMadeAt) ? incomingLead.contactMadeAt : currentLead.contactMadeAt,
@@ -2675,8 +2681,11 @@ const auditableLeadFields = [
   "phone",
   "company",
   "website",
+  "instagram",
   "advertisesOnMeta",
   "advertisesOnGoogle",
+  "doesNotAdvertiseOnMeta",
+  "doesNotAdvertiseOnGoogle",
   "doesNotAdvertise",
   "lastContactAt",
   "contactMadeAt",
@@ -3234,6 +3243,7 @@ const LEAD_EXPORT_HEADERS = [
   "Telefone",
   "Empresa",
   "Website",
+  "Instagram",
   "Status",
   "Responsavel",
   "Temperatura",
@@ -3246,6 +3256,8 @@ const LEAD_EXPORT_HEADERS = [
   "Orcamento estimado",
   "Anuncia Google",
   "Anuncia Meta",
+  "Nao anuncia Google",
+  "Nao anuncia Meta",
   "Nao anuncia",
   "Motivo perda",
   "Observacao comercial",
@@ -3263,6 +3275,7 @@ function buildLeadExportRow(lead) {
     lead.phone,
     lead.company,
     lead.website,
+    lead.instagram || "",
     lead.status,
     lead.responsible,
     lead.temperature,
@@ -3275,6 +3288,8 @@ function buildLeadExportRow(lead) {
     lead.estimatedBudget,
     lead.advertisesOnGoogle ? "Sim" : "Não",
     lead.advertisesOnMeta ? "Sim" : "Não",
+    lead.doesNotAdvertiseOnGoogle ? "Sim" : "Não",
+    lead.doesNotAdvertiseOnMeta ? "Sim" : "Não",
     lead.doesNotAdvertise ? "Sim" : "Não",
     lead.lostReason,
     lead.commercialNotes,

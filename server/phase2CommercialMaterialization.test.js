@@ -56,9 +56,9 @@ test("perfil comercial é determinístico e versionado", () => {
 
 test("persistência normal de lead grava perfil materializado junto com o upsert", () => {
   const params = leadToDbParams(sampleLead(), { updatedAt: "2026-07-23T12:00:00.000Z" });
-  assert.equal(params.length, 53);
-  assert.equal(params[40], COMMERCIAL_PROFILE_VERSION);
-  assert.equal(params[41], "2026-07-23T12:00:00.000Z");
+  assert.equal(params.length, 56);
+  assert.equal(params[43], COMMERCIAL_PROFILE_VERSION);
+  assert.equal(params[44], "2026-07-23T12:00:00.000Z");
 });
 
 test("resumos e filtros materializados não contêm JSON_EXTRACT", () => {

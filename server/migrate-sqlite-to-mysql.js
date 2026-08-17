@@ -157,8 +157,9 @@ function buildLeadInsertSql() {
   const duplicateClause = MIGRATION_OVERWRITE_EXISTING ? `
   ON DUPLICATE KEY UPDATE
     name = VALUES(name), email = VALUES(email), email_key = VALUES(email_key), phone = VALUES(phone), phone_key = VALUES(phone_key),
-    company = VALUES(company), name_company_key = VALUES(name_company_key), website = VALUES(website),
+    company = VALUES(company), name_company_key = VALUES(name_company_key), website = VALUES(website), instagram = VALUES(instagram),
     advertises_on_meta = VALUES(advertises_on_meta), advertises_on_google = VALUES(advertises_on_google), does_not_advertise = VALUES(does_not_advertise),
+    does_not_advertise_on_meta = VALUES(does_not_advertise_on_meta), does_not_advertise_on_google = VALUES(does_not_advertise_on_google),
     last_contact_at = VALUES(last_contact_at), contact_made_at = VALUES(contact_made_at), next_contact_at = VALUES(next_contact_at), estimated_budget = VALUES(estimated_budget),
     is_lost = VALUES(is_lost), lost_reason = VALUES(lost_reason), commercial_notes = VALUES(commercial_notes), status = VALUES(status), responsible = VALUES(responsible),
     temperature = VALUES(temperature), pain = VALUES(pain), source = VALUES(source), service_interests = VALUES(service_interests), service_status_map = VALUES(service_status_map),
@@ -173,8 +174,8 @@ function buildLeadInsertSql() {
     has_external_agency = VALUES(has_external_agency)` : "";
 
   return `${insertMode} INTO leads (
-    id, name, email, email_key, phone, phone_key, company, name_company_key, website,
-    advertises_on_meta, advertises_on_google, does_not_advertise,
+    id, name, email, email_key, phone, phone_key, company, name_company_key, website, instagram,
+    advertises_on_meta, advertises_on_google, does_not_advertise, does_not_advertise_on_meta, does_not_advertise_on_google,
     last_contact_at, contact_made_at, next_contact_at, estimated_budget,
     is_lost, lost_reason, commercial_notes, status, responsible, temperature,
     pain, source, service_interests, service_status_map, custom_fields, created_at, updated_at,
@@ -217,9 +218,12 @@ function leadRowValues(row) {
     row.company || "",
     normalizeNameCompanyKey(row),
     row.website || "",
+    row.instagram || "",
     Number(row.advertises_on_meta || 0),
     Number(row.advertises_on_google || 0),
     Number(row.does_not_advertise || 0),
+    Number(row.does_not_advertise_on_meta ?? row.does_not_advertise ?? 0),
+    Number(row.does_not_advertise_on_google ?? row.does_not_advertise ?? 0),
     row.last_contact_at || "",
     row.contact_made_at || "",
     row.next_contact_at || "",

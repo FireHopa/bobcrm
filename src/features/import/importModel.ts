@@ -1,8 +1,8 @@
-import { createEmptyCustomFields, normalizeCustomFields } from "../../constants/customFields";
+import { createEmptyCustomFields } from "../../constants/customFields";
 import { getServiceInterestsFromStatusMap, parseServiceStatusMap } from "../../constants/services";
-import type { Lead, LeadCustomFieldKey, LeadCustomFields, LeadSource, LeadStatus, LeadTemperature, LostReason } from "../../types/Lead";
+import type { Lead, LeadSource, LeadStatus, LeadTemperature, LostReason } from "../../types/Lead";
 import type { ImportDeduplicationReport } from "../../utils/commercial";
-import { formatDate, normalizeWebsite } from "../../utils/formatters";
+import { normalizeWebsite } from "../../utils/formatters";
 
 export type RawRow = string[];
 
@@ -12,26 +12,21 @@ export type ImportFieldKey =
   | "phone"
   | "company"
   | "website"
+  | "instagram"
   | "advertisesOnMeta"
   | "advertisesOnGoogle"
+  | "doesNotAdvertiseOnMeta"
+  | "doesNotAdvertiseOnGoogle"
   | "doesNotAdvertise"
   | "status"
   | "responsible"
   | "temperature"
   | "pain"
-  | "nextContactAt"
   | "lostReason"
   | "commercialNotes"
-  | "lastContactAt"
-  | "contactMadeAt"
-  | "estimatedBudget"
   | "source"
   | "serviceInterests"
-  | "immersionDates"
-  | "hasWebsite"
-  | "referredBy"
   | "advertisesOnGoogle2"
-  | "alreadyHasWebsite"
   | "siteInput";
 
 export type ImportMapping = Record<ImportFieldKey, string>;
@@ -40,7 +35,7 @@ export type ImportField = {
   key: ImportFieldKey;
   label: string;
   required?: boolean;
-  group: "Dados básicos" | "Comercial" | "Mídia e origem" | "Datas" | "Perda e observação" | "Campos da planilha";
+  group: "Dados básicos" | "Comercial" | "Mídia e origem" | "Perda e observação";
 };
 
 export const importFields: ImportField[] = [
@@ -49,32 +44,25 @@ export const importFields: ImportField[] = [
   { key: "phone", label: "Número de telefone", group: "Dados básicos" },
   { key: "company", label: "Empresa", group: "Dados básicos" },
   { key: "website", label: "Website", group: "Dados básicos" },
+  { key: "instagram", label: "Instagram", group: "Dados básicos" },
   { key: "siteInput", label: "Coloque seu site → Website", group: "Dados básicos" },
+  { key: "commercialNotes", label: "Observação comercial", group: "Dados básicos" },
 
   { key: "status", label: "Status do lead", group: "Comercial" },
   { key: "responsible", label: "Responsável legado (não atribui consultor)", group: "Comercial" },
   { key: "temperature", label: "Temperatura do lead", group: "Comercial" },
   { key: "pain", label: "Dor do lead", group: "Comercial" },
-  { key: "estimatedBudget", label: "Orçamento estimado", group: "Comercial" },
   { key: "serviceInterests", label: "Mapeamento dos serviços", group: "Comercial" },
 
   { key: "advertisesOnMeta", label: "Anuncia na Meta?", group: "Mídia e origem" },
   { key: "advertisesOnGoogle", label: "Anuncia no Google?", group: "Mídia e origem" },
+  { key: "doesNotAdvertiseOnMeta", label: "Não anuncia na Meta?", group: "Mídia e origem" },
+  { key: "doesNotAdvertiseOnGoogle", label: "Não anuncia no Google?", group: "Mídia e origem" },
   { key: "advertisesOnGoogle2", label: "Já anuncia no Google ADS? - 2 → Anuncia no Google?", group: "Mídia e origem" },
   { key: "doesNotAdvertise", label: "Não anuncia?", group: "Mídia e origem" },
   { key: "source", label: "Origem", group: "Mídia e origem" },
 
-  { key: "lastContactAt", label: "Último contato em", group: "Datas" },
-  { key: "contactMadeAt", label: "Contato feito em", group: "Datas" },
-  { key: "nextContactAt", label: "Próximo contato em", group: "Datas" },
-
   { key: "lostReason", label: "Motivo da perda", group: "Perda e observação" },
-  { key: "commercialNotes", label: "Observação comercial", group: "Perda e observação" },
-
-  { key: "immersionDates", label: "Datas Imersão", group: "Campos da planilha" },
-  { key: "hasWebsite", label: "Possui website?", group: "Campos da planilha" },
-  { key: "alreadyHasWebsite", label: "Já possui Website? → Possui website?", group: "Campos da planilha" },
-  { key: "referredBy", label: "Indicado por", group: "Campos da planilha" },
 ];
 
 export const emptyMapping: ImportMapping = {
@@ -83,26 +71,21 @@ export const emptyMapping: ImportMapping = {
   phone: "",
   company: "",
   website: "",
+  instagram: "",
   advertisesOnMeta: "",
   advertisesOnGoogle: "",
+  doesNotAdvertiseOnMeta: "",
+  doesNotAdvertiseOnGoogle: "",
   doesNotAdvertise: "",
   status: "",
   responsible: "",
   temperature: "",
   pain: "",
-  nextContactAt: "",
   lostReason: "",
   commercialNotes: "",
-  lastContactAt: "",
-  contactMadeAt: "",
-  estimatedBudget: "",
   source: "",
   serviceInterests: "",
-  immersionDates: "",
-  hasWebsite: "",
-  referredBy: "",
   advertisesOnGoogle2: "",
-  alreadyHasWebsite: "",
   siteInput: "",
 };
 
@@ -145,11 +128,6 @@ export const sourceOptions: LeadSource[] = [
   "Outro",
 ];
 
-const customFieldMapping: Record<"immersionDates" | "hasWebsite" | "referredBy", LeadCustomFieldKey> = {
-  immersionDates: "Datas Imersão",
-  hasWebsite: "Possui website?",
-  referredBy: "Indicado por",
-};
 
 export type ImportLeadsOptions = {
   chunked?: boolean;
@@ -166,14 +144,12 @@ export type BulkDefaults = {
   source: LeadSource;
   temperature: LeadTemperature;
   status: LeadStatus;
-  nextContactAt: string;
 };
 
 export const emptyBulkDefaults: BulkDefaults = {
   source: "",
   temperature: "",
   status: "Novo lead",
-  nextContactAt: "",
 };
 
 export function normalizeText(value: unknown): string {
@@ -201,38 +177,6 @@ function normalizeBoolean(value: string): boolean {
   const normalized = normalizeSearch(value);
 
   return ["sim", "s", "yes", "y", "true", "1", "ok", "ativo", "anuncia", "x"].includes(normalized);
-}
-
-function normalizeDateValue(value: string): string {
-  const cleanValue = value.trim();
-
-  if (!cleanValue) return "";
-
-  if (/^\d{4}-\d{2}-\d{2}$/.test(cleanValue)) {
-    return cleanValue;
-  }
-
-  const brDate = cleanValue.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
-
-  if (brDate) {
-    const day = brDate[1].padStart(2, "0");
-    const month = brDate[2].padStart(2, "0");
-    const year = brDate[3].length === 2 ? `20${brDate[3]}` : brDate[3];
-
-    return `${year}-${month}-${day}`;
-  }
-
-  const parsedDate = new Date(cleanValue);
-
-  if (!Number.isNaN(parsedDate.getTime())) {
-    const year = parsedDate.getFullYear();
-    const month = String(parsedDate.getMonth() + 1).padStart(2, "0");
-    const day = String(parsedDate.getDate()).padStart(2, "0");
-
-    return `${year}-${month}-${day}`;
-  }
-
-  return "";
 }
 
 function normalizeStatus(value: string, isLost: boolean): LeadStatus {
@@ -311,27 +255,6 @@ function normalizeImportedPhone(value: string): string {
   return cleanValue;
 }
 
-function formatBudget(value: string): string {
-  const cleanValue = value.trim();
-
-  if (!cleanValue) return "";
-
-  if (cleanValue.includes("R$")) return cleanValue;
-
-  const digits = cleanValue.replace(/\D/g, "");
-
-  if (!digits) return cleanValue;
-
-  const amount = Number(digits);
-
-  if (Number.isNaN(amount)) return cleanValue;
-
-  return new Intl.NumberFormat("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  }).format(amount);
-}
-
 export function suggestMapping(headers: string[]): ImportMapping {
   const mapping = { ...emptyMapping };
 
@@ -341,33 +264,45 @@ export function suggestMapping(headers: string[]): ImportMapping {
     phone: ["telefone", "celular", "whatsapp", "phone", "numero", "número"],
     company: ["empresa", "company", "negocio", "negócio"],
     website: ["website", "site", "url", "dominio", "domínio"],
+    instagram: ["instagram", "perfil do instagram", "usuario instagram", "usuário instagram", "arroba"],
     advertisesOnMeta: ["meta", "facebook", "instagram ads", "anuncia na meta"],
     advertisesOnGoogle: ["ja anuncia no google", "já anuncia no google", "anuncia no google", "google ads"],
-    doesNotAdvertise: ["nao anuncia", "não anuncia", "sem anuncio", "sem anúncio", "nao faz trafego"],
+    doesNotAdvertiseOnMeta: ["nao anuncia na meta", "não anuncia na meta", "sem meta ads", "nao faz meta ads", "não faz meta ads"],
+    doesNotAdvertiseOnGoogle: ["nao anuncia no google", "não anuncia no google", "sem google ads", "nao faz google ads", "não faz google ads"],
+    doesNotAdvertise: ["nao anuncia", "não anuncia", "sem anuncio", "sem anúncio", "nao faz trafego", "não faz tráfego"],
     status: ["status", "etapa", "fase", "pipeline"],
     responsible: ["responsavel", "responsável", "vendedor", "sdr", "closer", "owner"],
     temperature: ["temperatura", "prioridade"],
     pain: ["dor", "problema", "necessidade", "desafio"],
-    nextContactAt: ["proximo contato", "próximo contato", "retorno", "follow up", "followup"],
     lostReason: ["motivo da perda", "motivo perda", "perda"],
     commercialNotes: ["observacao", "observação", "observacoes", "notas", "comentario", "comentário"],
-    lastContactAt: ["ultimo contato", "último contato", "ultima interacao", "última interação"],
-    contactMadeAt: ["contato feito", "primeiro contato", "data contato"],
-    estimatedBudget: ["orcamento", "orçamento", "budget", "verba", "investimento"],
     source: ["origem", "source", "canal"],
     serviceInterests: ["servico", "serviço", "produto", "interesse", "oferta", "solucao", "solução", "quem faz", "responsavel servico"],
-    immersionDates: ["datas imersao", "data imersao", "datas da imersao"],
-    hasWebsite: ["possui website", "possui site"],
-    referredBy: ["indicado por", "indicacao", "indicação"],
     advertisesOnGoogle2: ["ja anuncia no google ads 2", "já anuncia no google ads 2", "anuncia no google ads 2", "google ads 2"],
-    alreadyHasWebsite: ["ja possui website", "já possui website", "ja possui site", "já possui site"],
     siteInput: ["coloque seu site", "informe seu site", "digite seu site"],
   };
+
+  function canMatchField(field: ImportFieldKey, normalizedHeader: string): boolean {
+    const mentionsGoogle = normalizedHeader.includes("google");
+    const mentionsMeta = normalizedHeader.includes("meta") || normalizedHeader.includes("facebook") || normalizedHeader.includes("instagram ads");
+    const isNegative = normalizedHeader.includes("nao anuncia")
+      || normalizedHeader.includes("sem anuncio")
+      || normalizedHeader.includes("nao faz")
+      || (mentionsGoogle && normalizedHeader.includes("sem google"))
+      || (mentionsMeta && (normalizedHeader.includes("sem meta") || normalizedHeader.includes("sem facebook") || normalizedHeader.includes("sem instagram ads")));
+
+    if ((field === "advertisesOnGoogle" || field === "advertisesOnGoogle2") && isNegative) return false;
+    if (field === "advertisesOnMeta" && isNegative) return false;
+    if (field === "doesNotAdvertise" && (mentionsGoogle || mentionsMeta)) return false;
+    if (field === "instagram" && (normalizedHeader.includes(" ads") || normalizedHeader.includes("anuncia"))) return false;
+    return true;
+  }
 
   headers.forEach((header, index) => {
     const normalizedHeader = normalizeSearch(header);
 
     importFields.forEach((field) => {
+      if (!canMatchField(field.key, normalizedHeader)) return;
       if (mapping[field.key]) return;
 
       const matched = rules[field.key].some((rule) => normalizedHeader === normalizeSearch(rule));
@@ -382,6 +317,7 @@ export function suggestMapping(headers: string[]): ImportMapping {
     const normalizedHeader = normalizeSearch(header);
 
     importFields.forEach((field) => {
+      if (!canMatchField(field.key, normalizedHeader)) return;
       if (mapping[field.key]) return;
 
       const matched = rules[field.key].some((rule) => normalizedHeader.includes(normalizeSearch(rule)));
@@ -395,29 +331,27 @@ export function suggestMapping(headers: string[]): ImportMapping {
   return mapping;
 }
 
-function buildCustomFieldsFromRow(row: RawRow, mapping: ImportMapping): LeadCustomFields {
-  const customFields = createEmptyCustomFields();
-
-  Object.entries(customFieldMapping).forEach(([mappingKey, fieldLabel]) => {
-    customFields[fieldLabel] = getCell(row, mapping[mappingKey as ImportFieldKey]);
-  });
-
-  const alreadyHasWebsite = getCell(row, mapping.alreadyHasWebsite);
-
-  if (!customFields["Possui website?"] && alreadyHasWebsite) {
-    customFields["Possui website?"] = alreadyHasWebsite;
-  }
-
-  return normalizeCustomFields(customFields);
-}
-
 export function buildLeadFromRow(row: RawRow, mapping: ImportMapping, bulkDefaults: BulkDefaults): Lead {
-  const customFields = buildCustomFieldsFromRow(row, mapping);
   const lostReason = normalizeLostReason(getCell(row, mapping.lostReason));
-  const doesNotAdvertise = normalizeBoolean(getCell(row, mapping.doesNotAdvertise));
-  const advertisesOnMeta = doesNotAdvertise ? false : normalizeBoolean(getCell(row, mapping.advertisesOnMeta));
+  const generalDoesNotAdvertise = normalizeBoolean(getCell(row, mapping.doesNotAdvertise));
+  let advertisesOnMeta = normalizeBoolean(getCell(row, mapping.advertisesOnMeta));
   const advertisesOnGoogleValue = getCell(row, mapping.advertisesOnGoogle) || getCell(row, mapping.advertisesOnGoogle2) || "";
-  const advertisesOnGoogle = doesNotAdvertise ? false : normalizeBoolean(advertisesOnGoogleValue);
+  let advertisesOnGoogle = normalizeBoolean(advertisesOnGoogleValue);
+  let doesNotAdvertiseOnMeta = normalizeBoolean(getCell(row, mapping.doesNotAdvertiseOnMeta));
+  let doesNotAdvertiseOnGoogle = normalizeBoolean(getCell(row, mapping.doesNotAdvertiseOnGoogle));
+
+  if (generalDoesNotAdvertise) {
+    advertisesOnMeta = false;
+    advertisesOnGoogle = false;
+    doesNotAdvertiseOnMeta = true;
+    doesNotAdvertiseOnGoogle = true;
+  }
+  if (advertisesOnMeta) doesNotAdvertiseOnMeta = false;
+  if (advertisesOnGoogle) doesNotAdvertiseOnGoogle = false;
+
+  const doesNotAdvertise = !advertisesOnMeta
+    && !advertisesOnGoogle
+    && (generalDoesNotAdvertise || (doesNotAdvertiseOnMeta && doesNotAdvertiseOnGoogle));
   const isLostFromReason = Boolean(lostReason);
   const statusFromRow = normalizeStatus(getCell(row, mapping.status), isLostFromReason);
   const status = getCell(row, mapping.status) ? statusFromRow : bulkDefaults.status;
@@ -432,14 +366,17 @@ export function buildLeadFromRow(row: RawRow, mapping: ImportMapping, bulkDefaul
     phone: normalizeImportedPhone(getCell(row, mapping.phone)),
     company: getCell(row, mapping.company),
     website: normalizeWebsite(getCell(row, mapping.website) || getCell(row, mapping.siteInput) || ""),
+    instagram: getCell(row, mapping.instagram),
     advertisesOnMeta,
     advertisesOnGoogle,
+    doesNotAdvertiseOnMeta,
+    doesNotAdvertiseOnGoogle,
     doesNotAdvertise,
-    lastContactAt: normalizeDateValue(getCell(row, mapping.lastContactAt)),
-    contactMadeAt: normalizeDateValue(getCell(row, mapping.contactMadeAt)),
-    nextContactAt: normalizeDateValue(getCell(row, mapping.nextContactAt)) || bulkDefaults.nextContactAt,
+    lastContactAt: "",
+    contactMadeAt: "",
+    nextContactAt: "",
     expectedCloseAt: "",
-    estimatedBudget: formatBudget(getCell(row, mapping.estimatedBudget)),
+    estimatedBudget: "",
     isLost,
     lostReason,
     commercialNotes: getCell(row, mapping.commercialNotes),
@@ -448,10 +385,10 @@ export function buildLeadFromRow(row: RawRow, mapping: ImportMapping, bulkDefaul
     responsibleUserId: "",
     temperature: normalizeTemperature(getCell(row, mapping.temperature)) || bulkDefaults.temperature,
     pain: getCell(row, mapping.pain),
-    source: normalizeSource(getCell(row, mapping.source)) || (customFields["Indicado por"] ? "Indicação" : "") || bulkDefaults.source,
+    source: normalizeSource(getCell(row, mapping.source)) || bulkDefaults.source,
     serviceInterests,
     serviceStatusMap,
-    customFields,
+    customFields: createEmptyCustomFields(),
     createdAt: new Date().toISOString(),
   };
 }

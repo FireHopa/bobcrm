@@ -3,7 +3,6 @@ import type { Lead, LeadSource, LeadStatus, LeadTemperature } from "../types/Lea
 import type { KanbanPipeline, KanbanStage } from "../types/Kanban";
 import { fetchKanbanPipelines } from "../utils/api";
 import type { ImportDeduplicationReport } from "../utils/commercial";
-import { formatDate } from "../utils/formatters";
 import {
   CSV_PROFILE_SAMPLE_ROWS,
   IMPORT_BATCH_SIZE,
@@ -478,7 +477,7 @@ export function ImportLeads({ onImportLeads, onImportFinished }: ImportLeadsProp
 
             <div className="bulkDefaultsGrid">
               <div className="leadAssignmentNoticeV43 importAssignmentNoticeV43">
-                <strong>Destino da importação</strong>
+                <strong>Importação sem responsável</strong>
                 <span>
                   Os leads entram sem consultor. Você pode escolher abaixo o funil e a etapa de entrada. Se deixar no modo automático,
                   o CRM usará o funil padrão e a etapa correspondente ao status.
@@ -501,7 +500,6 @@ export function ImportLeads({ onImportLeads, onImportFinished }: ImportLeadsProp
               <label className="field"><span>Origem padrão</span><select value={bulkDefaults.source} onChange={(event) => setBulkDefaults({ ...bulkDefaults, source: event.target.value as LeadSource })} disabled={isImporting}>{sourceOptions.map((source) => <option key={source || "empty"} value={source}>{source || "Selecione"}</option>)}</select></label>
               <label className="field"><span>Temperatura padrão</span><select value={bulkDefaults.temperature} onChange={(event) => setBulkDefaults({ ...bulkDefaults, temperature: event.target.value as LeadTemperature })} disabled={isImporting}>{temperatureOptions.map((temperature) => <option key={temperature || "empty"} value={temperature}>{temperature || "Selecione"}</option>)}</select></label>
               <label className="field"><span>{selectedStage ? "Status definido pela etapa" : "Status padrão"}</span><select value={bulkDefaults.status} onChange={(event) => setBulkDefaults({ ...bulkDefaults, status: event.target.value as LeadStatus })} disabled={isImporting || Boolean(selectedStage)}>{statusOptions.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
-              <label className="field"><span>Próximo passo padrão</span><input type="date" value={bulkDefaults.nextContactAt} onChange={(event) => setBulkDefaults({ ...bulkDefaults, nextContactAt: event.target.value })} disabled={isImporting} /></label>
             </div>
             {pipelineLoadError ? <div className="importWarning">Não foi possível carregar os funis: {pipelineLoadError}. A importação continuará usando o funil padrão.</div> : null}
             {targetPipelineId && !targetStageId ? <div className="importWarning">Selecione a etapa inicial do funil para continuar.</div> : null}
@@ -539,7 +537,7 @@ export function ImportLeads({ onImportLeads, onImportFinished }: ImportLeadsProp
                   <div><dt>Telefone</dt><dd>{lead.phone || "Não informado"}</dd></div>
                   <div><dt>E-mail</dt><dd>{lead.email || "Não informado"}</dd></div>
                   <div><dt>Status</dt><dd>{lead.status}</dd></div>
-                  <div><dt>Próximo passo</dt><dd>{formatDate(lead.nextContactAt)}</dd></div>
+                  <div><dt>Instagram</dt><dd>{lead.instagram || "Não informado"}</dd></div>
                   <div><dt>Origem</dt><dd>{lead.source || "Não informado"}</dd></div>
                 </dl>
               </article>

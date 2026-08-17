@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { createEmptyCustomFields, normalizeCustomFields, spreadsheetCustomFieldLabels } from "../constants/customFields";
+import { createEmptyCustomFields } from "../constants/customFields";
 import {
   createEmptyServiceStatusMap,
   getServiceInterestsFromStatusMap,
@@ -15,10 +15,8 @@ import type {
   ServiceInterest,
   ServiceProviderStatus,
   ServiceStatusMap,
-  LeadCustomFieldKey,
-  LeadCustomFields,
 } from "../types/Lead";
-import { formatCurrencyBRL, formatPhone, normalizeWebsite } from "../utils/formatters";
+import { formatPhone, normalizeWebsite } from "../utils/formatters";
 
 const sourceOptions: LeadSource[] = [
   "",
@@ -65,32 +63,27 @@ type FormState = {
   phone: string;
   company: string;
   website: string;
+  instagram: string;
   advertisesOnMeta: boolean;
   advertisesOnGoogle: boolean;
+  doesNotAdvertiseOnMeta: boolean;
+  doesNotAdvertiseOnGoogle: boolean;
   doesNotAdvertise: boolean;
-  lastContactAt: string;
-  contactMadeAt: string;
-  nextContactAt: string;
-  expectedCloseAt: string;
-  estimatedBudget: string;
   isLost: boolean;
   lostReason: LostReason;
   commercialNotes: string;
   status: LeadStatus;
-  responsible: string;
-  responsibleUserId: string;
   temperature: LeadTemperature;
   pain: string;
   source: LeadSource;
   serviceStatusMap: ServiceStatusMap;
-  customFields: LeadCustomFields;
 };
 
 type LeadFormProps = {
   onCreateLead: (lead: Lead) => void;
 };
 
-type FormTab = "contact" | "commercial" | "next" | "services" | "custom" | "notes";
+type FormTab = "contact" | "commercial" | "services";
 type FormErrors = Partial<Record<"name" | "email" | "lostReason", string>>;
 
 const initialFormState: FormState = {
@@ -99,34 +92,26 @@ const initialFormState: FormState = {
   phone: "",
   company: "",
   website: "",
+  instagram: "",
   advertisesOnMeta: false,
   advertisesOnGoogle: false,
+  doesNotAdvertiseOnMeta: false,
+  doesNotAdvertiseOnGoogle: false,
   doesNotAdvertise: false,
-  lastContactAt: "",
-  contactMadeAt: "",
-  nextContactAt: "",
-  expectedCloseAt: "",
-  estimatedBudget: "",
   isLost: false,
   lostReason: "",
   commercialNotes: "",
   status: "Novo lead",
-  responsible: "",
-  responsibleUserId: "",
   temperature: "",
   pain: "",
   source: "",
   serviceStatusMap: createEmptyServiceStatusMap(),
-  customFields: createEmptyCustomFields(),
 };
 
 const tabs: { id: FormTab; label: string; helper: string }[] = [
-  { id: "contact", label: "Dados do contato", helper: "Nome, telefone, e-mail, empresa e site." },
+  { id: "contact", label: "Dados do contato", helper: "Contato, Instagram e observações." },
   { id: "commercial", label: "Contexto comercial", helper: "Status, origem, temperatura e dor." },
-  { id: "next", label: "Próximo passo", helper: "Datas, retorno e orçamento." },
   { id: "services", label: "Serviços", helper: "Diagnóstico de canais e ofertas." },
-  { id: "custom", label: "Campos da planilha", helper: "Dados extras do formulário." },
-  { id: "notes", label: "Observações", helper: "Notas e perda quando aplicável." },
 ];
 
 export function LeadForm({ onCreateLead }: LeadFormProps) {
@@ -154,31 +139,50 @@ export function LeadForm({ onCreateLead }: LeadFormProps) {
     }));
   }
 
-  function updateCustomField(field: LeadCustomFieldKey, value: string) {
-    setFormState((currentState) => ({
-      ...currentState,
-      customFields: {
-        ...currentState.customFields,
-        [field]: value,
-      },
-    }));
-  }
-
   function handleNoAdsChange(checked: boolean) {
     setFormState((currentState) => ({
       ...currentState,
       doesNotAdvertise: checked,
       advertisesOnMeta: checked ? false : currentState.advertisesOnMeta,
       advertisesOnGoogle: checked ? false : currentState.advertisesOnGoogle,
+      doesNotAdvertiseOnMeta: checked ? true : false,
+      doesNotAdvertiseOnGoogle: checked ? true : false,
     }));
   }
 
   function handlePaidAdsChange(field: "advertisesOnMeta" | "advertisesOnGoogle", checked: boolean) {
-    setFormState((currentState) => ({
-      ...currentState,
-      [field]: checked,
-      doesNotAdvertise: checked ? false : currentState.doesNotAdvertise,
-    }));
+    setFormState((currentState) => {
+      const isMeta = field === "advertisesOnMeta";
+      return {
+        ...currentState,
+        [field]: checked,
+        doesNotAdvertise: checked ? false : currentState.doesNotAdvertise,
+        doesNotAdvertiseOnMeta: isMeta && checked ? false : currentState.doesNotAdvertiseOnMeta,
+        doesNotAdvertiseOnGoogle: !isMeta && checked ? false : currentState.doesNotAdvertiseOnGoogle,
+      };
+    });
+  }
+
+  function handleNegativeAdsChange(field: "doesNotAdvertiseOnMeta" | "doesNotAdvertiseOnGoogle", checked: boolean) {
+    setFormState((currentState) => {
+      const isMeta = field === "doesNotAdvertiseOnMeta";
+      const nextDoesNotAdvertiseOnMeta = isMeta ? checked : currentState.doesNotAdvertiseOnMeta;
+      const nextDoesNotAdvertiseOnGoogle = isMeta ? currentState.doesNotAdvertiseOnGoogle : checked;
+      const nextAdvertisesOnMeta = isMeta && checked ? false : currentState.advertisesOnMeta;
+      const nextAdvertisesOnGoogle = !isMeta && checked ? false : currentState.advertisesOnGoogle;
+      const doesNotAdvertise = !nextAdvertisesOnMeta
+        && !nextAdvertisesOnGoogle
+        && nextDoesNotAdvertiseOnMeta
+        && nextDoesNotAdvertiseOnGoogle;
+
+      return {
+        ...currentState,
+        [field]: checked,
+        advertisesOnMeta: nextAdvertisesOnMeta,
+        advertisesOnGoogle: nextAdvertisesOnGoogle,
+        doesNotAdvertise,
+      };
+    });
   }
 
   function handleStatusChange(status: LeadStatus) {
@@ -214,7 +218,7 @@ export function LeadForm({ onCreateLead }: LeadFormProps) {
     const errors = validateForm();
     setFormErrors(errors);
     if (Object.keys(errors).length) {
-      setActiveTab(errors.name || errors.email ? "contact" : "notes");
+      setActiveTab("contact");
       return;
     }
 
@@ -228,14 +232,17 @@ export function LeadForm({ onCreateLead }: LeadFormProps) {
       phone: formState.phone.trim(),
       company: formState.company.trim(),
       website: normalizeWebsite(formState.website),
+      instagram: formState.instagram.trim(),
       advertisesOnMeta: formState.advertisesOnMeta,
       advertisesOnGoogle: formState.advertisesOnGoogle,
+      doesNotAdvertiseOnMeta: formState.doesNotAdvertiseOnMeta,
+      doesNotAdvertiseOnGoogle: formState.doesNotAdvertiseOnGoogle,
       doesNotAdvertise: formState.doesNotAdvertise,
-      lastContactAt: formState.lastContactAt,
-      contactMadeAt: formState.contactMadeAt,
-      nextContactAt: formState.nextContactAt,
-      expectedCloseAt: formState.expectedCloseAt,
-      estimatedBudget: formState.estimatedBudget,
+      lastContactAt: "",
+      contactMadeAt: "",
+      nextContactAt: "",
+      expectedCloseAt: "",
+      estimatedBudget: "",
       isLost,
       lostReason: isLost ? formState.lostReason : "",
       commercialNotes: formState.commercialNotes.trim(),
@@ -247,7 +254,7 @@ export function LeadForm({ onCreateLead }: LeadFormProps) {
       source: formState.source,
       serviceInterests,
       serviceStatusMap: formState.serviceStatusMap,
-      customFields: normalizeCustomFields(formState.customFields),
+      customFields: createEmptyCustomFields(),
       createdAt: new Date().toISOString(),
     };
 
@@ -292,7 +299,7 @@ export function LeadForm({ onCreateLead }: LeadFormProps) {
             <div className="formSectionV33 formSectionV34">
               <header>
                 <strong>Dados do contato</strong>
-                <span>Comece pelos dados que permitem encontrar e acionar o lead.</span>
+                <span>Concentre aqui os dados de contato e as observações iniciais.</span>
               </header>
 
               <div className="fieldGrid fieldGridV34">
@@ -317,10 +324,33 @@ export function LeadForm({ onCreateLead }: LeadFormProps) {
                 </label>
               </div>
 
+              <div className="fieldGrid fieldGridV34">
+                <label className="field">
+                  <span>Website</span>
+                  <input type="text" placeholder="www.empresa.com.br" value={formState.website} onChange={(event) => updateField("website", event.target.value)} />
+                </label>
+                <label className="field">
+                  <span>Instagram</span>
+                  <input type="text" placeholder="@empresa ou instagram.com/empresa" value={formState.instagram} onChange={(event) => updateField("instagram", event.target.value)} />
+                </label>
+              </div>
+
               <label className="field">
-                <span>Website</span>
-                <input type="text" placeholder="www.empresa.com.br" value={formState.website} onChange={(event) => updateField("website", event.target.value)} />
+                <span>Observação comercial</span>
+                <textarea placeholder="Ex.: Lead pediu retorno, comparando fornecedores ou trouxe algum contexto importante..." value={formState.commercialNotes} onChange={(event) => updateField("commercialNotes", event.target.value)} rows={4} />
               </label>
+
+              {formState.status === "Perdido" ? (
+                <div className="lostReasonSectionV33 lostReasonSectionV34">
+                  <label className="field">
+                    <span>Motivo da perda</span>
+                    <select id="lead-lost-reason" value={formState.lostReason} onChange={(event) => updateField("lostReason", event.target.value as LostReason)} aria-invalid={Boolean(formErrors.lostReason)} aria-describedby={formErrors.lostReason ? "lead-lost-reason-error" : undefined}>
+                      {lostReasonOptions.map((reason) => <option key={reason || "empty"} value={reason}>{reason || "Selecione"}</option>)}
+                    </select>
+                    {formErrors.lostReason ? <small id="lead-lost-reason-error" className="fieldError">{formErrors.lostReason}</small> : null}
+                  </label>
+                </div>
+              ) : null}
             </div>
           ) : null}
 
@@ -367,44 +397,6 @@ export function LeadForm({ onCreateLead }: LeadFormProps) {
             </div>
           ) : null}
 
-          {activeTab === "next" ? (
-            <div className="formSectionV33 formSectionV34">
-              <header>
-                <strong>Próximo passo</strong>
-                <span>Deixe a próxima ação clara para evitar lead parado.</span>
-              </header>
-
-              <div className="fieldGrid fieldGridV34">
-                <label className="field">
-                  <span>Próximo passo em</span>
-                  <input type="date" value={formState.nextContactAt} onChange={(event) => updateField("nextContactAt", event.target.value)} />
-                </label>
-                <label className="field">
-                  <span>Fechamento previsto</span>
-                  <input type="date" value={formState.expectedCloseAt} onChange={(event) => updateField("expectedCloseAt", event.target.value)} />
-                </label>
-              </div>
-
-              <div className="fieldGrid fieldGridV34">
-                <label className="field">
-                  <span>Orçamento estimado</span>
-                  <input type="text" inputMode="numeric" placeholder="R$ 0,00" value={formState.estimatedBudget} onChange={(event) => updateField("estimatedBudget", formatCurrencyBRL(event.target.value))} />
-                </label>
-                <label className="field">
-                  <span>Último contato em</span>
-                  <input type="date" value={formState.lastContactAt} onChange={(event) => updateField("lastContactAt", event.target.value)} />
-                </label>
-              </div>
-
-              <div className="fieldGrid fieldGridV34">
-                <label className="field">
-                  <span>Contato feito em</span>
-                  <input type="date" value={formState.contactMadeAt} onChange={(event) => updateField("contactMadeAt", event.target.value)} />
-                </label>
-              </div>
-            </div>
-          ) : null}
-
           {activeTab === "services" ? (
             <div className="formSectionV33 formSectionV34 servicesTabV34">
               <header>
@@ -417,6 +409,8 @@ export function LeadForm({ onCreateLead }: LeadFormProps) {
                 <div className="adsOptions adsOptionsV34">
                   <label className="checkCard"><input type="checkbox" checked={formState.advertisesOnMeta} onChange={(event) => handlePaidAdsChange("advertisesOnMeta", event.target.checked)} /> Anuncia na Meta</label>
                   <label className="checkCard"><input type="checkbox" checked={formState.advertisesOnGoogle} onChange={(event) => handlePaidAdsChange("advertisesOnGoogle", event.target.checked)} /> Anuncia no Google</label>
+                  <label className="checkCard"><input type="checkbox" checked={formState.doesNotAdvertiseOnMeta} onChange={(event) => handleNegativeAdsChange("doesNotAdvertiseOnMeta", event.target.checked)} /> Não anuncia na Meta</label>
+                  <label className="checkCard"><input type="checkbox" checked={formState.doesNotAdvertiseOnGoogle} onChange={(event) => handleNegativeAdsChange("doesNotAdvertiseOnGoogle", event.target.checked)} /> Não anuncia no Google</label>
                   <label className="checkCard"><input type="checkbox" checked={formState.doesNotAdvertise} onChange={(event) => handleNoAdsChange(event.target.checked)} /> Não anuncia</label>
                 </div>
               </div>
@@ -438,58 +432,6 @@ export function LeadForm({ onCreateLead }: LeadFormProps) {
                   ))}
                 </div>
               </div>
-            </div>
-          ) : null}
-
-
-          {activeTab === "custom" ? (
-            <div className="formSectionV33 formSectionV34">
-              <header>
-                <strong>Campos adicionais da planilha</strong>
-                <span>Campos presentes no formulário original que agora ficam salvos no cadastro do lead.</span>
-              </header>
-
-              <div className="fieldGrid fieldGridV34">
-                {spreadsheetCustomFieldLabels.map((field) => (
-                  <label className="field" key={field}>
-                    <span>{field}</span>
-                    <input
-                      type="text"
-                      value={formState.customFields[field] || ""}
-                      onChange={(event) => updateCustomField(field, event.target.value)}
-                      placeholder="Clique para adicionar"
-                    />
-                  </label>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          {activeTab === "notes" ? (
-            <div className="formSectionV33 formSectionV34">
-              <header>
-                <strong>Observações</strong>
-                <span>Use para registrar histórico comercial, contexto e objeções.</span>
-              </header>
-
-              <label className="field">
-                <span>Observação comercial</span>
-                <textarea placeholder="Ex.: Lead pediu retorno na próxima semana, comparando com outra agência, quer começar com Google Ads..." value={formState.commercialNotes} onChange={(event) => updateField("commercialNotes", event.target.value)} rows={5} />
-              </label>
-
-              {formState.status === "Perdido" ? (
-                <div className="lostReasonSectionV33 lostReasonSectionV34">
-                  <label className="field">
-                    <span>Motivo da perda</span>
-                    <select id="lead-lost-reason" value={formState.lostReason} onChange={(event) => updateField("lostReason", event.target.value as LostReason)} aria-invalid={Boolean(formErrors.lostReason)} aria-describedby={formErrors.lostReason ? "lead-lost-reason-error" : undefined}>
-                      {lostReasonOptions.map((reason) => <option key={reason || "empty"} value={reason}>{reason || "Selecione"}</option>)}
-                    </select>
-                    {formErrors.lostReason ? <small id="lead-lost-reason-error" className="fieldError">{formErrors.lostReason}</small> : null}
-                  </label>
-                </div>
-              ) : (
-                <div className="formHintV34">Campos de perda aparecem somente quando o status do lead for Perdido.</div>
-              )}
             </div>
           ) : null}
         </section>

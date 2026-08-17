@@ -93,6 +93,14 @@ export function normalizeLead(lead = {}) {
   const customFields = normalizeCustomFields(rawCustomFields);
   const legacyWebsite = String(rawCustomFields["Coloque seu site"] ?? "").trim();
   const legacyGoogleAds = String(rawCustomFields["Já anuncia no Google ADS? - 2"] ?? "").trim();
+  const advertisesOnMeta = Boolean(lead.advertisesOnMeta);
+  const advertisesOnGoogle = Boolean(lead.advertisesOnGoogle) || normalizeBooleanText(legacyGoogleAds);
+  const legacyDoesNotAdvertise = Boolean(lead.doesNotAdvertise);
+  const doesNotAdvertiseOnMeta = !advertisesOnMeta && (Boolean(lead.doesNotAdvertiseOnMeta) || legacyDoesNotAdvertise);
+  const doesNotAdvertiseOnGoogle = !advertisesOnGoogle && (Boolean(lead.doesNotAdvertiseOnGoogle) || legacyDoesNotAdvertise);
+  const doesNotAdvertise = !advertisesOnMeta
+    && !advertisesOnGoogle
+    && (legacyDoesNotAdvertise || (doesNotAdvertiseOnMeta && doesNotAdvertiseOnGoogle));
   const createdAt = normalizeDateToIso(lead.createdAt);
 
   return {
@@ -102,9 +110,12 @@ export function normalizeLead(lead = {}) {
     phone: String(lead.phone || ""),
     company: String(lead.company || ""),
     website: String(lead.website || legacyWebsite || ""),
-    advertisesOnMeta: Boolean(lead.advertisesOnMeta),
-    advertisesOnGoogle: Boolean(lead.advertisesOnGoogle) || normalizeBooleanText(legacyGoogleAds),
-    doesNotAdvertise: Boolean(lead.doesNotAdvertise),
+    instagram: String(lead.instagram || ""),
+    advertisesOnMeta,
+    advertisesOnGoogle,
+    doesNotAdvertiseOnMeta,
+    doesNotAdvertiseOnGoogle,
+    doesNotAdvertise,
     lastContactAt: String(lead.lastContactAt || ""),
     contactMadeAt: String(lead.contactMadeAt || ""),
     nextContactAt: String(lead.nextContactAt || ""),
@@ -151,6 +162,7 @@ export function buildLeadSearchText(lead = {}) {
     normalizePhoneKey(normalizedLead.phone),
     normalizedLead.company,
     normalizedLead.website,
+    normalizedLead.instagram,
     normalizedLead.source,
     normalizedLead.expectedCloseAt,
     normalizedLead.estimatedBudget,
@@ -190,8 +202,11 @@ function rowToLeadInput(row = {}) {
     phone: row.phone,
     company: row.company,
     website: row.website,
+    instagram: row.instagram || "",
     advertisesOnMeta: Boolean(Number(row.advertises_on_meta)),
     advertisesOnGoogle: Boolean(Number(row.advertises_on_google)),
+    doesNotAdvertiseOnMeta: Boolean(Number(row.does_not_advertise_on_meta)),
+    doesNotAdvertiseOnGoogle: Boolean(Number(row.does_not_advertise_on_google)),
     doesNotAdvertise: Boolean(Number(row.does_not_advertise)),
     lastContactAt: row.last_contact_at,
     contactMadeAt: row.contact_made_at,
@@ -246,9 +261,12 @@ export function leadToDbParams(lead, options = {}) {
     normalizedLead.company,
     nameCompanyKey,
     normalizedLead.website,
+    normalizedLead.instagram,
     normalizedLead.advertisesOnMeta ? 1 : 0,
     normalizedLead.advertisesOnGoogle ? 1 : 0,
     normalizedLead.doesNotAdvertise ? 1 : 0,
+    normalizedLead.doesNotAdvertiseOnMeta ? 1 : 0,
+    normalizedLead.doesNotAdvertiseOnGoogle ? 1 : 0,
     normalizedLead.lastContactAt,
     normalizedLead.contactMadeAt,
     normalizedLead.nextContactAt,

@@ -413,6 +413,8 @@ export default function App() {
         serviceInterests: updatedLead.serviceInterests,
         advertisesOnMeta: updatedLead.advertisesOnMeta,
         advertisesOnGoogle: updatedLead.advertisesOnGoogle,
+        doesNotAdvertiseOnMeta: updatedLead.doesNotAdvertiseOnMeta,
+        doesNotAdvertiseOnGoogle: updatedLead.doesNotAdvertiseOnGoogle,
         doesNotAdvertise: updatedLead.doesNotAdvertise,
       });
       replaceLeadInState(savedLead);

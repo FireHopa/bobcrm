@@ -407,6 +407,7 @@ export const LeadTable = memo(function LeadTable({
           lead.phone,
           lead.company,
           lead.website,
+          lead.instagram,
           lead.source,
           lead.estimatedBudget,
           lead.status,

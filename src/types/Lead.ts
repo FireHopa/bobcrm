@@ -66,8 +66,11 @@ export type Lead = {
   phone: string;
   company: string;
   website: string;
+  instagram?: string;
   advertisesOnMeta: boolean;
   advertisesOnGoogle: boolean;
+  doesNotAdvertiseOnMeta?: boolean;
+  doesNotAdvertiseOnGoogle?: boolean;
   doesNotAdvertise: boolean;
   lastContactAt: string;
   contactMadeAt: string;

@@ -422,6 +422,14 @@ export function normalizeLeadFromApi(lead: Partial<Lead>): Lead {
   const rawCustomFields: Partial<Record<string, unknown>> = lead.customFields && typeof lead.customFields === "object" ? lead.customFields : {};
   const legacyWebsite = String(rawCustomFields["Coloque seu site"] ?? "").trim();
   const legacyGoogleAds = String(rawCustomFields["Já anuncia no Google ADS? - 2"] ?? "").trim();
+  const advertisesOnMeta = Boolean(lead.advertisesOnMeta);
+  const advertisesOnGoogle = Boolean(lead.advertisesOnGoogle) || normalizeBooleanText(legacyGoogleAds);
+  const legacyDoesNotAdvertise = Boolean(lead.doesNotAdvertise);
+  const doesNotAdvertiseOnMeta = !advertisesOnMeta && (Boolean(lead.doesNotAdvertiseOnMeta) || legacyDoesNotAdvertise);
+  const doesNotAdvertiseOnGoogle = !advertisesOnGoogle && (Boolean(lead.doesNotAdvertiseOnGoogle) || legacyDoesNotAdvertise);
+  const doesNotAdvertise = !advertisesOnMeta
+    && !advertisesOnGoogle
+    && (legacyDoesNotAdvertise || (doesNotAdvertiseOnMeta && doesNotAdvertiseOnGoogle));
 
   return {
     id: lead.id || crypto.randomUUID(),
@@ -430,9 +438,12 @@ export function normalizeLeadFromApi(lead: Partial<Lead>): Lead {
     phone: lead.phone || "",
     company: lead.company || "",
     website: lead.website || legacyWebsite || "",
-    advertisesOnMeta: Boolean(lead.advertisesOnMeta),
-    advertisesOnGoogle: Boolean(lead.advertisesOnGoogle) || normalizeBooleanText(legacyGoogleAds),
-    doesNotAdvertise: Boolean(lead.doesNotAdvertise),
+    instagram: lead.instagram || "",
+    advertisesOnMeta,
+    advertisesOnGoogle,
+    doesNotAdvertiseOnMeta,
+    doesNotAdvertiseOnGoogle,
+    doesNotAdvertise,
     lastContactAt: lead.lastContactAt || "",
     contactMadeAt: lead.contactMadeAt || "",
     nextContactAt: lead.nextContactAt || "",

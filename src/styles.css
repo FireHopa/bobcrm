@@ -9363,7 +9363,7 @@ tbody tr:hover {
 
 .leadFormTabsV34 {
   display: grid !important;
-  grid-template-columns: repeat(6, minmax(132px, 1fr));
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
   align-items: stretch;
   width: 100%;
   padding: 10px 12px !important;
@@ -9446,7 +9446,7 @@ tbody tr:hover {
   }
 
   .leadFormTabsV34 {
-    grid-template-columns: repeat(6, minmax(150px, 1fr));
+    grid-template-columns: repeat(3, minmax(150px, 1fr));
   }
 
   .leadFormV34 > .formStickyActionsV34 {

@@ -190,6 +190,8 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
     ...lead,
     advertisesOnMeta: formState.advertisesOnMeta,
     advertisesOnGoogle: formState.advertisesOnGoogle,
+    doesNotAdvertiseOnMeta: formState.doesNotAdvertiseOnMeta,
+    doesNotAdvertiseOnGoogle: formState.doesNotAdvertiseOnGoogle,
     doesNotAdvertise: formState.doesNotAdvertise,
     serviceStatusMap: formState.serviceStatusMap,
     serviceInterests: getServiceInterestsFromStatusMap(formState.serviceStatusMap),
@@ -245,15 +247,41 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
       doesNotAdvertise: checked,
       advertisesOnMeta: checked ? false : currentState.advertisesOnMeta,
       advertisesOnGoogle: checked ? false : currentState.advertisesOnGoogle,
+      doesNotAdvertiseOnMeta: checked,
+      doesNotAdvertiseOnGoogle: checked,
     } : currentState);
   }
 
   function handlePaidAdsChange(field: "advertisesOnMeta" | "advertisesOnGoogle", checked: boolean) {
-    setFormState((currentState) => currentState ? {
-      ...currentState,
-      [field]: checked,
-      doesNotAdvertise: checked ? false : currentState.doesNotAdvertise,
-    } : currentState);
+    setFormState((currentState) => {
+      if (!currentState) return currentState;
+      const isMeta = field === "advertisesOnMeta";
+      return {
+        ...currentState,
+        [field]: checked,
+        doesNotAdvertiseOnMeta: isMeta && checked ? false : currentState.doesNotAdvertiseOnMeta,
+        doesNotAdvertiseOnGoogle: !isMeta && checked ? false : currentState.doesNotAdvertiseOnGoogle,
+        doesNotAdvertise: checked ? false : currentState.doesNotAdvertise,
+      };
+    });
+  }
+
+  function handleNegativeAdsChange(field: "doesNotAdvertiseOnMeta" | "doesNotAdvertiseOnGoogle", checked: boolean) {
+    setFormState((currentState) => {
+      if (!currentState) return currentState;
+      const isMeta = field === "doesNotAdvertiseOnMeta";
+      const doesNotAdvertiseOnMeta = isMeta ? checked : currentState.doesNotAdvertiseOnMeta;
+      const doesNotAdvertiseOnGoogle = isMeta ? currentState.doesNotAdvertiseOnGoogle : checked;
+      const advertisesOnMeta = isMeta && checked ? false : currentState.advertisesOnMeta;
+      const advertisesOnGoogle = !isMeta && checked ? false : currentState.advertisesOnGoogle;
+      return {
+        ...currentState,
+        [field]: checked,
+        advertisesOnMeta,
+        advertisesOnGoogle,
+        doesNotAdvertise: !advertisesOnMeta && !advertisesOnGoogle && doesNotAdvertiseOnMeta && doesNotAdvertiseOnGoogle,
+      };
+    });
   }
 
   function handleSave() {
@@ -283,8 +311,11 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
       phone: formState.phone.trim(),
       company: formState.company.trim(),
       website: normalizeWebsite(formState.website),
+      instagram: formState.instagram.trim(),
       advertisesOnMeta: formState.advertisesOnMeta,
       advertisesOnGoogle: formState.advertisesOnGoogle,
+      doesNotAdvertiseOnMeta: formState.doesNotAdvertiseOnMeta,
+      doesNotAdvertiseOnGoogle: formState.doesNotAdvertiseOnGoogle,
       doesNotAdvertise: formState.doesNotAdvertise,
       lastContactAt: formState.lastContactAt,
       contactMadeAt: formState.contactMadeAt,
@@ -508,7 +539,8 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
                     <label className="field"><span>E-mail</span><input type="email" value={formState.email} onChange={(event) => updateField("email", event.target.value)} aria-invalid={Boolean(formErrors.email || formErrors.identity)} aria-describedby={formErrors.email ? "drawer-email-error" : formErrors.identity ? "drawer-identity-error" : undefined} />{formErrors.email ? <small id="drawer-email-error" className="fieldError">{formErrors.email}</small> : null}</label>
                     <label className="field"><span>Telefone</span><input type="tel" value={formState.phone} onChange={(event) => updateField("phone", formatPhone(event.target.value))} aria-invalid={Boolean(formErrors.identity)} aria-describedby={formErrors.identity ? "drawer-identity-error" : undefined} /></label>
                     <label className="field"><span>Empresa</span><input type="text" value={formState.company} onChange={(event) => updateField("company", event.target.value)} /></label>
-                    <label className="field drawerFullField"><span>Website</span><input type="text" value={formState.website} onChange={(event) => updateField("website", event.target.value)} /></label>
+                    <label className="field"><span>Website</span><input type="text" value={formState.website} onChange={(event) => updateField("website", event.target.value)} /></label>
+                    <label className="field"><span>Instagram</span><input type="text" value={formState.instagram} onChange={(event) => updateField("instagram", event.target.value)} placeholder="@empresa ou instagram.com/empresa" /></label>
                   </div>
                   {formErrors.identity ? <p id="drawer-identity-error" className="fieldError" role="alert">{formErrors.identity}</p> : null}
                 </section>
@@ -564,6 +596,8 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
                   <div className="drawerChecksGrid">
                     <label className="checkCard"><input type="checkbox" checked={formState.advertisesOnMeta} onChange={(event) => handlePaidAdsChange("advertisesOnMeta", event.target.checked)} />Anuncia na Meta</label>
                     <label className="checkCard"><input type="checkbox" checked={formState.advertisesOnGoogle} onChange={(event) => handlePaidAdsChange("advertisesOnGoogle", event.target.checked)} />Anuncia no Google</label>
+                    <label className="checkCard"><input type="checkbox" checked={formState.doesNotAdvertiseOnMeta} onChange={(event) => handleNegativeAdsChange("doesNotAdvertiseOnMeta", event.target.checked)} />Não anuncia na Meta</label>
+                    <label className="checkCard"><input type="checkbox" checked={formState.doesNotAdvertiseOnGoogle} onChange={(event) => handleNegativeAdsChange("doesNotAdvertiseOnGoogle", event.target.checked)} />Não anuncia no Google</label>
                     <label className="checkCard"><input type="checkbox" checked={formState.doesNotAdvertise} onChange={(event) => handleNoAdsChange(event.target.checked)} />Não anuncia</label>
                     <label className="checkCard drawerDangerCheck"><input type="checkbox" checked={formState.isLost} onChange={(event) => handleLostChange(event.target.checked)} />Marcar como perdido</label>
                   </div>
@@ -589,7 +623,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
             <section className="drawerSection">
               <h3>Dados principais</h3>
               <div className="drawerInfoGrid">
-                <InfoItem label="Nome" value={lead.name} /><InfoItem label="E-mail" value={lead.email} /><InfoItem label="Telefone" value={lead.phone} /><InfoItem label="Empresa" value={lead.company} /><InfoItem label="Website" value={lead.website} /><InfoItem label="Origem" value={lead.source} />
+                <InfoItem label="Nome" value={lead.name} /><InfoItem label="E-mail" value={lead.email} /><InfoItem label="Telefone" value={lead.phone} /><InfoItem label="Empresa" value={lead.company} /><InfoItem label="Website" value={lead.website} /><InfoItem label="Instagram" value={lead.instagram || ""} /><InfoItem label="Origem" value={lead.source} />
               </div>
             </section>
             <ExternalOriginsSection origins={externalOrigins} error={externalOriginsError} />
@@ -607,7 +641,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
             {notesSection}
             <section className="drawerSection"><h3>Datas</h3><div className="drawerInfoGrid"><InfoItem label="Último contato em" value={formatDate(lead.lastContactAt)} /><InfoItem label="Contato feito em" value={formatDate(lead.contactMadeAt)} /><InfoItem label="Próximo contato em" value={formatDate(lead.nextContactAt)} /><InfoItem label="Criado em" value={lead.createdAt ? new Date(lead.createdAt).toLocaleDateString("pt-BR") : ""} /></div></section>
             <section className="drawerSection"><h3>Campos adicionais da planilha</h3><div className="drawerInfoGrid">{spreadsheetCustomFieldLabels.map((field) => <InfoItem key={field} label={field} value={lead.customFields?.[field] || ""} />)}</div></section>
-            <section className="drawerSection"><h3>Mídia e perda</h3><div className="drawerInfoGrid"><InfoItem label="Anuncia na Meta" value={intelligenceLead.advertisesOnMeta ? "Sim" : "Não"} /><InfoItem label="Anuncia no Google" value={intelligenceLead.advertisesOnGoogle ? "Sim" : "Não"} /><InfoItem label="Não anuncia" value={intelligenceLead.doesNotAdvertise ? "Sim" : "Não"} /><InfoItem label="Motivo da perda" value={lead.lostReason} /></div></section>
+            <section className="drawerSection"><h3>Mídia e perda</h3><div className="drawerInfoGrid"><InfoItem label="Anuncia na Meta" value={intelligenceLead.advertisesOnMeta ? "Sim" : "Não"} /><InfoItem label="Anuncia no Google" value={intelligenceLead.advertisesOnGoogle ? "Sim" : "Não"} /><InfoItem label="Não anuncia na Meta" value={intelligenceLead.doesNotAdvertiseOnMeta ? "Sim" : "Não"} /><InfoItem label="Não anuncia no Google" value={intelligenceLead.doesNotAdvertiseOnGoogle ? "Sim" : "Não"} /><InfoItem label="Não anuncia" value={intelligenceLead.doesNotAdvertise ? "Sim" : "Não"} /><InfoItem label="Motivo da perda" value={lead.lostReason} /></div></section>
             {hasPermission(currentUser, "read_audit") ? (
               <section className="drawerSection auditDrawerSection"><h3>Histórico de alterações</h3>{auditError ? <p className="mutedText">{auditError}</p> : null}<div className="auditTimeline">{auditEntries.length ? auditEntries.slice(0, 12).map((entry) => <article className="auditItem" key={entry.id}><strong>{entry.summary || entry.action}</strong><span>{entry.actorName} • {entry.createdAt ? new Date(entry.createdAt).toLocaleString("pt-BR") : ""}</span></article>) : <p className="mutedText">Nenhum histórico registrado ainda para este lead.</p>}</div></section>
             ) : null}

@@ -18,8 +18,11 @@ export type LeadDrawerFormState = {
   phone: string;
   company: string;
   website: string;
+  instagram: string;
   advertisesOnMeta: boolean;
   advertisesOnGoogle: boolean;
+  doesNotAdvertiseOnMeta: boolean;
+  doesNotAdvertiseOnGoogle: boolean;
   doesNotAdvertise: boolean;
   lastContactAt: string;
   contactMadeAt: string;
@@ -81,15 +84,24 @@ export const leadLostReasonOptions: LostReason[] = [
 ];
 
 export function createLeadDrawerFormState(lead: Lead): LeadDrawerFormState {
+  const advertisesOnMeta = Boolean(lead.advertisesOnMeta);
+  const advertisesOnGoogle = Boolean(lead.advertisesOnGoogle);
+  const legacyDoesNotAdvertise = Boolean(lead.doesNotAdvertise);
+  const doesNotAdvertiseOnMeta = !advertisesOnMeta && (Boolean(lead.doesNotAdvertiseOnMeta) || legacyDoesNotAdvertise);
+  const doesNotAdvertiseOnGoogle = !advertisesOnGoogle && (Boolean(lead.doesNotAdvertiseOnGoogle) || legacyDoesNotAdvertise);
+
   return {
     name: lead.name,
     email: lead.email,
     phone: lead.phone,
     company: lead.company,
     website: lead.website,
-    advertisesOnMeta: lead.advertisesOnMeta,
-    advertisesOnGoogle: lead.advertisesOnGoogle,
-    doesNotAdvertise: lead.doesNotAdvertise,
+    instagram: lead.instagram || "",
+    advertisesOnMeta,
+    advertisesOnGoogle,
+    doesNotAdvertiseOnMeta,
+    doesNotAdvertiseOnGoogle,
+    doesNotAdvertise: !advertisesOnMeta && !advertisesOnGoogle && doesNotAdvertiseOnMeta && doesNotAdvertiseOnGoogle,
     lastContactAt: lead.lastContactAt,
     contactMadeAt: lead.contactMadeAt,
     nextContactAt: lead.nextContactAt,

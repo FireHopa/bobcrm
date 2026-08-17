@@ -178,12 +178,27 @@ export function getLeadWithSyncedAdvertisingFromServices(lead: Lead): Lead {
 
   const advertisesOnGoogle = google === "Sim" ? true : google === "Não" ? false : lead.advertisesOnGoogle;
   const advertisesOnMeta = meta === "Sim" ? true : meta === "Não" ? false : lead.advertisesOnMeta;
-  const doesNotAdvertise = advertisesOnGoogle || advertisesOnMeta ? false : google === "Não" && meta === "Não" ? true : lead.doesNotAdvertise;
+  const doesNotAdvertiseOnGoogle = advertisesOnGoogle
+    ? false
+    : google === "Não"
+      ? true
+      : Boolean(lead.doesNotAdvertiseOnGoogle || lead.doesNotAdvertise);
+  const doesNotAdvertiseOnMeta = advertisesOnMeta
+    ? false
+    : meta === "Não"
+      ? true
+      : Boolean(lead.doesNotAdvertiseOnMeta || lead.doesNotAdvertise);
+  const doesNotAdvertise = !advertisesOnGoogle
+    && !advertisesOnMeta
+    && doesNotAdvertiseOnGoogle
+    && doesNotAdvertiseOnMeta;
 
   return {
     ...lead,
     advertisesOnGoogle,
     advertisesOnMeta,
+    doesNotAdvertiseOnGoogle,
+    doesNotAdvertiseOnMeta,
     doesNotAdvertise,
   };
 }
