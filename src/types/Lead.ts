@@ -83,6 +83,8 @@ export type Lead = {
   status: LeadStatus;
   responsible: string;
   responsibleUserId: string;
+  sdrResponsible: string;
+  sdrResponsibleUserId: string;
   temperature: LeadTemperature;
   pain: string;
   source: LeadSource;

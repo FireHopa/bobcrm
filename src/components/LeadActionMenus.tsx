@@ -129,7 +129,7 @@ function getContactItems(lead: Lead): ActionMenuItem[] {
       label: "Enviar e-mail",
       description: email,
       icon: <MenuIcon name="email" />,
-      onSelect: () => { window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`; },
+      onSelect: () => openExternal(`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(email)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`),
     });
   }
 

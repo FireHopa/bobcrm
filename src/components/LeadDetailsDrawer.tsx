@@ -39,6 +39,7 @@ import {
 import { formatCurrencyBRL, formatDate, formatPhone, normalizeWebsite } from "../utils/formatters";
 import { TaskCompletionDialog, type TaskCompletionPayload } from "./TaskCompletionDialog";
 import { LeadContactMenu, LeadOverflowMenu } from "./LeadActionMenus";
+import { BrDateInput } from "./BrDateInput";
 import {
   createLeadDrawerFormState,
   leadLostReasonOptions,
@@ -58,6 +59,21 @@ import {
   InfoText,
   ServiceStatusList,
 } from "../features/leads/LeadDetailsPanels";
+
+
+function toDateTimeLocalInput(value: string): string {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return `${normalized}T00:00`;
+  const match = normalized.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})/);
+  return match ? `${match[1]}T${match[2]}:${match[3]}` : "";
+}
+
+function fromDateTimeLocalInput(value: string): string {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(normalized) ? `${normalized}:00` : normalized;
+}
 
 const DRAWER_FOCUSABLE_SELECTOR = [
   "button:not([disabled])",
@@ -465,7 +481,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
       {canManageTasks ? (
         <div className="drawerTaskComposerV42" role="group" aria-label="Criar tarefa">
           <label className="field"><span>Título</span><input value={taskTitle} onChange={(event) => setTaskTitle(event.target.value)} placeholder="Ex.: Retornar proposta" required /></label>
-          <label className="field"><span>Data e horário</span><input type="datetime-local" value={taskDueAt} onChange={(event) => setTaskDueAt(event.target.value)} required /></label>
+          <label className="field"><span>Data e horário <small className="dateFormatHint">Dia/Mês/Ano · Hora</small></span><BrDateInput withTime value={taskDueAt} onChange={setTaskDueAt} required ariaLabel="Data e horário da tarefa" /></label>
           <label className="field"><span>Tipo</span><select value={taskType} onChange={(event) => setTaskType(event.target.value as TaskType)}><option value="follow_up">Follow-up</option><option value="ligacao">Ligação</option><option value="whatsapp">WhatsApp</option><option value="email">E-mail</option><option value="reuniao">Reunião</option><option value="outro">Outro</option></select></label>
           <label className="field"><span>Prioridade</span><select value={taskPriority} onChange={(event) => setTaskPriority(event.target.value as TaskPriority)}><option value="baixa">Baixa</option><option value="normal">Normal</option><option value="alta">Alta</option><option value="urgente">Urgente</option></select></label>
           {canAssignTasks ? <label className="field"><span>Responsável</span><select value={taskResponsibleUserId} onChange={(event) => setTaskResponsibleUserId(event.target.value)} required><option value="">Selecione</option>{assignableUsers.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label> : null}
@@ -548,7 +564,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
                 <ExternalOriginsSection origins={externalOrigins} error={externalOriginsError} />
 
                 <section className="drawerSection">
-                  <h3>Comercial</h3>
+                  <h3>Informações complementares</h3>
                   <div className="drawerFormGrid">
                     <label className="field"><span>Status</span><select value={formState.status} onChange={(event) => handleStatusChange(event.target.value as LeadStatus)}>{leadStatusOptions.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
                     {canAssignLead ? (
@@ -558,9 +574,14 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
                         <small>Para atribuir ou trocar o consultor, use “Encaminhar para consultor”.</small>
                       </div>
                     ) : null}
+                    <div className="field leadAssignmentReadOnly">
+                      <span>SDR RESPONSÁVEL</span>
+                      <strong>{lead.sdrResponsible || "A preencher automaticamente"}</strong>
+                      <small>Registro automático e permanente do SDR que originou o atendimento.</small>
+                    </div>
                     <label className="field"><span>Temperatura</span><select value={formState.temperature} onChange={(event) => updateField("temperature", event.target.value as LeadTemperature)}>{leadTemperatureOptions.map((temperature) => <option key={temperature || "empty"} value={temperature}>{temperature || "Selecione"}</option>)}</select></label>
                     <label className="field"><span>Origem</span><select value={formState.source} onChange={(event) => updateField("source", event.target.value as LeadSource)}>{leadSourceOptions.map((source) => <option key={source || "empty"} value={source}>{source || "Selecione"}</option>)}</select></label>
-                    <label className="field"><span>Fechamento previsto</span><input type="date" value={formState.expectedCloseAt} onChange={(event) => updateField("expectedCloseAt", event.target.value)} /></label>
+                    {currentUser?.role !== "pre_venda" ? <label className="field"><span>Fechamento previsto <small className="dateFormatHint">Dia/Mês/Ano · Hora</small></span><BrDateInput withTime value={toDateTimeLocalInput(formState.expectedCloseAt)} onChange={(value) => updateField("expectedCloseAt", fromDateTimeLocalInput(value))} ariaLabel="Fechamento previsto" /></label> : null}
                     <div className="drawerFullField drawerServicesEdit">
                       <span className="fieldTitle">Mapeamento dos serviços</span>
                       <div className="serviceStatusGrid drawerServiceStatusGrid">
@@ -579,9 +600,9 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
                 <section className="drawerSection">
                   <h3>Datas e orçamento</h3>
                   <div className="drawerFormGrid">
-                    <label className="field"><span>Último contato em</span><input type="date" value={formState.lastContactAt} onChange={(event) => updateField("lastContactAt", event.target.value)} /></label>
-                    <label className="field"><span>Contato feito em</span><input type="date" value={formState.contactMadeAt} onChange={(event) => updateField("contactMadeAt", event.target.value)} /></label>
-                    <label className="field"><span>Próximo contato em</span><input type="date" value={formState.nextContactAt} onChange={(event) => updateField("nextContactAt", event.target.value)} /></label>
+                    <label className="field"><span>Último contato em <small className="dateFormatHint">Dia/Mês/Ano</small></span><BrDateInput value={formState.lastContactAt} onChange={(value) => updateField("lastContactAt", value)} ariaLabel="Último contato em" /></label>
+                    <label className="field"><span>Contato feito em <small className="dateFormatHint">Dia/Mês/Ano</small></span><BrDateInput value={formState.contactMadeAt} onChange={(value) => updateField("contactMadeAt", value)} ariaLabel="Contato feito em" /></label>
+                    <label className="field"><span>Próximo contato em <small className="dateFormatHint">Dia/Mês/Ano</small></span><BrDateInput value={formState.nextContactAt} onChange={(value) => updateField("nextContactAt", value)} ariaLabel="Próximo contato em" /></label>
                     <label className="field"><span>Orçamento estimado</span><input type="text" inputMode="numeric" value={formState.estimatedBudget} onChange={(event) => updateField("estimatedBudget", formatCurrencyBRL(event.target.value))} /></label>
                   </div>
                 </section>
@@ -611,7 +632,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
                 <div className="drawerFormGrid">
                   <label className="field"><span>E-mail</span><input type="email" value={formState.email} onChange={(event) => updateField("email", event.target.value)} aria-invalid={Boolean(formErrors.email)} aria-describedby={formErrors.email ? "drawer-email-error" : undefined} />{formErrors.email ? <small id="drawer-email-error" className="fieldError">{formErrors.email}</small> : null}</label>
                   <label className="field"><span>Temperatura</span><select value={formState.temperature} onChange={(event) => updateField("temperature", event.target.value as LeadTemperature)}>{leadTemperatureOptions.map((temperature) => <option key={temperature || "empty"} value={temperature}>{temperature || "Selecione"}</option>)}</select></label>
-                  <label className="field"><span>Fechamento previsto</span><input type="date" value={formState.expectedCloseAt} onChange={(event) => updateField("expectedCloseAt", event.target.value)} /></label>
+                  <label className="field"><span>Fechamento previsto <small className="dateFormatHint">Dia/Mês/Ano · Hora</small></span><BrDateInput withTime value={toDateTimeLocalInput(formState.expectedCloseAt)} onChange={(value) => updateField("expectedCloseAt", fromDateTimeLocalInput(value))} ariaLabel="Fechamento previsto" /></label>
                 </div>
               </section>
             )}
@@ -628,9 +649,9 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
             </section>
             <ExternalOriginsSection origins={externalOrigins} error={externalOriginsError} />
             <section className="drawerSection">
-              <h3>Comercial</h3>
+              <h3>Informações complementares</h3>
               <div className="drawerInfoGrid">
-                <InfoItem label="Status" value={lead.status} /><InfoItem label="Responsável" value={lead.responsible} /><InfoItem label="Temperatura" value={lead.temperature} /><InfoItem label="Orçamento estimado" value={lead.estimatedBudget} /><InfoItem label="Fechamento previsto" value={formatDate(lead.expectedCloseAt)} />
+                <InfoItem label="Status" value={lead.status} /><InfoItem label="Responsável" value={lead.responsible} /><InfoItem label="SDR RESPONSÁVEL" value={lead.sdrResponsible} /><InfoItem label="Temperatura" value={lead.temperature} /><InfoItem label="Orçamento estimado" value={lead.estimatedBudget} />{currentUser?.role !== "pre_venda" ? <InfoItem label="Fechamento previsto" value={formatDate(lead.expectedCloseAt)} /> : null}
               </div>
               <ClientIntelligencePanel lead={intelligenceLead} />
               <CommercialRecommendationPanel lead={intelligenceLead} />
@@ -674,6 +695,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
                 lead={lead}
                 includeOpen={false}
                 includeEdit={false}
+                includeScript={currentUser?.role !== "consultor_vendas"}
                 onDeleteLead={canDeleteLead ? () => handleDelete() : undefined}
                 triggerLabel="Mais ações"
                 triggerClassName="secondaryButton actionMenuTextTrigger drawerActionButtonV5"

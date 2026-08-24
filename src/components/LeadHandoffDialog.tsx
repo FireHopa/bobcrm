@@ -7,14 +7,13 @@ import {
   handoffLeadToConsultant,
   type LeadHandoffResult,
 } from "../utils/api";
+import { BrDateInput } from "./BrDateInput";
 
-const taskTypes: Array<{ value: TaskType; label: string }> = [
-  { value: "ligacao", label: "Ligação" },
-  { value: "whatsapp", label: "WhatsApp" },
-  { value: "email", label: "E-mail" },
-  { value: "reuniao", label: "Reunião" },
-  { value: "follow_up", label: "Follow-up" },
-  { value: "outro", label: "Outro" },
+const commitmentOptions: Array<{ type: TaskType; title: string }> = [
+  { type: "ligacao", title: "Contato via ligação" },
+  { type: "whatsapp", title: "Contato via WhatsApp" },
+  { type: "reuniao", title: "Reunião" },
+  { type: "follow_up", title: "Follow-up" },
 ];
 
 const priorities: Array<{ value: TaskPriority; label: string }> = [
@@ -67,10 +66,11 @@ export function LeadHandoffDialog({ lead, assignableUsers, onClose, onCompleted 
   const [consultantUserId, setConsultantUserId] = useState(lead.responsibleUserId || "");
   const [pipelineId, setPipelineId] = useState("");
   const [stageId, setStageId] = useState("");
-  const [taskTitle, setTaskTitle] = useState("Realizar primeiro contato");
   const [taskDescription, setTaskDescription] = useState("");
   const [taskDueAt, setTaskDueAt] = useState(() => initialTaskDueAt(lead.nextContactAt));
   const [taskType, setTaskType] = useState<TaskType>("ligacao");
+  const selectedCommitment = commitmentOptions.find((option) => option.type === taskType) || commitmentOptions[0];
+  const taskTitle = selectedCommitment.title;
   const [taskPriority, setTaskPriority] = useState<TaskPriority>("normal");
   const [requestId] = useState(() => crypto.randomUUID());
   const [isLoading, setIsLoading] = useState(true);
@@ -101,7 +101,7 @@ export function LeadHandoffDialog({ lead, assignableUsers, onClose, onCompleted 
 
   const consultantStepComplete = Boolean(consultantUserId);
   const pipelineStepComplete = Boolean(pipelineId && stageId);
-  const taskStepComplete = Boolean(taskTitle.trim().length >= 3 && taskDueAt);
+  const taskStepComplete = Boolean(taskType && taskDueAt);
   const formComplete = consultantStepComplete && pipelineStepComplete && taskStepComplete;
 
   useEffect(() => {
@@ -184,7 +184,13 @@ export function LeadHandoffDialog({ lead, assignableUsers, onClose, onCompleted 
     setError("");
 
     if (!formComplete) {
-      setError("Conclua os três passos: consultor, funil com etapa e primeira tarefa.");
+      const missing: string[] = [];
+      if (!consultantUserId) missing.push("consultor responsável");
+      if (!pipelineId) missing.push("funil de destino");
+      if (!stageId) missing.push("etapa inicial");
+      if (!taskType) missing.push("primeiro compromisso");
+      if (!taskDueAt) missing.push("data e horário");
+      setError(`Falta preencher: ${missing.join(", ")}.`);
       return;
     }
 
@@ -300,20 +306,15 @@ export function LeadHandoffDialog({ lead, assignableUsers, onClose, onCompleted 
             <header><span>3</span><div><strong>Qual será o primeiro compromisso?</strong><small>O consultor receberá esta tarefa na Tela Hoje.</small></div></header>
             <div className="leadHandoffGrid">
               <label className="field leadHandoffFullField">
-                <span>Título da primeira tarefa</span>
-                <input value={taskTitle} onChange={(event) => setTaskTitle(event.target.value)} maxLength={180} required disabled={isSaving} />
-              </label>
-
-              <label className="field">
-                <span>Tipo</span>
-                <select value={taskType} onChange={(event) => setTaskType(event.target.value as TaskType)} disabled={isSaving}>
-                  {taskTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
+                <span>Primeiro compromisso</span>
+                <select value={taskType} onChange={(event) => setTaskType(event.target.value as TaskType)} disabled={isSaving} required>
+                  {commitmentOptions.map((option) => <option key={option.type} value={option.type}>{option.title}</option>)}
                 </select>
               </label>
 
               <label className="field">
-                <span>Data e horário</span>
-                <input type="datetime-local" min={localDateTimeMinimum()} value={taskDueAt} onChange={(event) => setTaskDueAt(event.target.value)} required disabled={isSaving} />
+                <span>Data e horário <small className="dateFormatHint">Dia/Mês/Ano · Hora</small></span>
+                <BrDateInput withTime min={localDateTimeMinimum()} value={taskDueAt} onChange={setTaskDueAt} required disabled={isSaving} ariaLabel="Data e horário do primeiro compromisso" />
               </label>
 
               <label className="field">
@@ -345,7 +346,7 @@ export function LeadHandoffDialog({ lead, assignableUsers, onClose, onCompleted 
 
           <footer className="leadHandoffFooter leadHandoffFooterV44">
             <button className="secondaryButton" type="button" onClick={onClose} disabled={isSaving}>Voltar sem encaminhar</button>
-            <button className="primaryButton" type="submit" disabled={isLoading || isSaving || !assignableUsers.length || !pipelines.length || !formComplete}>
+            <button className="primaryButton" type="submit" disabled={isLoading || isSaving || !assignableUsers.length || !pipelines.length}>
               {isSaving ? "Encaminhando..." : "Encaminhar lead agora"}
             </button>
           </footer>

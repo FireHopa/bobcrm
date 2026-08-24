@@ -103,7 +103,7 @@ export function ClientIntelligencePanel({ lead }: { lead: Lead }) {
 
   return (
     <div className="drawerInfoText drawerIntelligencePanel">
-      <span>Diagnóstico automático</span>
+      <span>Oportunidades de expansão</span>
       <div className="drawerIntelligenceSummary">
         <strong>{intelligence.casaServicesCount}</strong> serviço(s) na Casa do Ads
         <small>•</small>

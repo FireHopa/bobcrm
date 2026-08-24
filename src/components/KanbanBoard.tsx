@@ -41,6 +41,7 @@ type KanbanBoardProps = {
   canAddCards: boolean;
   canEditCards: boolean;
   canDeleteCards: boolean;
+  includeLeadScripts: boolean;
   canManagePipeline: boolean;
   onViewLead: (leadId: string) => void;
   onEditLead: (leadId: string) => void;
@@ -106,6 +107,7 @@ type KanbanCardItemProps = {
   canMoveCards: boolean;
   canEditCards: boolean;
   canDeleteCards: boolean;
+  includeLeadScripts: boolean;
   onViewLead: (leadId: string) => void;
   onEditLead: (leadId: string) => void;
   onDeleteLead: (leadId: string) => void;
@@ -127,6 +129,7 @@ const KanbanCardItem = memo(function KanbanCardItem({
   canMoveCards,
   canEditCards,
   canDeleteCards,
+  includeLeadScripts,
   onViewLead,
   onEditLead,
   onDeleteLead,
@@ -160,6 +163,7 @@ const KanbanCardItem = memo(function KanbanCardItem({
           onViewLead={onViewLead}
           onEditLead={canEditCards ? onEditLead : undefined}
           includeContactChannels
+          includeScript={includeLeadScripts}
           extraItems={canDeleteCards ? [{
             id: "delete",
             label: "Excluir lead",
@@ -217,6 +221,7 @@ export const KanbanBoard = memo(function KanbanBoard({
   canEditCards,
   canDeleteCards,
   canManagePipeline,
+  includeLeadScripts = true,
   onViewLead,
   onEditLead,
   onDeleteLead,
@@ -878,7 +883,7 @@ export const KanbanBoard = memo(function KanbanBoard({
   }
 
   if (isLoading && !board) {
-    return <div className="kanbanLoadingState"><strong>Carregando o Kanban...</strong><span>Buscando funis, etapas e cards diretamente no MySQL.</span></div>;
+    return <div className="kanbanLoadingState"><strong>Carregando o Kanban...</strong><span>Buscando funis, etapas e cards no servidor.</span></div>;
   }
 
   return (
@@ -1072,6 +1077,7 @@ export const KanbanBoard = memo(function KanbanBoard({
                     canMoveCards={canMoveCards}
                     canEditCards={canEditCards}
                     canDeleteCards={canDeleteCards}
+                    includeLeadScripts={includeLeadScripts}
                     onViewLead={onViewLead}
                     onEditLead={onEditLead}
                     onDeleteLead={onDeleteLead}

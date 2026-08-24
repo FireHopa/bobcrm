@@ -4,4 +4,6 @@ import "./styles.css";
 import "./styles/phase5-ux.css";
 import "./styles/phase11-performance.css";
 
+document.documentElement.lang = "pt-BR";
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(<App />);

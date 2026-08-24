@@ -5,6 +5,7 @@ import type { FetchLeadsParams, LeadPagination, LeadSummary } from "../utils/api
 import { getLeadScores, getRecommendedCommercialPlan, isActiveLead } from "../utils/commercial";
 import { formatDate, formatPhone, isPastDate, isToday } from "../utils/formatters";
 import { createLeadMenuIcon, LeadOverflowMenu } from "./LeadActionMenus";
+import { BrDateInput } from "./BrDateInput";
 
 const KanbanBoard = lazy(() => import("./KanbanBoard").then((module) => ({ default: module.KanbanBoard })));
 
@@ -26,6 +27,8 @@ type LeadTableProps = {
   canMoveKanbanCards?: boolean;
   canAddKanbanCards?: boolean;
   canManageKanban?: boolean;
+  isSalesConsultant?: boolean;
+  hideExpectedCloseFilter?: boolean;
   onKanbanLeadUpdated?: (lead: Lead) => void;
   kanbanRefreshVersion?: number;
   requestedQuickFilter?: QuickFilter;
@@ -35,6 +38,58 @@ type LeadTableProps = {
 
 type QuickFilter = "all" | "owner" | "next" | "priority" | "agency" | "mapping" | "expansion";
 type ViewMode = "compact" | "complete" | "kanban";
+type DateFilterPreset = "" | "overdue" | "today" | "tomorrow" | "next7" | "next30" | "thisMonth" | "noDate" | "hasDate" | "custom";
+
+const dateFilterOptions: { value: DateFilterPreset; label: string }[] = [
+  { value: "", label: "Qualquer data" },
+  { value: "overdue", label: "Vencido" },
+  { value: "today", label: "Hoje" },
+  { value: "tomorrow", label: "Amanhã" },
+  { value: "next7", label: "Próximos 7 dias" },
+  { value: "next30", label: "Próximos 30 dias" },
+  { value: "thisMonth", label: "Este mês" },
+  { value: "noDate", label: "Sem data" },
+  { value: "hasDate", label: "Com data" },
+  { value: "custom", label: "Período personalizado" },
+];
+
+function dateOnly(value: string): string {
+  if (!value) return "";
+  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function localIsoDate(offsetDays = 0): string {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + offsetDays);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function matchesDatePreset(value: string, preset: DateFilterPreset, from: string, to: string): boolean {
+  if (!preset) return true;
+  const date = dateOnly(value);
+  if (preset === "noDate") return !date;
+  if (preset === "hasDate") return Boolean(date);
+  if (!date) return false;
+  const today = localIsoDate();
+  if (preset === "overdue") return date < today;
+  if (preset === "today") return date === today;
+  if (preset === "tomorrow") return date === localIsoDate(1);
+  if (preset === "next7") return date >= today && date < localIsoDate(7);
+  if (preset === "next30") return date >= today && date < localIsoDate(30);
+  if (preset === "thisMonth") return date.slice(0, 7) === today.slice(0, 7);
+  if (preset === "custom") return (!from || date >= from) && (!to || date <= to);
+  return true;
+}
 
 const MAX_RENDERED_LEADS = 150;
 
@@ -114,6 +169,7 @@ type LeadActionProps = {
   canEditLeads?: boolean;
   canDeleteLeads?: boolean;
   canHandoffLeads?: boolean;
+  includeScript?: boolean;
 };
 
 function LeadActions({
@@ -125,6 +181,7 @@ function LeadActions({
   canEditLeads = false,
   canDeleteLeads = false,
   canHandoffLeads = false,
+  includeScript = true,
 }: LeadActionProps) {
   const canHandoff = canHandoffLeads && Boolean(onHandoffLead);
   const isUnassigned = !lead.responsibleUserId && !lead.responsible.trim();
@@ -153,6 +210,7 @@ function LeadActions({
         onDeleteLead={canDeleteLeads ? onDeleteLead : undefined}
         includeOpen={canHandoff && isUnassigned}
         includeContactChannels
+        includeScript={includeScript}
         extraItems={canHandoff ? [{
           id: "handoff",
           label: handoffLabel,
@@ -188,6 +246,8 @@ type LeadTableRowProps = {
   canEditLeads: boolean;
   canDeleteLeads: boolean;
   canHandoffLeads: boolean;
+  showOwnerColumn: boolean;
+  includeScript: boolean;
 };
 
 const LeadTableRow = memo(function LeadTableRow({
@@ -200,6 +260,8 @@ const LeadTableRow = memo(function LeadTableRow({
   canEditLeads,
   canDeleteLeads,
   canHandoffLeads,
+  showOwnerColumn,
+  includeScript,
 }: LeadTableRowProps) {
   const status = lead.status || (lead.isLost ? "Perdido" : "Novo lead");
   const scores = getLeadScores(lead);
@@ -241,7 +303,7 @@ const LeadTableRow = memo(function LeadTableRow({
         <p title={plan.nextAction}>{plan.offer || plan.nextAction}</p>
       </td>
 
-      <td>{lead.responsible || "Pendente"}</td>
+      {showOwnerColumn ? <td>{lead.responsible || "Pendente"}</td> : null}
 
       {viewMode === "complete" ? (
         <td>
@@ -264,6 +326,7 @@ const LeadTableRow = memo(function LeadTableRow({
           canEditLeads={canEditLeads}
           canDeleteLeads={canDeleteLeads}
           canHandoffLeads={canHandoffLeads}
+          includeScript={includeScript}
         />
       </td>
     </tr>
@@ -288,6 +351,8 @@ export const LeadTable = memo(function LeadTable({
   canMoveKanbanCards = false,
   canAddKanbanCards = false,
   canManageKanban = false,
+  isSalesConsultant = false,
+  hideExpectedCloseFilter = false,
   onKanbanLeadUpdated,
   kanbanRefreshVersion = 0,
   requestedQuickFilter,
@@ -298,7 +363,13 @@ export const LeadTable = memo(function LeadTable({
   const [statusFilter, setStatusFilter] = useState<LeadStatus | "">("");
   const [temperatureFilter, setTemperatureFilter] = useState<LeadTemperature | "">("");
   const [ownerFilter, setOwnerFilter] = useState("");
-  const [quickFilter, setQuickFilter] = useState<QuickFilter>(requestedQuickFilter || "all");
+  const [nextStepDateFilter, setNextStepDateFilter] = useState<DateFilterPreset>("");
+  const [nextStepFrom, setNextStepFrom] = useState("");
+  const [nextStepTo, setNextStepTo] = useState("");
+  const [expectedCloseDateFilter, setExpectedCloseDateFilter] = useState<DateFilterPreset>("");
+  const [expectedCloseFrom, setExpectedCloseFrom] = useState("");
+  const [expectedCloseTo, setExpectedCloseTo] = useState("");
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>(isSalesConsultant ? "all" : (requestedQuickFilter || "all"));
   const [sortBy, setSortBy] = useState<NonNullable<FetchLeadsParams["sortBy"]>>("updatedAt");
   const [sortDirection, setSortDirection] = useState<NonNullable<FetchLeadsParams["sortDirection"]>>("desc");
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
@@ -310,7 +381,9 @@ export const LeadTable = memo(function LeadTable({
     status: "" as LeadStatus | "",
     temperature: "" as LeadTemperature | "",
     responsible: "",
-    quickFilter: requestedQuickFilter || "all",
+    nextStepDateFilter: "", nextStepFrom: "", nextStepTo: "",
+    expectedCloseDateFilter: "", expectedCloseFrom: "", expectedCloseTo: "",
+    quickFilter: isSalesConsultant ? "all" : (requestedQuickFilter || "all"),
   }));
 
   useEffect(() => {
@@ -318,11 +391,17 @@ export const LeadTable = memo(function LeadTable({
   }, [externalSearch]);
 
   useEffect(() => {
-    if (!requestedQuickFilter) return;
+    if (!requestedQuickFilter || isSalesConsultant) return;
     setQuickFilter(requestedQuickFilter);
     setViewMode("compact");
     onRequestedQuickFilterApplied?.();
-  }, [onRequestedQuickFilterApplied, requestedQuickFilter, requestedQuickFilterKey]);
+  }, [isSalesConsultant, onRequestedQuickFilterApplied, requestedQuickFilter, requestedQuickFilterKey]);
+
+  useEffect(() => {
+    if (!isSalesConsultant) return;
+    setQuickFilter("all");
+    setKanbanFilters((current) => current.quickFilter === "all" ? current : { ...current, quickFilter: "all" });
+  }, [isSalesConsultant]);
 
   useEffect(() => {
     if (!onQueryChange || viewMode === "kanban") return;
@@ -333,6 +412,8 @@ export const LeadTable = memo(function LeadTable({
         status: statusFilter,
         temperature: temperatureFilter,
         responsible: ownerFilter,
+        nextStepDateFilter, nextStepFrom, nextStepTo,
+        expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo,
         quickFilter: getServerQuickFilter(quickFilter),
         sortBy,
         sortDirection,
@@ -342,7 +423,7 @@ export const LeadTable = memo(function LeadTable({
     }, 350);
 
     return () => window.clearTimeout(timeoutId);
-  }, [onQueryChange, ownerFilter, quickFilter, search, sortBy, sortDirection, statusFilter, temperatureFilter, viewMode]);
+  }, [onQueryChange, ownerFilter, nextStepDateFilter, nextStepFrom, nextStepTo, expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo, quickFilter, search, sortBy, sortDirection, statusFilter, temperatureFilter, viewMode]);
 
   useEffect(() => {
     if (viewMode !== "kanban") return;
@@ -353,12 +434,14 @@ export const LeadTable = memo(function LeadTable({
         status: statusFilter,
         temperature: temperatureFilter,
         responsible: ownerFilter,
+        nextStepDateFilter, nextStepFrom, nextStepTo,
+        expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo,
         quickFilter,
       });
     }, 180);
 
     return () => window.clearTimeout(timeoutId);
-  }, [ownerFilter, quickFilter, search, statusFilter, temperatureFilter, viewMode]);
+  }, [ownerFilter, nextStepDateFilter, nextStepFrom, nextStepTo, expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo, quickFilter, search, statusFilter, temperatureFilter, viewMode]);
 
   const ownerOptions = useMemo(() => {
     if (serverOwnerOptions.length) return serverOwnerOptions.map((owner) => owner.name);
@@ -398,6 +481,8 @@ export const LeadTable = memo(function LeadTable({
         if (statusFilter && lead.status !== statusFilter) return false;
         if (temperatureFilter && lead.temperature !== temperatureFilter) return false;
         if (ownerFilter && lead.responsible !== ownerFilter) return false;
+        if (!matchesDatePreset(lead.nextContactAt, nextStepDateFilter, nextStepFrom, nextStepTo)) return false;
+        if (!matchesDatePreset(lead.expectedCloseAt, expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo)) return false;
 
         if (!normalizedSearch) return true;
 
@@ -412,6 +497,7 @@ export const LeadTable = memo(function LeadTable({
           lead.estimatedBudget,
           lead.status,
           lead.responsible,
+          lead.sdrResponsible,
           lead.temperature,
           lead.pain,
           lead.lostReason,
@@ -427,7 +513,7 @@ export const LeadTable = memo(function LeadTable({
         if (priorityDifference !== 0) return priorityDifference;
         return (b.updatedAt || b.createdAt || "").localeCompare(a.updatedAt || a.createdAt || "");
       });
-  }, [leads, ownerFilter, quickFilter, search, serverMode, statusFilter, temperatureFilter]);
+  }, [leads, ownerFilter, nextStepDateFilter, nextStepFrom, nextStepTo, expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo, quickFilter, search, serverMode, statusFilter, temperatureFilter]);
 
   const displayedLeads = useMemo(() => filteredLeads.slice(0, MAX_RENDERED_LEADS), [filteredLeads]);
 
@@ -442,6 +528,8 @@ export const LeadTable = memo(function LeadTable({
       status: statusFilter,
       temperature: temperatureFilter,
       responsible: ownerFilter,
+      nextStepDateFilter, nextStepFrom, nextStepTo,
+      expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo,
       quickFilter: getServerQuickFilter(quickFilter),
       sortBy,
       sortDirection,
@@ -460,6 +548,8 @@ export const LeadTable = memo(function LeadTable({
         status: statusFilter,
         temperature: temperatureFilter,
         responsible: ownerFilter,
+        nextStepDateFilter, nextStepFrom, nextStepTo,
+        expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo,
         quickFilter: getServerQuickFilter(quickFilter),
         sortBy,
         sortDirection,
@@ -492,28 +582,30 @@ export const LeadTable = memo(function LeadTable({
         <span>Priorize os que têm maior potencial ou outra agência mapeada.</span>
       </div>
 
-      <div className="quickFiltersRow quickFiltersRowV32 quickFiltersRowV34">
-        {(["all", "owner", "next", "priority", "agency", "mapping", "expansion"] as QuickFilter[]).map((filter) => {
-          const showCount = ["owner", "next", "agency", "expansion"].includes(filter);
-          return (
-            <button
-              key={filter}
-              type="button"
-              className={`quickFilterChip ${quickFilter === filter ? "quickFilterChipActive" : ""}`}
-              onClick={() => setQuickFilter(filter)}
-            >
-              <span>{getQuickFilterLabel(filter)}</span>
-              {showCount ? <strong>{quickCounts[filter]}</strong> : null}
-            </button>
-          );
-        })}
-      </div>
+      {!isSalesConsultant ? (
+        <div className="quickFiltersRow quickFiltersRowV32 quickFiltersRowV34">
+          {(["all", "owner", "next", "priority", "agency", "mapping", "expansion"] as QuickFilter[]).map((filter) => {
+            const showCount = ["owner", "next", "agency", "expansion"].includes(filter);
+            return (
+              <button
+                key={filter}
+                type="button"
+                className={`quickFilterChip ${quickFilter === filter ? "quickFilterChipActive" : ""}`}
+                onClick={() => setQuickFilter(filter)}
+              >
+                <span>{getQuickFilterLabel(filter)}</span>
+                {showCount ? <strong>{quickCounts[filter]}</strong> : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
 
       <div className="leadToolbarV32">
         <input
           className="searchInput"
           type="search"
-          placeholder="Buscar na carteira autorizada: nome, empresa, telefone, e-mail, dor, observação, origem ou responsável..."
+          placeholder="Buscar: nome, empresa, telefone, e-mail, SDR responsável, dor, observação, origem ou responsável..."
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
@@ -539,13 +631,39 @@ export const LeadTable = memo(function LeadTable({
               </select>
             </label>
 
-            <label className="compactFilter">
-              <span>Responsável</span>
-              <select value={ownerFilter} onChange={(event) => setOwnerFilter(event.target.value)}>
-                <option value="">Todos</option>
-                {ownerOptions.map((owner) => <option key={owner} value={owner}>{owner}</option>)}
+            {!isSalesConsultant ? (
+              <label className="compactFilter">
+                <span>Responsável</span>
+                <select value={ownerFilter} onChange={(event) => setOwnerFilter(event.target.value)}>
+                  <option value="">Todos</option>
+                  {ownerOptions.map((owner) => <option key={owner} value={owner}>{owner}</option>)}
+                </select>
+              </label>
+            ) : null}
+
+            <div className="compactFilter dateFilterGroup">
+              <span>Próximo passo</span>
+              <select value={nextStepDateFilter} onChange={(event) => setNextStepDateFilter(event.target.value as DateFilterPreset)}>
+                {dateFilterOptions.map((option) => <option key={`next-${option.value || "all"}`} value={option.value}>{option.label}</option>)}
               </select>
-            </label>
+              {nextStepDateFilter === "custom" ? <div className="dateRangeFields">
+                <label><small>De · Dia/Mês/Ano</small><BrDateInput value={nextStepFrom} onChange={setNextStepFrom} ariaLabel="Próximo passo a partir de" /></label>
+                <label><small>Até · Dia/Mês/Ano</small><BrDateInput value={nextStepTo} onChange={setNextStepTo} ariaLabel="Próximo passo até" /></label>
+              </div> : null}
+            </div>
+
+            {!hideExpectedCloseFilter ? (
+              <div className="compactFilter dateFilterGroup">
+                <span>Fechamento previsto</span>
+                <select value={expectedCloseDateFilter} onChange={(event) => setExpectedCloseDateFilter(event.target.value as DateFilterPreset)}>
+                  {dateFilterOptions.map((option) => <option key={`close-${option.value || "all"}`} value={option.value}>{option.label}</option>)}
+                </select>
+                {expectedCloseDateFilter === "custom" ? <div className="dateRangeFields">
+                  <label><small>De · Dia/Mês/Ano</small><BrDateInput value={expectedCloseFrom} onChange={setExpectedCloseFrom} ariaLabel="Fechamento previsto a partir de" /></label>
+                  <label><small>Até · Dia/Mês/Ano</small><BrDateInput value={expectedCloseTo} onChange={setExpectedCloseTo} ariaLabel="Fechamento previsto até" /></label>
+                </div> : null}
+              </div>
+            ) : null}
 
             <label className="compactFilter">
               <span>Ordenar por</span>
@@ -556,7 +674,7 @@ export const LeadTable = memo(function LeadTable({
                 <option value="lastContactAt">Último contato</option>
                 <option value="name">Nome</option>
                 <option value="company">Empresa</option>
-                <option value="responsible">Responsável</option>
+                {!isSalesConsultant ? <option value="responsible">Responsável</option> : null}
                 <option value="status">Status</option>
                 <option value="temperature">Temperatura</option>
               </select>
@@ -572,7 +690,7 @@ export const LeadTable = memo(function LeadTable({
           </div>
         </details>
 
-        <p className="tableTopSummaryTextV34">{viewMode === "kanban" ? `Busca direta no MySQL · Escopo: ${summary?.scope?.label || "carteira autorizada"} · Filtro: ${getQuickFilterLabel(quickFilter)}` : <>Busca no MySQL · Exibindo {filteredLeads.length.toLocaleString("pt-BR")} de {totalAvailable.toLocaleString("pt-BR")} resultado(s) · Escopo: {summary?.scope?.label || "carteira autorizada"} · Filtro: {getQuickFilterLabel(quickFilter)}</>}</p>
+        <p className="tableTopSummaryTextV34">{viewMode === "kanban" ? `Busca na base completa · Filtro: ${getQuickFilterLabel(quickFilter)}` : <>Exibindo {filteredLeads.length.toLocaleString("pt-BR")} de {totalAvailable.toLocaleString("pt-BR")} resultado(s) · Filtro: {getQuickFilterLabel(quickFilter)}</>}</p>
       </div>
 
       {viewMode === "kanban" ? (
@@ -584,6 +702,7 @@ export const LeadTable = memo(function LeadTable({
           canEditCards={canEditLeads}
           canDeleteCards={canDeleteLeads}
           canManagePipeline={canManageKanban}
+          includeLeadScripts={!isSalesConsultant}
           onViewLead={onViewLead}
           onEditLead={onEditLead}
           onDeleteLead={onDeleteLead}
@@ -628,6 +747,8 @@ export const LeadTable = memo(function LeadTable({
                     canEditLeads={canEditLeads}
                     canDeleteLeads={canDeleteLeads}
                     canHandoffLeads={canHandoffLeads}
+                    showOwnerColumn
+                    includeScript={!isSalesConsultant}
                   />
                 ))
               )}
@@ -638,7 +759,7 @@ export const LeadTable = memo(function LeadTable({
           ) : null}
           {hasMoreLeads ? (
             <div className="previewFooter loadMoreFooterV35">
-              <span>A busca consulta a base completa no MySQL. A tela só renderiza uma página por vez para não travar o CRM.</span>
+              <span>A busca consulta a base completa no servidor. A tela só renderiza uma página por vez para não travar o CRM.</span>
               <button className="secondaryButton" type="button" onClick={handleLoadMore} disabled={isLoading}>
                 {isLoading ? "Carregando..." : `Carregar mais ${pagination?.limit || MAX_RENDERED_LEADS}`}
               </button>

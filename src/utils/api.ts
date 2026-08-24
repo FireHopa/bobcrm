@@ -197,6 +197,12 @@ export type FetchLeadsParams = {
   status?: string;
   temperature?: string;
   responsible?: string;
+  nextStepDateFilter?: string;
+  nextStepFrom?: string;
+  nextStepTo?: string;
+  expectedCloseDateFilter?: string;
+  expectedCloseFrom?: string;
+  expectedCloseTo?: string;
   quickFilter?: string;
   limit?: number;
   offset?: number;
@@ -455,6 +461,8 @@ export function normalizeLeadFromApi(lead: Partial<Lead>): Lead {
     status,
     responsible: lead.responsible || "",
     responsibleUserId: lead.responsibleUserId || "",
+    sdrResponsible: lead.sdrResponsible || "",
+    sdrResponsibleUserId: lead.sdrResponsibleUserId || "",
     temperature: lead.temperature || "",
     pain: lead.pain || "",
     source: lead.source || "",
@@ -522,6 +530,12 @@ function buildQueryString(params: FetchLeadsParams = {}): string {
   if (params.status?.trim()) searchParams.set("status", params.status.trim());
   if (params.temperature?.trim()) searchParams.set("temperature", params.temperature.trim());
   if (params.responsible?.trim()) searchParams.set("responsible", params.responsible.trim());
+  if (params.nextStepDateFilter?.trim()) searchParams.set("nextStepDateFilter", params.nextStepDateFilter.trim());
+  if (params.nextStepFrom?.trim()) searchParams.set("nextStepFrom", params.nextStepFrom.trim());
+  if (params.nextStepTo?.trim()) searchParams.set("nextStepTo", params.nextStepTo.trim());
+  if (params.expectedCloseDateFilter?.trim()) searchParams.set("expectedCloseDateFilter", params.expectedCloseDateFilter.trim());
+  if (params.expectedCloseFrom?.trim()) searchParams.set("expectedCloseFrom", params.expectedCloseFrom.trim());
+  if (params.expectedCloseTo?.trim()) searchParams.set("expectedCloseTo", params.expectedCloseTo.trim());
   if (params.quickFilter?.trim() && params.quickFilter !== "all") searchParams.set("quickFilter", params.quickFilter.trim());
   if (params.includeSummary === false) searchParams.set("summary", "0");
   if (params.includeOpportunitySummary) searchParams.set("opportunitySummary", "1");
@@ -719,6 +733,12 @@ function buildKanbanQueryString(filters: KanbanBoardFilters = {}, extra: Record<
   if (filters.status?.trim()) params.set("status", filters.status.trim());
   if (filters.temperature?.trim()) params.set("temperature", filters.temperature.trim());
   if (filters.responsible?.trim()) params.set("responsible", filters.responsible.trim());
+  if (filters.nextStepDateFilter?.trim()) params.set("nextStepDateFilter", filters.nextStepDateFilter.trim());
+  if (filters.nextStepFrom?.trim()) params.set("nextStepFrom", filters.nextStepFrom.trim());
+  if (filters.nextStepTo?.trim()) params.set("nextStepTo", filters.nextStepTo.trim());
+  if (filters.expectedCloseDateFilter?.trim()) params.set("expectedCloseDateFilter", filters.expectedCloseDateFilter.trim());
+  if (filters.expectedCloseFrom?.trim()) params.set("expectedCloseFrom", filters.expectedCloseFrom.trim());
+  if (filters.expectedCloseTo?.trim()) params.set("expectedCloseTo", filters.expectedCloseTo.trim());
   if (filters.quickFilter?.trim() && filters.quickFilter !== "all") params.set("quickFilter", filters.quickFilter.trim());
   Object.entries(extra).forEach(([key, value]) => {
     if (value !== undefined && value !== "") params.set(key, String(value));

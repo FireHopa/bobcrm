@@ -249,6 +249,8 @@ export function LeadForm({ onCreateLead }: LeadFormProps) {
       status: isLost ? "Perdido" : formState.status,
       responsible: "",
       responsibleUserId: "",
+      sdrResponsible: "",
+      sdrResponsibleUserId: "",
       temperature: formState.temperature,
       pain: formState.pain.trim(),
       source: formState.source,

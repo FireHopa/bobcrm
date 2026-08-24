@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { CRMTask, TaskPriority, TaskType } from "../types/Lead";
 import { ModalDialog } from "./ModalDialog";
+import { BrDateInput } from "./BrDateInput";
 
 export type TaskCompletionPayload = {
   result: string;
@@ -145,12 +146,13 @@ export function TaskCompletionDialog({ task, onClose, onComplete }: TaskCompleti
               <input value={nextTitle} onChange={(event) => setNextTitle(event.target.value)} maxLength={180} />
             </label>
             <label className="field">
-              <span>Data e horário</span>
-              <input
-                type="datetime-local"
+              <span>Data e horário <small className="dateFormatHint">Dia/Mês/Ano · Hora</small></span>
+              <BrDateInput
+                withTime
                 min={toLocalDateTime(new Date())}
                 value={nextDueAt}
-                onChange={(event) => setNextDueAt(event.target.value)}
+                onChange={setNextDueAt}
+                ariaLabel="Data e horário do próximo follow-up"
               />
             </label>
             <label className="field">

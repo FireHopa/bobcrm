@@ -12042,3 +12042,286 @@ tbody tr:hover {
 .integrationEmptyText{color:#64748b;text-align:center;padding:18px}
 @media(max-width:1100px){.integrationChartsGrid{grid-template-columns:1fr}.integrationConversionFunnel{grid-template-columns:repeat(3,1fr)}.integrationConversionFunnel article::after{display:none}}
 @media(max-width:720px){.integrationConversionFunnel,.integrationDetailGrid,.integrationDetailList{grid-template-columns:1fr}.integrationIncident{flex-direction:column}.integrationIncidentActions{width:100%;flex-wrap:wrap}.integrationDetailDrawer{width:100vw;padding:16px}.integrationDetailDrawer>header{top:-16px;padding-top:16px}}
+
+
+/* Datas pt-BR e filtros avançados - 2026-08-17 */
+.dateInputBr {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 11px !important;
+  border: 1px solid var(--v32-border, #d9e0ea);
+  border-radius: 10px;
+  background: #fff;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.dateInputBr:focus {
+  outline: 3px solid rgba(37, 99, 235, .12);
+  border-color: #2563eb;
+}
+
+.dateFormatHint {
+  display: inline;
+  margin-left: 4px;
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dateFilterGroup {
+  min-width: 220px;
+}
+
+.dateRangeFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.dateRangeFields label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dateRangeFields small {
+  color: var(--v32-secondary, #64748b);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+@media (max-width: 640px) {
+  .dateRangeFields { grid-template-columns: 1fr; }
+}
+/* V46: calendário único do CRM em DD/MM/AAAA */
+.brDateInput {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.brDateInputControl {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--v32-border, #dbe3ef);
+  border-radius: var(--v32-radius-control, 10px);
+  background: #fff;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease, background 0.14s ease;
+}
+
+.brDateInputControl:focus-within {
+  border-color: rgba(37, 99, 235, 0.72);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.brDateInputControl.isInvalid {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.10);
+}
+
+.brDateInputControl.isDisabled {
+  background: #f8fafc;
+  opacity: 0.72;
+}
+
+.brDateInputControl > input[type="text"] {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 76px 0 12px;
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  color: var(--v32-text, #0f172a);
+  font-size: 13px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.brDateInputControl > input[type="text"]::placeholder {
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.brDateCalendarButton,
+.brDateClearButton {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.brDateCalendarButton { right: 5px; }
+.brDateClearButton { right: 37px; font-size: 18px; line-height: 1; }
+.brDateCalendarButton:hover,
+.brDateClearButton:hover { background: #eff6ff; color: #2563eb; }
+.brDateCalendarButton:disabled { cursor: not-allowed; opacity: 0.5; }
+
+.brDateError {
+  display: block;
+  margin-top: 5px;
+  color: #b91c1c;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.brDatePopover {
+  position: absolute;
+  z-index: 1400;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(320px, calc(100vw - 32px));
+  padding: 12px;
+  border: 1px solid #dbe3ef;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.18), 0 4px 12px rgba(15, 23, 42, 0.08);
+}
+
+.brDateHeader {
+  display: grid;
+  grid-template-columns: 34px 1fr 34px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.brDateHeader strong {
+  text-align: center;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 850;
+  text-transform: capitalize;
+}
+
+.brDateHeader button {
+  width: 34px;
+  height: 34px;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: #fff;
+  color: #334155;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.brDateHeader button:hover { background: #f8fafc; border-color: #cbd5e1; }
+
+.brDateWeekDays,
+.brDateGrid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.brDateWeekDays { margin-bottom: 4px; }
+.brDateWeekDays span {
+  padding: 5px 0;
+  text-align: center;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.brDateGrid button {
+  aspect-ratio: 1;
+  min-width: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #1e293b;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.brDateGrid button:hover:not(:disabled) { background: #eff6ff; color: #1d4ed8; }
+.brDateGrid button.isOutside { color: #cbd5e1; font-weight: 600; }
+.brDateGrid button.isToday { box-shadow: inset 0 0 0 1px #60a5fa; color: #1d4ed8; }
+.brDateGrid button.isSelected { background: #2563eb; color: #fff; box-shadow: none; }
+.brDateGrid button:disabled { color: #e2e8f0; cursor: not-allowed; }
+
+.brDateTimeRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #eef2f7;
+}
+
+.brDateTimeRow label { display: grid; gap: 5px; }
+.brDateTimeRow label span { color: #475569; font-size: 11px; font-weight: 800; }
+.brDateTimeRow input[type="time"] {
+  min-height: 38px;
+  padding: 0 9px;
+  border: 1px solid #dbe3ef;
+  border-radius: 9px;
+  background: #fff;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.brDateApplyButton {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 9px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.brDateApplyButton:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.brDateFooter {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #eef2f7;
+}
+
+.brDateFooter button {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.brDateFooter button:hover:not(:disabled) { background: #eff6ff; }
+.brDateFooter button:disabled { color: #cbd5e1; cursor: not-allowed; }
+
+.dateRangeFields .brDateInput { min-width: 142px; }
+.dateRangeFields .brDateInputControl > input[type="text"] { font-size: 12px; padding-left: 10px; }
+
+@media (max-width: 620px) {
+  .brDatePopover { left: auto; right: 0; }
+  .brDateInputControl > input[type="text"] { font-size: 14px; }
+}

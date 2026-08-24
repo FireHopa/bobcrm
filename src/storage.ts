@@ -55,6 +55,8 @@ export function migrateLead(lead: Partial<Lead>): Lead {
     status,
     responsible: lead.responsible || "",
     responsibleUserId: lead.responsibleUserId || "",
+    sdrResponsible: lead.sdrResponsible || "",
+    sdrResponsibleUserId: lead.sdrResponsibleUserId || "",
     temperature: lead.temperature || "",
     pain: lead.pain || "",
     source: lead.source || "",

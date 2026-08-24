@@ -28,6 +28,7 @@ type ServiceOpportunityMapProps = {
   onQueryChange?: (params: FetchLeadsParams, options?: { append?: boolean }) => Promise<void> | void;
   onUpdateLead: (lead: Lead) => void;
   canUpdateCommercialMap?: boolean;
+  includeLeadScripts?: boolean;
   onViewLead: (leadId: string) => void;
   onEditLead: (leadId: string) => void;
 };
@@ -172,7 +173,7 @@ function getLeadSubtitle(lead: Lead): string {
   return [lead.company, lead.responsible ? `Resp. ${lead.responsible}` : "Responsável pendente"].filter(Boolean).join(" • ");
 }
 
-export const ServiceOpportunityMap = memo(function ServiceOpportunityMap({ leads, totalLeadsCount = leads.length, loadedLeadsCount = leads.length, externalSearch = "", pagination, opportunitySummary, filteredOpportunitySummary, isLoading = false, refreshVersion = 0, quickFilter, onQuickFilterChange, onQueryChange, onUpdateLead, canUpdateCommercialMap = false, onViewLead, onEditLead }: ServiceOpportunityMapProps) {
+export const ServiceOpportunityMap = memo(function ServiceOpportunityMap({ leads, totalLeadsCount = leads.length, loadedLeadsCount = leads.length, externalSearch = "", pagination, opportunitySummary, filteredOpportunitySummary, isLoading = false, refreshVersion = 0, quickFilter, onQuickFilterChange, onQueryChange, onUpdateLead, canUpdateCommercialMap = false, includeLeadScripts = true, onViewLead, onEditLead }: ServiceOpportunityMapProps) {
   const [search, setSearch] = useState("");
   const [selectedService, setSelectedService] = useState<ServiceInterest | "">("");
   const [selectedStatus, setSelectedStatus] = useState<ServiceProviderStatus | "">("");
@@ -398,7 +399,7 @@ export const ServiceOpportunityMap = memo(function ServiceOpportunityMap({ leads
 
       <div className="opportunityStatsStrip opportunityStatsStripV32" aria-label="Resumo de oportunidades">
         <span><strong>{filteredLeads.length.toLocaleString("pt-BR")}</strong> exibidos</span>
-        <span><strong>{totalAvailable.toLocaleString("pt-BR")}</strong> encontrados no MySQL</span>
+        <span><strong>{totalAvailable.toLocaleString("pt-BR")}</strong> encontrados na base</span>
         <span className="statPotential"><strong>{highPotentialCount}</strong> alto potencial</span>
         <span className="statAgency"><strong>{summary["Outra agência"]}</strong> outra agência</span>
         <span className="statNotDone"><strong>{summary["Não é feito"]}</strong> serviços não feitos</span>
@@ -406,7 +407,7 @@ export const ServiceOpportunityMap = memo(function ServiceOpportunityMap({ leads
       </div>
 
       {totalLeadsCount > loadedLeadsCount ? (
-        <p className="paginationHint">MySQL ativo: a busca consulta a base completa no servidor. A tela renderiza apenas os resultados carregados para manter o CRM rápido.</p>
+        <p className="paginationHint">A busca consulta a base completa no servidor. A tela renderiza apenas os resultados carregados para manter o CRM rápido.</p>
       ) : null}
 
       {bestOpportunity ? (
@@ -417,7 +418,7 @@ export const ServiceOpportunityMap = memo(function ServiceOpportunityMap({ leads
           </div>
           <div className="tableActions tableActionsV32 rowActionsV39">
             <LeadContactMenu lead={bestOpportunity.lead} onEditLead={onEditLead} />
-            <LeadOverflowMenu lead={bestOpportunity.lead} onViewLead={onViewLead} onEditLead={onEditLead} includeContactChannels={false} />
+            <LeadOverflowMenu lead={bestOpportunity.lead} onViewLead={onViewLead} onEditLead={onEditLead} includeContactChannels={false} includeScript={includeLeadScripts} />
           </div>
         </div>
       ) : null}
@@ -523,7 +524,7 @@ export const ServiceOpportunityMap = memo(function ServiceOpportunityMap({ leads
                     <td>
                       <div className="tableActions tableActionsV32 rowActionsV33 rowActionsV39">
                         <LeadContactMenu lead={lead} onEditLead={onEditLead} />
-                        <LeadOverflowMenu lead={lead} onViewLead={onViewLead} onEditLead={onEditLead} includeContactChannels={false} />
+                        <LeadOverflowMenu lead={lead} onViewLead={onViewLead} onEditLead={onEditLead} includeContactChannels={false} includeScript={includeLeadScripts} />
                       </div>
                     </td>
                   </tr>
@@ -589,7 +590,7 @@ export const ServiceOpportunityMap = memo(function ServiceOpportunityMap({ leads
                     <td>
                       <div className="tableActions tableActionsV32 rowActionsV39">
                         <button className="tableActionButton primaryTableAction" type="button" onClick={() => onViewLead(lead.id)}>Abrir lead</button>
-                        <LeadOverflowMenu lead={lead} onViewLead={onViewLead} onEditLead={onEditLead} includeOpen={false} includeContactChannels />
+                        <LeadOverflowMenu lead={lead} onViewLead={onViewLead} onEditLead={onEditLead} includeOpen={false} includeContactChannels includeScript={includeLeadScripts} />
                       </div>
                     </td>
                   </tr>
@@ -629,7 +630,7 @@ export const ServiceOpportunityMap = memo(function ServiceOpportunityMap({ leads
                 </div>
                 <div className="tableActions tableActionsV32 opportunityOperationActionsV38 rowActionsV39">
                   <LeadContactMenu lead={lead} onEditLead={onEditLead} />
-                  <LeadOverflowMenu lead={lead} onViewLead={onViewLead} onEditLead={onEditLead} includeContactChannels={false} />
+                  <LeadOverflowMenu lead={lead} onViewLead={onViewLead} onEditLead={onEditLead} includeContactChannels={false} includeScript={includeLeadScripts} />
                 </div>
               </article>
             );
@@ -640,7 +641,7 @@ export const ServiceOpportunityMap = memo(function ServiceOpportunityMap({ leads
       )}
 
       <div className="previewFooter loadMoreFooterV35">
-        <span>Busca no MySQL: exibindo {filteredLeads.length.toLocaleString("pt-BR")} resultado(s) carregado(s) de {totalAvailable.toLocaleString("pt-BR")} encontrado(s) na base completa.</span>
+        <span>Exibindo {filteredLeads.length.toLocaleString("pt-BR")} resultado(s) carregado(s) de {totalAvailable.toLocaleString("pt-BR")} encontrado(s) na base completa.</span>
         {hasMoreLeads ? (
           <button className="secondaryButton" type="button" onClick={handleLoadMore} disabled={isLoading}>
             {isLoading ? "Carregando..." : `Carregar mais ${pagination?.limit || 150}`}

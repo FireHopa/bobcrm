@@ -781,16 +781,17 @@ export default function App() {
           <div>
             <h1>{currentMeta.title}</h1>
             <p>{currentMeta.description}</p>
-            <span className="badge badgeBlue">Escopo dos indicadores: {leadSummary.scope?.label || "carteira autorizada"}</span>
           </div>
           {activeTab !== "operation" ? (
             <div className="workspaceStatsV32">
-              {currentMeta.stats.map((item) => (
-                <article key={`${activeTab}-${item.label}`}>
-                  <span>{item.label}</span>
-                  <strong>{item.value}</strong>
-                </article>
-              ))}
+              {currentMeta.stats
+                .filter((item) => currentUser.role !== "consultor_vendas" || item.label !== "Sem responsável")
+                .map((item) => (
+                  <article key={`${activeTab}-${item.label}`}>
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                  </article>
+                ))}
             </div>
           ) : null}
         </section>
@@ -809,7 +810,6 @@ export default function App() {
           <DailyOperation
             leads={leads}
             currentUser={currentUser}
-            assignableUsers={assignableUsers}
             onViewLead={handleViewLead}
             onDataChanged={handleOperationalDataChanged}
           />
@@ -835,6 +835,7 @@ export default function App() {
               canMoveKanbanCards={hasPermission(currentUser, "move_lead_stage")}
               canAddKanbanCards={hasPermission(currentUser, "bulk_move_leads")}
               canManageKanban={hasPermission(currentUser, "manage_pipelines")}
+              isSalesConsultant={currentUser.role === "consultor_vendas"}
               onKanbanLeadUpdated={replaceLeadInState}
               kanbanRefreshVersion={kanbanRefreshVersion}
               requestedQuickFilter={requestedLeadQuickFilter}
@@ -861,6 +862,7 @@ export default function App() {
               onQueryChange={handleLeadQueryChange}
               onUpdateLead={updateLeadSilently}
               canUpdateCommercialMap={hasPermission(currentUser, "edit_leads_full")}
+              includeLeadScripts={currentUser.role !== "consultor_vendas"}
               onViewLead={handleViewLead}
               onEditLead={handleEditLead}
             />

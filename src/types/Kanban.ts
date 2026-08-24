@@ -47,6 +47,12 @@ export type KanbanBoardFilters = {
   status?: string;
   temperature?: string;
   responsible?: string;
+  nextStepDateFilter?: string;
+  nextStepFrom?: string;
+  nextStepTo?: string;
+  expectedCloseDateFilter?: string;
+  expectedCloseFrom?: string;
+  expectedCloseTo?: string;
   quickFilter?: string;
 };
 

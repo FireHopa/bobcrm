@@ -383,6 +383,8 @@ export function buildLeadFromRow(row: RawRow, mapping: ImportMapping, bulkDefaul
     status,
     responsible: "",
     responsibleUserId: "",
+    sdrResponsible: "",
+    sdrResponsibleUserId: "",
     temperature: normalizeTemperature(getCell(row, mapping.temperature)) || bulkDefaults.temperature,
     pain: getCell(row, mapping.pain),
     source: normalizeSource(getCell(row, mapping.source)) || bulkDefaults.source,

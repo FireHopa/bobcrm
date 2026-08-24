@@ -2,9 +2,7 @@ import { memo, useEffect, useMemo, useState } from "react";
 import type { CRMTask, CRMUser, Lead, TaskPriority, TaskType, TodayDashboard } from "../types/Lead";
 import {
   completeTaskOnServer,
-  createTaskOnServer,
   fetchTodayDashboardFromServer,
-  hasPermission,
 } from "../utils/api";
 import { formatDate } from "../utils/formatters";
 import { TaskCompletionDialog, type TaskCompletionPayload } from "./TaskCompletionDialog";
@@ -28,7 +26,6 @@ const priorityLabels: Record<TaskPriority, string> = {
 type DailyOperationProps = {
   leads: Lead[];
   currentUser: CRMUser | null;
-  assignableUsers: CRMUser[];
   onViewLead: (leadId: string) => void;
   onDataChanged?: () => void;
 };
@@ -47,22 +44,14 @@ function getTaskTone(priority: TaskPriority) {
   return "badgeGreen";
 }
 
-export const DailyOperation = memo(function DailyOperation({ leads, currentUser, assignableUsers, onViewLead, onDataChanged }: DailyOperationProps) {
+export const DailyOperation = memo(function DailyOperation({ currentUser, onViewLead, onDataChanged }: DailyOperationProps) {
   const [dashboard, setDashboard] = useState<TodayDashboard | null>(null);
   const [activeBucket, setActiveBucket] = useState<"overdue" | "today" | "upcoming">("today");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  const [taskLeadId, setTaskLeadId] = useState("");
-  const [taskTitle, setTaskTitle] = useState("");
-  const [taskDueAt, setTaskDueAt] = useState("");
-  const [taskType, setTaskType] = useState<TaskType>("follow_up");
-  const [taskPriority, setTaskPriority] = useState<TaskPriority>("normal");
-  const [taskResponsibleUserId, setTaskResponsibleUserId] = useState(currentUser?.id || "");
   const [taskToComplete, setTaskToComplete] = useState<CRMTask | null>(null);
 
-  const canManageTasks = hasPermission(currentUser, "manage_all_tasks") || hasPermission(currentUser, "manage_own_tasks");
-  const canAssignTasks = hasPermission(currentUser, "assign_tasks");
 
   async function refreshDashboard() {
     setIsLoading(true);
@@ -78,10 +67,6 @@ export const DailyOperation = memo(function DailyOperation({ leads, currentUser,
 
   useEffect(() => {
     void refreshDashboard();
-  }, [currentUser?.id]);
-
-  useEffect(() => {
-    setTaskResponsibleUserId(currentUser?.id || "");
   }, [currentUser?.id]);
 
   const visibleTasks = dashboard?.tasks[activeBucket] || [];
@@ -103,31 +88,6 @@ export const DailyOperation = memo(function DailyOperation({ leads, currentUser,
     }
   }
 
-  async function handleCreateTask(event: React.FormEvent) {
-    event.preventDefault();
-    if (!taskTitle.trim() || !taskDueAt || !taskLeadId) return;
-    setIsSaving(true);
-    setError("");
-    try {
-      await createTaskOnServer({
-        title: taskTitle.trim(),
-        dueAt: taskDueAt,
-        leadId: taskLeadId,
-        responsibleUserId: canAssignTasks ? taskResponsibleUserId : currentUser?.id,
-        type: taskType,
-        priority: taskPriority,
-      });
-      setTaskTitle("");
-      setTaskDueAt("");
-      setTaskLeadId("");
-      await refreshDashboard();
-      onDataChanged?.();
-    } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : "Não foi possível criar a tarefa.");
-    } finally {
-      setIsSaving(false);
-    }
-  }
 
   if (isLoading && !dashboard) {
     return <section className="panel loadingPanel"><span className="eyebrow">Rotina comercial</span><h2>Carregando tarefas e prioridades</h2></section>;
@@ -137,7 +97,6 @@ export const DailyOperation = memo(function DailyOperation({ leads, currentUser,
     <section className="operationWorkspace operationWorkspaceV42">
       <div className="operationScopeBar" role="status" aria-live="polite">
         <strong>Tela Hoje: {dashboard?.roleLabel || "Usuário"}</strong>
-        <span>{dashboard?.scope.label || "Carteira autorizada"}</span>
         {dashboard?.generatedAt ? <small>Atualizado em {new Date(dashboard.generatedAt).toLocaleString("pt-BR")}</small> : null}
         <button className="secondaryButton" type="button" onClick={() => void refreshDashboard()} disabled={isLoading}>Atualizar</button>
       </div>
@@ -189,7 +148,7 @@ export const DailyOperation = memo(function DailyOperation({ leads, currentUser,
             <h2>{dashboard?.role === "consultor_vendas" ? "Minha carteira" : dashboard?.role === "pre_venda" ? "Operação de pré-venda" : "Saúde da operação"}</h2>
             <div className="roleMetricsListV42">
               <div><span>Aguardando primeiro contato</span><strong>{dashboard?.roleMetrics.awaitingFirstContact || 0}</strong></div>
-              <div><span>Sem responsável</span><strong>{dashboard?.roleMetrics.withoutOwner || 0}</strong></div>
+              {dashboard?.role !== "consultor_vendas" ? <div><span>Sem responsável</span><strong>{dashboard?.roleMetrics.withoutOwner || 0}</strong></div> : null}
               <div><span>Sem próximo passo</span><strong>{dashboard?.roleMetrics.withoutNextStep || 0}</strong></div>
               <div><span>Parados há mais de 7 dias</span><strong>{dashboard?.roleMetrics.stalled || 0}</strong></div>
             </div>
@@ -201,20 +160,6 @@ export const DailyOperation = memo(function DailyOperation({ leads, currentUser,
         </aside>
       </div>
 
-      {canManageTasks ? (
-        <section className="panel taskComposerPanelV42">
-          <div className="sectionTitleRow"><div><span className="eyebrow">Nova tarefa</span><h2>Agendar próximo passo</h2><p>A tarefa fica vinculada ao lead e aparece na Tela Hoje do responsável.</p></div></div>
-          <form className="taskComposerGridV42" onSubmit={handleCreateTask}>
-            <label className="field"><span>Lead</span><select value={taskLeadId} onChange={(event) => setTaskLeadId(event.target.value)} required><option value="">Selecione</option>{leads.map((lead) => <option key={lead.id} value={lead.id}>{lead.name || lead.company || lead.phone || "Lead sem nome"}</option>)}</select></label>
-            <label className="field"><span>Título</span><input value={taskTitle} onChange={(event) => setTaskTitle(event.target.value)} placeholder="Ex.: Retornar proposta" required /></label>
-            <label className="field"><span>Data e horário</span><input type="datetime-local" value={taskDueAt} onChange={(event) => setTaskDueAt(event.target.value)} required /></label>
-            <label className="field"><span>Tipo</span><select value={taskType} onChange={(event) => setTaskType(event.target.value as TaskType)}>{Object.entries(taskTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-            <label className="field"><span>Prioridade</span><select value={taskPriority} onChange={(event) => setTaskPriority(event.target.value as TaskPriority)}>{Object.entries(priorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-            {canAssignTasks ? <label className="field"><span>Responsável</span><select value={taskResponsibleUserId} onChange={(event) => setTaskResponsibleUserId(event.target.value)} required><option value="">Selecione</option>{assignableUsers.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label> : null}
-            <button className="primaryButton" type="submit" disabled={isSaving || !taskLeadId || !taskTitle.trim() || !taskDueAt}>{isSaving ? "Salvando..." : "Criar tarefa"}</button>
-          </form>
-        </section>
-      ) : null}
 
       <TaskCompletionDialog
         task={taskToComplete}

@@ -58,11 +58,6 @@ export const Header = memo(function Header({
       </form>
 
       <div className="topActions cockpitTopActions cockpitTopActionsV34">
-        <span className={`statusPill cockpitStatusPillV37 statusPill${storageTone}`}>
-          <span className="statusDot" />
-          {storageLabel}
-        </span>
-
         {currentUser ? (
           <div className="userPill cockpitUserPill cockpitUserPillV34">
             <div className="userPillMeta">
