@@ -52,6 +52,8 @@ import { description as zapePhase2AssignmentMigrationDescription, up as runZapeP
 import { description as integrationObservabilityMigrationDescription, up as runIntegrationObservabilityMigration, version as integrationObservabilityMigrationVersion } from "./migrations/20260804_19_integration_observability_phase4.js";
 import { description as bidirectionalSyncMigrationDescription, up as runBidirectionalSyncMigration, version as bidirectionalSyncMigrationVersion } from "./migrations/20260806_20_bidirectional_sync_attribution_phase5.js";
 import { description as instagramChannelAdvertisingMigrationDescription, up as runInstagramChannelAdvertisingMigration, version as instagramChannelAdvertisingMigrationVersion } from "./migrations/20260807_21_instagram_channel_advertising.js";
+import { description as taskDueMinutePrecisionMigrationDescription, up as runTaskDueMinutePrecisionMigration, version as taskDueMinutePrecisionMigrationVersion } from "./migrations/20260827_22_task_due_minute_precision.js";
+import { description as sdrOriginAttributionMigrationDescription, up as runSdrOriginAttributionMigration, version as sdrOriginAttributionMigrationVersion } from "./migrations/20260827_23_sdr_origin_attribution.js";
 import {
   createEncryptedMysqlBackup,
   removeBackupArtifact,
@@ -643,6 +645,10 @@ async function runSchemaMigrations() {
     () => runBidirectionalSyncMigration({ execute, addColumnIfMissing, addIndexIfMissing }));
   await runVersionedMigration(instagramChannelAdvertisingMigrationVersion, instagramChannelAdvertisingMigrationDescription,
     () => runInstagramChannelAdvertisingMigration({ execute, addColumnIfMissing }));
+  await runVersionedMigration(taskDueMinutePrecisionMigrationVersion, taskDueMinutePrecisionMigrationDescription,
+    () => runTaskDueMinutePrecisionMigration({ execute }));
+  await runVersionedMigration(sdrOriginAttributionMigrationVersion, sdrOriginAttributionMigrationDescription,
+    () => runSdrOriginAttributionMigration({ addColumnIfMissing, addIndexIfMissing, execute }));
   try {
     await addIndexIfMissing("leads", "ft_leads_search_text", "FULLTEXT INDEX ft_leads_search_text (search_text)");
     leadSearchFullTextEnabled = true;
@@ -1834,6 +1840,8 @@ function mergeLeadData(currentLead, incomingLead) {
     status: isLost ? "Perdido" : mergedStatus,
     responsible: shouldReplaceValue(currentLead.responsible, incomingLead.responsible) ? incomingLead.responsible : currentLead.responsible,
     responsibleUserId: shouldReplaceValue(currentLead.responsibleUserId, incomingLead.responsibleUserId) ? incomingLead.responsibleUserId : currentLead.responsibleUserId,
+    sdrResponsible: currentLead.sdrResponsible || incomingLead.sdrResponsible || "",
+    sdrResponsibleUserId: currentLead.sdrResponsibleUserId || incomingLead.sdrResponsibleUserId || "",
     temperature: shouldReplaceValue(currentLead.temperature, incomingLead.temperature) ? incomingLead.temperature : currentLead.temperature,
     pain: shouldReplaceValue(currentLead.pain, incomingLead.pain) ? incomingLead.pain : currentLead.pain,
     source: shouldReplaceValue(currentLead.source, incomingLead.source) ? incomingLead.source : currentLead.source,
@@ -1906,6 +1914,17 @@ async function resolveLeadResponsibleLink(lead, client = pool) {
   );
   if (matches.length !== 1) return normalizedLead;
   return { ...normalizedLead, responsibleUserId: matches[0].id, responsible: matches[0].name || matches[0].email || responsible };
+}
+
+function stampSdrOriginForNewLead(lead, actor) {
+  if (normalizeUserRole(actor?.role) !== USER_ROLES.PRE_SALES) return lead;
+  const actorId = String(actor?.id || "").trim();
+  if (!actorId) return lead;
+  return {
+    ...lead,
+    sdrResponsibleUserId: actorId,
+    sdrResponsible: String(actor?.name || actor?.email || "").trim(),
+  };
 }
 
 async function validateLeadAssignmentForActor(lead, actor, client = pool) {
@@ -3126,17 +3145,99 @@ async function syncLeadNextContactTask(lead, actor, client = pool) {
   await refreshLeadNextContactFromTasks(leadId, client);
 }
 
+function assertAdminTaskFilterAllowed(currentUser, hasAdminFilter) {
+  if (!hasAdminFilter) return;
+  if (normalizeUserRole(currentUser?.role) !== USER_ROLES.ADMIN) {
+    const error = new Error("Somente administradores podem filtrar tarefas por responsável ou período personalizado.");
+    error.statusCode = 403;
+    throw error;
+  }
+}
+
+function normalizeTaskFilterDate(value, label) {
+  const normalized = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    const error = new Error(`Informe ${label} no formato de data válido.`);
+    error.statusCode = 400;
+    throw error;
+  }
+  const parsed = new Date(`${normalized}T12:00:00Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== normalized) {
+    const error = new Error(`Informe ${label} válida.`);
+    error.statusCode = 400;
+    throw error;
+  }
+  return normalized;
+}
+
+function buildAdminTaskDateFilter(requestUrl, alias = "t", useDateColumns = false) {
+  const mode = String(requestUrl.searchParams.get("dateMode") || "").trim().toLowerCase();
+  if (!mode) return { clause: "", params: [] };
+  const prefix = alias ? `${alias}.` : "";
+  const dateColumn = useDateColumns ? `${prefix}due_at_dt` : `LEFT(${prefix}due_at, 10)`;
+
+  if (mode === "exact") {
+    const date = normalizeTaskFilterDate(requestUrl.searchParams.get("dateFrom"), "a data exata");
+    return useDateColumns
+      ? { clause: `${dateColumn} >= ? AND ${dateColumn} < DATE_ADD(?, INTERVAL 1 DAY)`, params: [date, date] }
+      : { clause: `${dateColumn} = ?`, params: [date] };
+  }
+
+  if (mode === "until") {
+    const date = normalizeTaskFilterDate(requestUrl.searchParams.get("dateTo"), "a data final");
+    return useDateColumns
+      ? { clause: `${dateColumn} < DATE_ADD(?, INTERVAL 1 DAY)`, params: [date] }
+      : { clause: `${dateColumn} <= ?`, params: [date] };
+  }
+
+  if (mode === "between") {
+    const from = normalizeTaskFilterDate(requestUrl.searchParams.get("dateFrom"), "a data inicial");
+    const to = normalizeTaskFilterDate(requestUrl.searchParams.get("dateTo"), "a data final");
+    if (from > to) {
+      const error = new Error("A data inicial não pode ser posterior à data final.");
+      error.statusCode = 400;
+      throw error;
+    }
+    return useDateColumns
+      ? { clause: `${dateColumn} >= ? AND ${dateColumn} < DATE_ADD(?, INTERVAL 1 DAY)`, params: [from, to] }
+      : { clause: `${dateColumn} >= ? AND ${dateColumn} <= ?`, params: [from, to] };
+  }
+
+  const error = new Error("Filtro de data de tarefas inválido.");
+  error.statusCode = 400;
+  throw error;
+}
+
+function buildTaskAccessWithAdminResponsibleFilter(currentUser, requestUrl, alias = "t") {
+  const base = buildTaskAccessSql(currentUser, alias);
+  const responsibleUserId = String(requestUrl?.searchParams?.get("responsibleUserId") || "").trim();
+  if (!responsibleUserId) return base;
+  assertAdminTaskFilterAllowed(currentUser, true);
+  return {
+    clause: `(${base.clause}) AND ${alias}.responsible_user_id = ?`,
+    params: [...base.params, responsibleUserId],
+  };
+}
+
 async function listTasksForUser(currentUser, requestUrl, client = pool) {
   const bucket = String(requestUrl.searchParams.get("bucket") || "today");
   const limit = parseBoundedInteger(requestUrl.searchParams.get("limit"), 50, 1, 200);
-  const accessSql = buildTaskAccessSql(currentUser, "t");
   const useDateColumns = dateColumnRuntime.isReady();
-  const bucketWhere = getTaskBucketWhere(bucket, "t", { useDateColumns });
+  const accessSql = buildTaskAccessWithAdminResponsibleFilter(currentUser, requestUrl, "t");
+  const dateMode = String(requestUrl.searchParams.get("dateMode") || "").trim();
+  assertAdminTaskFilterAllowed(currentUser, Boolean(dateMode));
+  const bucketWhere = getTaskBucketWhere(dateMode ? "all" : bucket, "t", { useDateColumns });
   const taskDueOrder = sqlDateColumn("t", "due_at", "due_at_dt", useDateColumns);
   const taskCreatedOrder = sqlDateColumn("t", "created_at", "created_at_dt", useDateColumns);
   const leadId = String(requestUrl.searchParams.get("leadId") || "").trim();
   const where = [accessSql.clause, bucketWhere];
   const params = [...accessSql.params];
+  if (dateMode) {
+    const dateFilter = buildAdminTaskDateFilter(requestUrl, "t", useDateColumns);
+    where.push("t.status = 'pending'");
+    where.push(dateFilter.clause);
+    params.push(...dateFilter.params);
+  }
   if (leadId) {
     await assertLeadAccess(currentUser, leadId, { includeDeleted: true }, client);
     where.push("t.lead_id = ?");
@@ -3157,9 +3258,9 @@ async function listTasksForUser(currentUser, requestUrl, client = pool) {
   return rows.map(rowToTask);
 }
 
-async function getTodayDashboard(currentUser, client = pool) {
+async function getTodayDashboard(currentUser, requestUrl = null, client = pool) {
   const accessContext = await getLeadAccessContext(currentUser, client);
-  const taskAccess = buildTaskAccessSql(currentUser, "t");
+  const taskAccess = requestUrl ? buildTaskAccessWithAdminResponsibleFilter(currentUser, requestUrl, "t") : buildTaskAccessSql(currentUser, "t");
   const useDateColumns = dateColumnRuntime.isReady();
   const temporalSql = buildTodayTemporalSql(useDateColumns);
   const countRow = await statementFirstRow(
@@ -4550,7 +4651,7 @@ async function handleApi(request, response, requestUrl) {
 
   if (pathname === "/api/today" && method === "GET") {
     requirePermission(currentUser, "read_tasks");
-    sendJson(response, 200, await getTodayDashboard(currentUser));
+    sendJson(response, 200, await getTodayDashboard(currentUser, requestUrl));
     return;
   }
 
@@ -5572,9 +5673,10 @@ async function handleApi(request, response, requestUrl) {
         await assertLeadAccess(currentUser, lead.id, { accessContext, forUpdate: true }, client);
       }
       const normalizedInput = normalizeLead(lead);
-      const changedFields = before ? getChangedLeadFields(before, normalizedInput, auditableLeadFields) : [];
-      assertAssignmentUsesHandoff({ isNew: !before, changedFields, lead: normalizedInput });
-      const assignedLead = enforceLeadAssignmentForUser(normalizedInput, accessContext.user, accessContext.teamMembers);
+      const attributedInput = before ? normalizedInput : stampSdrOriginForNewLead(normalizedInput, currentUser);
+      const changedFields = before ? getChangedLeadFields(before, attributedInput, auditableLeadFields) : [];
+      assertAssignmentUsesHandoff({ isNew: !before, changedFields, lead: attributedInput });
+      const assignedLead = enforceLeadAssignmentForUser(attributedInput, accessContext.user, accessContext.teamMembers);
       const result = await saveLeadWithDuplicateProtection(assignedLead, client, accessContext, transactionContext);
       createdHotLead = !before && result.action !== "merged";
       const changes = before ? diffLeads(before, result.lead) : result.lead;
@@ -6000,7 +6102,12 @@ async function handleApi(request, response, requestUrl) {
       const changedFields = getChangedLeadFields(before, lead, auditableLeadFields);
       assertLeadFieldUpdateAllowed(currentUser, changedFields);
       assertAssignmentUsesHandoff({ changedFields, lead });
-      const assignedLead = enforceLeadAssignmentForUser(lead, accessContext.user, accessContext.teamMembers);
+      const protectedLead = {
+        ...lead,
+        sdrResponsible: before?.sdrResponsible || "",
+        sdrResponsibleUserId: before?.sdrResponsibleUserId || "",
+      };
+      const assignedLead = enforceLeadAssignmentForUser(protectedLead, accessContext.user, accessContext.teamMembers);
       const alignedLead = await alignLeadKanbanStageWithStatus(assignedLead, before, client);
       const result = await saveLead(alignedLead, client);
       const changes = before ? diffLeads(before, result) : result;

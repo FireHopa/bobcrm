@@ -539,6 +539,13 @@ export default function App() {
     void refreshLeadFilterOptions();
   }
 
+  const handleDrawerKanbanLeadUpdated = useCallback((updatedLead: Lead) => {
+    replaceLeadInState(updatedLead);
+    setKanbanRefreshVersion((version) => version + 1);
+    setOpportunityRefreshVersion((version) => version + 1);
+    void refreshLeadSummary();
+  }, [refreshLeadSummary, replaceLeadInState]);
+
   function handleLeadRestored(restoredLead: Lead) {
     setLeads((currentLeads) => [restoredLead, ...currentLeads.filter((lead) => lead.id !== restoredLead.id)]);
     setKanbanRefreshVersion((version) => version + 1);
@@ -908,6 +915,7 @@ export default function App() {
                 onDeleteLead={deleteLead}
                 onRequestHandoff={openLeadHandoff}
                 onTaskChanged={handleOperationalDataChanged}
+                onKanbanLeadUpdated={handleDrawerKanbanLeadUpdated}
               />
             </Suspense>
           ) : null

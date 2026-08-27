@@ -1230,15 +1230,30 @@ export async function handoffLeadToConsultant(leadId: string, payload: LeadHando
   return { lead: normalizeLeadFromApi(response.lead), task: response.task, idempotentReplay: response.idempotentReplay };
 }
 
-export async function fetchTodayDashboardFromServer(): Promise<TodayDashboard> {
-  return requestApi<TodayDashboard>("/api/today");
+export async function fetchTodayDashboardFromServer(params: { responsibleUserId?: string } = {}): Promise<TodayDashboard> {
+  const search = new URLSearchParams();
+  if (params.responsibleUserId) search.set("responsibleUserId", params.responsibleUserId);
+  const suffix = search.toString();
+  return requestApi<TodayDashboard>(`/api/today${suffix ? `?${suffix}` : ""}`);
 }
 
-export async function fetchTasksFromServer(params: { bucket?: "overdue" | "today" | "upcoming" | "completed" | "all"; leadId?: string; limit?: number } = {}): Promise<CRMTask[]> {
+export async function fetchTasksFromServer(params: {
+  bucket?: "overdue" | "today" | "upcoming" | "completed" | "all";
+  leadId?: string;
+  limit?: number;
+  responsibleUserId?: string;
+  dateMode?: "exact" | "until" | "between";
+  dateFrom?: string;
+  dateTo?: string;
+} = {}): Promise<CRMTask[]> {
   const search = new URLSearchParams();
   if (params.bucket) search.set("bucket", params.bucket);
   if (params.leadId) search.set("leadId", params.leadId);
   if (params.limit) search.set("limit", String(params.limit));
+  if (params.responsibleUserId) search.set("responsibleUserId", params.responsibleUserId);
+  if (params.dateMode) search.set("dateMode", params.dateMode);
+  if (params.dateFrom) search.set("dateFrom", params.dateFrom);
+  if (params.dateTo) search.set("dateTo", params.dateTo);
   return requestApi<CRMTask[]>(`/api/tasks?${search.toString()}`);
 }
 

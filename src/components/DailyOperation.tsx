@@ -2,9 +2,12 @@ import { memo, useEffect, useMemo, useState } from "react";
 import type { CRMTask, CRMUser, Lead, TaskPriority, TaskType, TodayDashboard } from "../types/Lead";
 import {
   completeTaskOnServer,
+  fetchTasksFromServer,
   fetchTodayDashboardFromServer,
+  fetchUsersFromServer,
 } from "../utils/api";
 import { formatDate } from "../utils/formatters";
+import { BrDateInput } from "./BrDateInput";
 import { TaskCompletionDialog, type TaskCompletionPayload } from "./TaskCompletionDialog";
 
 const taskTypeLabels: Record<TaskType, string> = {
@@ -22,6 +25,8 @@ const priorityLabels: Record<TaskPriority, string> = {
   alta: "Alta",
   urgente: "Urgente",
 };
+
+type AdminDateMode = "default" | "until" | "between" | "exact";
 
 type DailyOperationProps = {
   leads: Lead[];
@@ -52,12 +57,29 @@ export const DailyOperation = memo(function DailyOperation({ currentUser, onView
   const [isSaving, setIsSaving] = useState(false);
   const [taskToComplete, setTaskToComplete] = useState<CRMTask | null>(null);
 
+  const [adminUsers, setAdminUsers] = useState<CRMUser[]>([]);
+  const [adminResponsibleUserId, setAdminResponsibleUserId] = useState("");
+  const [adminDateMode, setAdminDateMode] = useState<AdminDateMode>("default");
+  const [adminDateFrom, setAdminDateFrom] = useState("");
+  const [adminDateTo, setAdminDateTo] = useState("");
+  const [filteredTasks, setFilteredTasks] = useState<CRMTask[]>([]);
+  const [isFiltering, setIsFiltering] = useState(false);
+  const [filterError, setFilterError] = useState("");
+
+  const isAdmin = currentUser?.role === "admin";
+  const hasCustomDateFilter = isAdmin && adminDateMode !== "default";
+  const customFilterReady = !hasCustomDateFilter
+    || (adminDateMode === "exact" && Boolean(adminDateFrom))
+    || (adminDateMode === "until" && Boolean(adminDateTo))
+    || (adminDateMode === "between" && Boolean(adminDateFrom) && Boolean(adminDateTo));
 
   async function refreshDashboard() {
     setIsLoading(true);
     setError("");
     try {
-      setDashboard(await fetchTodayDashboardFromServer());
+      setDashboard(await fetchTodayDashboardFromServer({
+        responsibleUserId: isAdmin && adminResponsibleUserId ? adminResponsibleUserId : undefined,
+      }));
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Não foi possível carregar a rotina de hoje.");
     } finally {
@@ -65,12 +87,62 @@ export const DailyOperation = memo(function DailyOperation({ currentUser, onView
     }
   }
 
+  async function refreshAdminFilteredTasks() {
+    if (adminDateMode === "default" || !customFilterReady) {
+      setFilteredTasks([]);
+      setFilterError("");
+      return;
+    }
+
+    setIsFiltering(true);
+    setFilterError("");
+    try {
+      const tasks = await fetchTasksFromServer({
+        bucket: "all",
+        limit: 200,
+        responsibleUserId: adminResponsibleUserId || undefined,
+        dateMode: adminDateMode,
+        dateFrom: adminDateMode === "exact" || adminDateMode === "between" ? adminDateFrom : undefined,
+        dateTo: adminDateMode === "until" || adminDateMode === "between" ? adminDateTo : undefined,
+      });
+      setFilteredTasks(tasks);
+    } catch (caughtError) {
+      setFilteredTasks([]);
+      setFilterError(caughtError instanceof Error ? caughtError.message : "Não foi possível aplicar o filtro de tarefas.");
+    } finally {
+      setIsFiltering(false);
+    }
+  }
+
   useEffect(() => {
     void refreshDashboard();
-  }, [currentUser?.id]);
+  }, [currentUser?.id, adminResponsibleUserId]);
 
-  const visibleTasks = dashboard?.tasks[activeBucket] || [];
-  const nextAction = useMemo(() => dashboard?.tasks.overdue[0] || dashboard?.tasks.today[0] || dashboard?.tasks.upcoming[0] || null, [dashboard]);
+  useEffect(() => {
+    if (!isAdmin) {
+      setAdminUsers([]);
+      setAdminResponsibleUserId("");
+      setAdminDateMode("default");
+      setAdminDateFrom("");
+      setAdminDateTo("");
+      setFilteredTasks([]);
+      return;
+    }
+
+    fetchUsersFromServer()
+      .then((users) => setAdminUsers(users.filter((user) => user.isActive)))
+      .catch(() => setAdminUsers([]));
+  }, [currentUser?.id, isAdmin]);
+
+  useEffect(() => {
+    void refreshAdminFilteredTasks();
+  }, [adminResponsibleUserId, adminDateMode, adminDateFrom, adminDateTo, currentUser?.id]);
+
+  const visibleTasks = hasCustomDateFilter ? filteredTasks : dashboard?.tasks[activeBucket] || [];
+  const nextAction = useMemo(() => {
+    if (hasCustomDateFilter) return customFilterReady ? filteredTasks[0] || null : null;
+    return dashboard?.tasks.overdue[0] || dashboard?.tasks.today[0] || dashboard?.tasks.upcoming[0] || null;
+  }, [customFilterReady, dashboard, filteredTasks, hasCustomDateFilter]);
 
   async function completeTask(task: CRMTask, payload: TaskCompletionPayload) {
     setIsSaving(true);
@@ -78,6 +150,7 @@ export const DailyOperation = memo(function DailyOperation({ currentUser, onView
     try {
       await completeTaskOnServer(task.id, payload);
       await refreshDashboard();
+      if (hasCustomDateFilter) await refreshAdminFilteredTasks();
       onDataChanged?.();
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : "Não foi possível concluir a tarefa.";
@@ -88,6 +161,13 @@ export const DailyOperation = memo(function DailyOperation({ currentUser, onView
     }
   }
 
+  function resetAdminDateFilter() {
+    setAdminDateMode("default");
+    setAdminDateFrom("");
+    setAdminDateTo("");
+    setFilterError("");
+    setFilteredTasks([]);
+  }
 
   if (isLoading && !dashboard) {
     return <section className="panel loadingPanel"><span className="eyebrow">Rotina comercial</span><h2>Carregando tarefas e prioridades</h2></section>;
@@ -97,11 +177,52 @@ export const DailyOperation = memo(function DailyOperation({ currentUser, onView
     <section className="operationWorkspace operationWorkspaceV42">
       <div className="operationScopeBar" role="status" aria-live="polite">
         <strong>Tela Hoje: {dashboard?.roleLabel || "Usuário"}</strong>
+        {isAdmin && adminResponsibleUserId ? <span>• usuário filtrado</span> : null}
         {dashboard?.generatedAt ? <small>Atualizado em {new Date(dashboard.generatedAt).toLocaleString("pt-BR")}</small> : null}
-        <button className="secondaryButton" type="button" onClick={() => void refreshDashboard()} disabled={isLoading}>Atualizar</button>
+        <button className="secondaryButton" type="button" onClick={() => { void refreshDashboard(); if (hasCustomDateFilter) void refreshAdminFilteredTasks(); }} disabled={isLoading || isFiltering}>Atualizar</button>
       </div>
 
       {error ? <div className="systemNotice" role="alert"><strong>Não foi possível concluir a ação.</strong><span>{error}</span></div> : null}
+
+      {isAdmin ? (
+        <section className="panel" aria-label="Filtros administrativos de tarefas">
+          <div className="sectionTitleRow">
+            <div><span className="eyebrow">Visão administrativa</span><h2>Tarefas de toda a equipe</h2><p>Veja todo mundo ou uma pessoa específica e aplique um período exato.</p></div>
+            {adminDateMode !== "default" ? <button className="secondaryButton" type="button" onClick={resetAdminDateFilter}>Limpar período</button> : null}
+          </div>
+          <div className="drawerFormGrid">
+            <label className="field">
+              <span>Responsável</span>
+              <select value={adminResponsibleUserId} onChange={(event) => setAdminResponsibleUserId(event.target.value)}>
+                <option value="">Todo mundo</option>
+                {adminUsers.map((user) => <option key={user.id} value={user.id}>{user.name || user.email} • {user.roleLabel || user.role}</option>)}
+              </select>
+            </label>
+            <label className="field">
+              <span>Filtro de data</span>
+              <select value={adminDateMode} onChange={(event) => setAdminDateMode(event.target.value as AdminDateMode)}>
+                <option value="default">Visão padrão da Tela Hoje</option>
+                <option value="until">Até uma data</option>
+                <option value="between">Entre duas datas</option>
+                <option value="exact">Data exata</option>
+              </select>
+            </label>
+            {adminDateMode === "until" ? (
+              <label className="field"><span>Até</span><BrDateInput value={adminDateTo} onChange={setAdminDateTo} ariaLabel="Tarefas até a data" /></label>
+            ) : null}
+            {adminDateMode === "exact" ? (
+              <label className="field"><span>Data exata</span><BrDateInput value={adminDateFrom} onChange={setAdminDateFrom} ariaLabel="Data exata das tarefas" /></label>
+            ) : null}
+            {adminDateMode === "between" ? (
+              <>
+                <label className="field"><span>De</span><BrDateInput value={adminDateFrom} onChange={setAdminDateFrom} ariaLabel="Tarefas a partir da data" /></label>
+                <label className="field"><span>Até</span><BrDateInput value={adminDateTo} onChange={setAdminDateTo} ariaLabel="Tarefas até a data" /></label>
+              </>
+            ) : null}
+          </div>
+          {filterError ? <p className="fieldError" role="alert">{filterError}</p> : null}
+        </section>
+      ) : null}
 
       {nextAction ? (
         <section className="panel nextActionPanelV42">
@@ -114,7 +235,9 @@ export const DailyOperation = memo(function DailyOperation({ currentUser, onView
             <button className="primaryButton" type="button" onClick={() => setTaskToComplete(nextAction)} disabled={isSaving}>Concluir tarefa</button>
           </div>
         </section>
-      ) : <section className="panel"><h2>Nenhuma tarefa pendente</h2><p>A fila operacional está limpa no seu escopo.</p></section>}
+      ) : hasCustomDateFilter && !customFilterReady ? (
+        <section className="panel"><h2>Defina a data do filtro</h2><p>Preencha o período acima para carregar as tarefas.</p></section>
+      ) : <section className="panel"><h2>Nenhuma tarefa pendente</h2><p>A fila operacional está limpa no escopo selecionado.</p></section>}
 
       <div className="operationStatsRail operationStatsRailV42">
         <article><span>Tarefas atrasadas</span><strong>{dashboard?.taskSummary.overdue || 0}</strong></article>
@@ -126,19 +249,26 @@ export const DailyOperation = memo(function DailyOperation({ currentUser, onView
 
       <div className="operationRoleGridV42">
         <section className="panel">
-          <div className="sectionTitleRow"><div><span className="eyebrow">Execução</span><h2>Fila de tarefas</h2></div></div>
-          <div className="operationBucketTabsV42" role="tablist" aria-label="Filas de tarefas">
-            <button type="button" className={activeBucket === "overdue" ? "active" : ""} onClick={() => setActiveBucket("overdue")}>Atrasadas ({dashboard?.taskSummary.overdue || 0})</button>
-            <button type="button" className={activeBucket === "today" ? "active" : ""} onClick={() => setActiveBucket("today")}>Hoje ({dashboard?.taskSummary.today || 0})</button>
-            <button type="button" className={activeBucket === "upcoming" ? "active" : ""} onClick={() => setActiveBucket("upcoming")}>Próximas ({dashboard?.taskSummary.upcoming || 0})</button>
+          <div className="sectionTitleRow">
+            <div>
+              <span className="eyebrow">Execução</span>
+              <h2>{hasCustomDateFilter ? `Tarefas filtradas (${filteredTasks.length})` : "Fila de tarefas"}</h2>
+            </div>
           </div>
+          {!hasCustomDateFilter ? (
+            <div className="operationBucketTabsV42" role="tablist" aria-label="Filas de tarefas">
+              <button type="button" className={activeBucket === "overdue" ? "active" : ""} onClick={() => setActiveBucket("overdue")}>Atrasadas ({dashboard?.taskSummary.overdue || 0})</button>
+              <button type="button" className={activeBucket === "today" ? "active" : ""} onClick={() => setActiveBucket("today")}>Hoje ({dashboard?.taskSummary.today || 0})</button>
+              <button type="button" className={activeBucket === "upcoming" ? "active" : ""} onClick={() => setActiveBucket("upcoming")}>Próximas ({dashboard?.taskSummary.upcoming || 0})</button>
+            </div>
+          ) : null}
           <div className="taskQueueV42">
-            {visibleTasks.length ? visibleTasks.map((task) => (
+            {isFiltering ? <div className="operationEmptyCompact"><strong>Carregando tarefas filtradas...</strong></div> : visibleTasks.length ? visibleTasks.map((task) => (
               <article className="taskCardV42" key={task.id}>
                 <div><strong>{task.title}</strong><span>{taskTypeLabels[task.type]} • {task.responsibleName || "Sem responsável"}</span><small>{task.leadName || task.leadCompany || task.leadPhone || "Sem lead"} • {formatTaskDate(task.dueAt)}</small></div>
                 <div className="taskCardActionsV42"><span className={`badge ${getTaskTone(task.priority)}`}>{priorityLabels[task.priority]}</span>{task.leadId ? <button className="secondaryButton" type="button" onClick={() => onViewLead(task.leadId)}>Abrir lead</button> : null}<button className="primaryButton" type="button" onClick={() => setTaskToComplete(task)} disabled={isSaving}>Concluir</button></div>
               </article>
-            )) : <div className="operationEmptyCompact"><strong>Nenhuma tarefa nesta fila.</strong></div>}
+            )) : <div className="operationEmptyCompact"><strong>{hasCustomDateFilter && !customFilterReady ? "Defina o período para carregar a fila." : "Nenhuma tarefa nesta fila."}</strong></div>}
           </div>
         </section>
 
@@ -159,7 +289,6 @@ export const DailyOperation = memo(function DailyOperation({ currentUser, onView
           {dashboard?.systemHealth ? <section className="panel"><span className="eyebrow">Administração</span><h2>Alertas operacionais</h2><div className="roleMetricsListV42"><div><span>Usuários ativos</span><strong>{dashboard.systemHealth.activeUsers}</strong></div><div><span>Falhas de integração</span><strong>{dashboard.systemHealth.failedIntegrations}</strong></div><div><span>Último backup</span><strong>{dashboard.systemHealth.latestBackupAt ? new Date(dashboard.systemHealth.latestBackupAt).toLocaleDateString("pt-BR") : "Não encontrado"}</strong></div></div></section> : null}
         </aside>
       </div>
-
 
       <TaskCompletionDialog
         task={taskToComplete}

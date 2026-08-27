@@ -7,6 +7,7 @@ import {
   serviceOptions,
   serviceProviderStatusOptions,
 } from "../constants/services";
+import type { KanbanStage } from "../types/Kanban";
 import type {
   Lead,
   LeadSource,
@@ -33,8 +34,10 @@ import {
   fetchLeadAuditFromServer,
   fetchLeadExternalOriginsFromServer,
   fetchLeadNotesFromServer,
+  fetchKanbanPipelines,
   fetchTasksFromServer,
   hasPermission,
+  moveKanbanCard,
 } from "../utils/api";
 import { formatCurrencyBRL, formatDate, formatPhone, normalizeWebsite } from "../utils/formatters";
 import { TaskCompletionDialog, type TaskCompletionPayload } from "./TaskCompletionDialog";
@@ -95,6 +98,7 @@ type LeadDetailsDrawerProps = {
   assignableUsers: CRMUser[];
   onTaskChanged?: () => void;
   onRequestHandoff?: (lead: Lead) => void;
+  onKanbanLeadUpdated?: (lead: Lead) => void;
 };
 
 export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
@@ -108,6 +112,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
   assignableUsers,
   onTaskChanged,
   onRequestHandoff,
+  onKanbanLeadUpdated,
 }: LeadDetailsDrawerProps) {
   const [formState, setFormState] = useState<LeadDrawerFormState | null>(lead ? createLeadDrawerFormState(lead) : null);
   const [formErrors, setFormErrors] = useState<LeadDrawerFormErrors>({});
@@ -128,6 +133,11 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
   const [taskError, setTaskError] = useState("");
   const [isSavingTask, setIsSavingTask] = useState(false);
   const [taskToComplete, setTaskToComplete] = useState<CRMTask | null>(null);
+  const [pipelineStages, setPipelineStages] = useState<KanbanStage[]>([]);
+  const [selectedStageId, setSelectedStageId] = useState(lead?.pipelineStageId || "");
+  const [isMovingStage, setIsMovingStage] = useState(false);
+  const [stageError, setStageError] = useState("");
+  const preserveFormAfterStageMoveRef = useRef<{ leadId: string; formState: LeadDrawerFormState } | null>(null);
   const drawerRef = useRef<HTMLElement | null>(null);
 
   const canEditFull = hasPermission(currentUser, "edit_leads_full");
@@ -138,13 +148,18 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
   const canDeleteLead = hasPermission(currentUser, "delete_leads");
   const canManageTasks = hasPermission(currentUser, "manage_all_tasks") || hasPermission(currentUser, "manage_own_tasks");
   const canAssignTasks = hasPermission(currentUser, "assign_tasks");
+  const canMoveLeadStage = hasPermission(currentUser, "move_lead_stage");
   const canHandoffLead = canAssignLead
     && hasPermission(currentUser, "move_lead_pipeline")
     && canAssignTasks;
   const isEditing = mode === "edit" && canEditLead;
 
   useEffect(() => {
-    setFormState(lead ? createLeadDrawerFormState(lead) : null);
+    const preservedForm = lead && preserveFormAfterStageMoveRef.current?.leadId === lead.id
+      ? preserveFormAfterStageMoveRef.current.formState
+      : null;
+    setFormState(preservedForm || (lead ? createLeadDrawerFormState(lead) : null));
+    if (preservedForm) preserveFormAfterStageMoveRef.current = null;
     setFormErrors({});
     setAuditEntries([]);
     setAuditError("");
@@ -161,6 +176,10 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
     setTaskResponsibleUserId(lead?.responsibleUserId || currentUser?.id || "");
     setTaskError("");
     setTaskToComplete(null);
+    setPipelineStages([]);
+    setSelectedStageId(lead?.pipelineStageId || "");
+    setIsMovingStage(false);
+    setStageError("");
 
     if (!lead) return;
 
@@ -180,6 +199,15 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
       fetchLeadAuditFromServer(lead.id)
         .then(setAuditEntries)
         .catch((error) => setAuditError(error instanceof Error ? error.message : "Não foi possível carregar o histórico."));
+    }
+
+    if (currentUser?.role === "consultor_vendas" && canMoveLeadStage && lead.pipelineId) {
+      fetchKanbanPipelines()
+        .then((pipelines) => {
+          const currentPipeline = pipelines.find((pipeline) => pipeline.id === lead.pipelineId);
+          setPipelineStages(currentPipeline?.stages || []);
+        })
+        .catch((error) => setStageError(error instanceof Error ? error.message : "Não foi possível carregar as etapas deste funil."));
     }
   }, [lead, currentUser]);
 
@@ -366,6 +394,35 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
       setNoteError(error instanceof Error ? error.message : "Não foi possível registrar a nota.");
     } finally {
       setIsSavingNote(false);
+    }
+  }
+
+  async function handleConsultantStageChange(targetStageId: string) {
+    if (!lead || !formState || !lead.pipelineId || !canMoveLeadStage || isMovingStage || targetStageId === selectedStageId) return;
+    const previousStageId = selectedStageId;
+    setSelectedStageId(targetStageId);
+    setIsMovingStage(true);
+    setStageError("");
+    preserveFormAfterStageMoveRef.current = { leadId: lead.id, formState: { ...formState } };
+
+    try {
+      const movedLead = await moveKanbanCard({
+        leadId: lead.id,
+        pipelineId: lead.pipelineId,
+        stageId: targetStageId,
+        expectedUpdatedAt: lead.updatedAt,
+      });
+      setSelectedStageId(movedLead.pipelineStageId || targetStageId);
+      onKanbanLeadUpdated?.(movedLead);
+      fetchTasksFromServer({ bucket: "all", leadId: lead.id, limit: 100 })
+        .then(setTasks)
+        .catch(() => undefined);
+    } catch (error) {
+      preserveFormAfterStageMoveRef.current = null;
+      setSelectedStageId(previousStageId);
+      setStageError(error instanceof Error ? error.message : "Não foi possível mover o lead para a etapa selecionada.");
+    } finally {
+      setIsMovingStage(false);
     }
   }
 
@@ -628,12 +685,23 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
             ) : (
               <section className="drawerSection">
                 <h3>Campos permitidos ao consultor</h3>
-                <p className="mutedText">Você pode atualizar somente e-mail, termômetro e data prevista de fechamento. Etapas são movimentadas no Kanban do próprio funil.</p>
+                <p className="mutedText">Você pode atualizar e-mail, termômetro, data prevista de fechamento e mover o lead entre as etapas do funil atual.</p>
                 <div className="drawerFormGrid">
                   <label className="field"><span>E-mail</span><input type="email" value={formState.email} onChange={(event) => updateField("email", event.target.value)} aria-invalid={Boolean(formErrors.email)} aria-describedby={formErrors.email ? "drawer-email-error" : undefined} />{formErrors.email ? <small id="drawer-email-error" className="fieldError">{formErrors.email}</small> : null}</label>
                   <label className="field"><span>Temperatura</span><select value={formState.temperature} onChange={(event) => updateField("temperature", event.target.value as LeadTemperature)}>{leadTemperatureOptions.map((temperature) => <option key={temperature || "empty"} value={temperature}>{temperature || "Selecione"}</option>)}</select></label>
                   <label className="field"><span>Fechamento previsto <small className="dateFormatHint">Dia/Mês/Ano · Hora</small></span><BrDateInput withTime value={toDateTimeLocalInput(formState.expectedCloseAt)} onChange={(value) => updateField("expectedCloseAt", fromDateTimeLocalInput(value))} ariaLabel="Fechamento previsto" /></label>
+                  {canMoveLeadStage && lead.pipelineId ? (
+                    <label className="field">
+                      <span>Etapa do lead</span>
+                      <select value={selectedStageId} onChange={(event) => void handleConsultantStageChange(event.target.value)} disabled={isMovingStage || !pipelineStages.length}>
+                        {!pipelineStages.length ? <option value={selectedStageId}>{isMovingStage ? "Movendo..." : "Carregando etapas..."}</option> : null}
+                        {pipelineStages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
+                      </select>
+                      <small>A etapa é salva imediatamente. O consultor continua restrito ao funil atual.</small>
+                    </label>
+                  ) : null}
                 </div>
+                {stageError ? <p className="fieldError" role="alert">{stageError}</p> : null}
               </section>
             )}
             {tasksSection}

@@ -55,6 +55,8 @@ export function buildIsoToMysqlDateExpression(columnExpression) {
       THEN STR_TO_DATE(REPLACE(SUBSTRING(${value}, 1, 23), 'T', ' '), '%Y-%m-%d %H:%i:%s.%f')
     WHEN ${value} REGEXP '^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}'
       THEN STR_TO_DATE(REPLACE(SUBSTRING(${value}, 1, 19), 'T', ' '), '%Y-%m-%d %H:%i:%s')
+    WHEN ${value} REGEXP '^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}$'
+      THEN STR_TO_DATE(REPLACE(${value}, 'T', ' '), '%Y-%m-%d %H:%i')
     ELSE NULL
   END`;
 }
