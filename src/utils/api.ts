@@ -412,11 +412,16 @@ async function waitForJob(initialJob: AsyncJob, options: { timeoutMs?: number; p
   return job;
 }
 
-async function enqueueAndWaitForJob(path: string, body: Record<string, unknown>, timeoutMs = LONG_API_TIMEOUT_MS): Promise<AsyncJob> {
+async function enqueueAndWaitForJob(
+  path: string,
+  body: Record<string, unknown>,
+  timeoutMs = LONG_API_TIMEOUT_MS,
+  enqueueTimeoutMs = DEFAULT_API_TIMEOUT_MS,
+): Promise<AsyncJob> {
   const queued = await requestApi<AsyncJob>(path, {
     method: "POST",
     body: JSON.stringify(body),
-    timeoutMs: DEFAULT_API_TIMEOUT_MS,
+    timeoutMs: enqueueTimeoutMs,
   });
   return waitForJob(queued, { timeoutMs });
 }
@@ -949,7 +954,7 @@ export async function importLeadBatchToServer(
     leads,
     targetPipelineId: String(target.pipelineId || ""),
     targetStageId: String(target.stageId || ""),
-  }, LONG_API_TIMEOUT_MS);
+  }, LONG_API_TIMEOUT_MS, 120000);
   const rawReport = (completed.result?.report || {}) as Partial<ServerImportReport>;
   return {
     leads: [],
@@ -965,6 +970,131 @@ export async function importLeadBatchToServer(
 export async function importLeadsToServer(leads: Lead[]): Promise<Lead[]> {
   const result = await importLeadBatchToServer(leads);
   return result.leads;
+}
+
+export type ConsultantImportOwnerDescriptor = {
+  ownerName: string;
+  ownerEmail: string;
+  count: number;
+};
+
+export type ConsultantImportRouteDescriptor = {
+  pipelineName: string;
+  stageName: string;
+  count: number;
+};
+
+export type ConsultantImportPreflightOwner = ConsultantImportOwnerDescriptor & {
+  status: "matched" | "missing" | "ambiguous";
+  userId: string;
+  userName: string;
+  userEmail: string;
+};
+
+export type ConsultantImportPreflightRoute = ConsultantImportRouteDescriptor & {
+  status: "matched" | "missing_pipeline" | "missing_stage";
+  pipelineId: string;
+  pipelineResolvedName: string;
+  stageId: string;
+  stageResolvedName: string;
+  usesFallbackStage: boolean;
+};
+
+export type ConsultantImportPreflight = {
+  ready: boolean;
+  owners: ConsultantImportPreflightOwner[];
+  routes: ConsultantImportPreflightRoute[];
+  missingOwners: number;
+  missingRoutes: number;
+  fallbackRows: number;
+};
+
+export type ConsultantImportEntry = {
+  lead: Lead;
+  ownerName: string;
+  ownerEmail: string;
+  pipelineName: string;
+  stageName: string;
+};
+
+export async function preflightConsultantPipelineImport(
+  owners: ConsultantImportOwnerDescriptor[],
+  routes: ConsultantImportRouteDescriptor[],
+): Promise<ConsultantImportPreflight> {
+  return requestApi<ConsultantImportPreflight>("/api/leads/import/consultants/preflight", {
+    method: "POST",
+    body: JSON.stringify({ owners, routes }),
+  });
+}
+
+export async function importConsultantPipelineBatch(entries: ConsultantImportEntry[]): Promise<ImportLeadsBatchResult> {
+  const completed = await enqueueAndWaitForJob("/api/leads/import/consultants", { entries }, LONG_API_TIMEOUT_MS, 120000);
+  const rawReport = (completed.result?.report || {}) as Partial<ServerImportReport>;
+  return {
+    leads: [],
+    report: {
+      received: Number(rawReport.received ?? entries.length),
+      created: Number(rawReport.created ?? 0),
+      merged: Number(rawReport.merged ?? 0),
+      ignoredInsideFile: Number(rawReport.ignoredInsideFile ?? 0),
+    },
+  };
+}
+
+
+
+export type InsideSalesStageDescriptor = {
+  sourceStageKey: string;
+  sourceStageLabel: string;
+  count: number;
+};
+
+export type InsideSalesPreflightRoute = InsideSalesStageDescriptor & {
+  status: "matched" | "missing_stage";
+  stageId: string;
+  stageName: string;
+};
+
+export type InsideSalesImportStage = {
+  id: string;
+  name: string;
+  stageType: string;
+  position: number;
+};
+
+export type InsideSalesImportPreflight = {
+  ready: boolean;
+  pipelineId: string;
+  pipelineName: string;
+  routes: InsideSalesPreflightRoute[];
+  availableStages: InsideSalesImportStage[];
+  missingRoutes: number;
+};
+
+export type InsideSalesImportEntry = {
+  lead: Lead;
+  stageId: string;
+};
+
+export async function preflightInsideSalesImport(stages: InsideSalesStageDescriptor[]): Promise<InsideSalesImportPreflight> {
+  return requestApi<InsideSalesImportPreflight>("/api/leads/import/inside-sales/preflight", {
+    method: "POST",
+    body: JSON.stringify({ stages }),
+  });
+}
+
+export async function importInsideSalesBatch(entries: InsideSalesImportEntry[]): Promise<ImportLeadsBatchResult> {
+  const completed = await enqueueAndWaitForJob("/api/leads/import/inside-sales", { entries }, LONG_API_TIMEOUT_MS, 120000);
+  const rawReport = (completed.result?.report || {}) as Partial<ServerImportReport>;
+  return {
+    leads: [],
+    report: {
+      received: Number(rawReport.received ?? entries.length),
+      created: Number(rawReport.created ?? 0),
+      merged: Number(rawReport.merged ?? 0),
+      ignoredInsideFile: Number(rawReport.ignoredInsideFile ?? 0),
+    },
+  };
 }
 
 export async function fetchArchivedLeadsFromServer(params: { search?: string; limit?: number; offset?: number } = {}): Promise<ArchivedLeadsPageResult> {

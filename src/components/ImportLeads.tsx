@@ -2,6 +2,7 @@ import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import type { Lead, LeadSource, LeadStatus, LeadTemperature } from "../types/Lead";
 import type { KanbanPipeline, KanbanStage } from "../types/Kanban";
 import { fetchKanbanPipelines } from "../utils/api";
+import { ConsultantPipelineImport } from "./ConsultantPipelineImport";
 import type { ImportDeduplicationReport } from "../utils/commercial";
 import {
   CSV_PROFILE_SAMPLE_ROWS,
@@ -333,6 +334,7 @@ export function ImportLeads({ onImportLeads, onImportFinished }: ImportLeadsProp
 
   return (
     <section className="panel importPanel importPanelV32 importPanelV33">
+      <ConsultantPipelineImport onImportFinished={onImportFinished} />
       <div className="importTopV32 importTopV33">
         <div>
           <span className="eyebrow">Importação</span>

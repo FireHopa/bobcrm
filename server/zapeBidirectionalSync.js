@@ -116,7 +116,7 @@ export function createZapeBidirectionalSyncRuntime({ queryRows, execute, logger 
         params.push(cursor.updatedAt, cursor.updatedAt, cursor.leadId || "");
       }
       params.push(config.batchSize);
-      const rows = await queryRows(`SELECT l.*,${syncTimestampSql} AS sync_updated_at,leo.tenant_id,leo.external_lead_id,kp.name AS pipeline_name,ks.name AS stage_name,ks.stage_type,ks.semantic_key
+      const rows = await queryRows(`SELECT l.*,${syncTimestampSql} AS sync_updated_at,leo.tenant_id,COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(leo.metadata_json, '$.externalLeadId')), ''), '') AS external_lead_id,kp.name AS pipeline_name,ks.name AS stage_name,ks.stage_type,ks.semantic_key
         FROM leads l
         JOIN lead_external_origins leo ON leo.lead_id=l.id AND leo.provider='zape'
         LEFT JOIN kanban_pipelines kp ON kp.id=l.pipeline_id

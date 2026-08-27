@@ -257,6 +257,43 @@ function normalizeImportedPhone(value: string): string {
 
 export function suggestMapping(headers: string[]): ImportMapping {
   const mapping = { ...emptyMapping };
+  const normalizedHeaders = headers.map((header) => normalizeSearch(header));
+
+  // Alguns exports de CRM trazem colunas de dono/proprietário antes dos dados
+  // do contato. Sem prioridade explícita, o matching genérico de "nome" e
+  // "email" pode confundir Nome/Email do dono com Nome/Email do lead.
+  const preferredExactHeaders: Partial<Record<ImportFieldKey, string[]>> = {
+    name: [
+      "nome do contato principal",
+      "nome completo do contato principal",
+      "nome do contato",
+      "nome completo do contato",
+      "nome completo",
+    ],
+    email: [
+      "email de contato principal",
+      "email do contato principal",
+      "e mail de contato principal",
+      "e mail do contato principal",
+      "email do contato",
+      "e mail do contato",
+    ],
+    phone: ["telefone", "telefone do contato", "celular", "whatsapp", "phone"],
+    company: ["conta", "empresa", "company", "nome da empresa"],
+    website: ["website", "site", "url", "dominio", "domínio"],
+  };
+
+  Object.entries(preferredExactHeaders).forEach(([fieldKey, candidates]) => {
+    const field = fieldKey as ImportFieldKey;
+    if (mapping[field]) return;
+
+    const normalizedCandidates = (candidates || []).map((candidate) => normalizeSearch(candidate));
+    const preferredIndex = normalizedHeaders.findIndex((header) => normalizedCandidates.includes(header));
+
+    if (preferredIndex >= 0) {
+      mapping[field] = String(preferredIndex);
+    }
+  });
 
   const rules: Record<ImportFieldKey, string[]> = {
     name: ["nome", "name", "cliente", "lead", "contato"],
@@ -283,6 +320,16 @@ export function suggestMapping(headers: string[]): ImportMapping {
   };
 
   function canMatchField(field: ImportFieldKey, normalizedHeader: string): boolean {
+    const isOwnerField = normalizedHeader.includes("dono")
+      || normalizedHeader.includes("proprietario")
+      || normalizedHeader.includes("owner");
+    const isIdField = normalizedHeader === "id" || normalizedHeader.startsWith("id ");
+
+    // Nunca usar dados do dono/proprietário como identidade do lead.
+    if ((field === "name" || field === "email") && isOwnerField) return false;
+    // Evita mapear "ID do Negócio" como Empresa.
+    if (field === "company" && isIdField) return false;
+
     const mentionsGoogle = normalizedHeader.includes("google");
     const mentionsMeta = normalizedHeader.includes("meta") || normalizedHeader.includes("facebook") || normalizedHeader.includes("instagram ads");
     const isNegative = normalizedHeader.includes("nao anuncia")
@@ -414,7 +461,7 @@ const MAX_SPREADSHEET_FILE_BYTES = 15 * 1024 * 1024;
 const MAX_SPREADSHEET_ROWS = 50_000;
 const MAX_SPREADSHEET_COLUMNS = 200;
 const SPREADSHEET_PARSE_TIMEOUT_MS = 30_000;
-export const IMPORT_BATCH_SIZE = 3000;
+export const IMPORT_BATCH_SIZE = 500;
 export const CSV_PROFILE_SAMPLE_ROWS = 40;
 
 export function validateImportFile(file: File) {

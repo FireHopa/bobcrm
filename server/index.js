@@ -3695,6 +3695,221 @@ async function enqueuePersistentJob(options) {
   return queued;
 }
 
+
+function normalizeConsultantImportLookup(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Mapeamento exclusivo da migração das planilhas legadas.
+// O CRM atual usa o nome singular abaixo, enquanto as planilhas antigas usam o nome plural.
+const CONSULTANT_IMPORT_PIPELINE_ALIASES = new Map([
+  [normalizeConsultantImportLookup("Pipeline Consultores de Vendas"), normalizeConsultantImportLookup("Pipeline consultor venda")],
+]);
+
+function resolveConsultantImportPipeline(directory, pipelineName) {
+  const sourceKey = normalizeConsultantImportLookup(pipelineName);
+  const resolvedKey = CONSULTANT_IMPORT_PIPELINE_ALIASES.get(sourceKey) || sourceKey;
+  return directory.pipelinesByName.get(resolvedKey) || null;
+}
+
+function isConsultantImportFallbackStage(stageName) {
+  const key = normalizeConsultantImportLookup(stageName);
+  return !key || key === "etapa padrao";
+}
+
+async function loadConsultantImportDirectory(client = pool) {
+  const [users, pipelines, stages] = await Promise.all([
+    queryRows("SELECT id, name, email, role FROM users WHERE is_active = 1 ORDER BY name ASC, email ASC", [], client),
+    queryRows("SELECT id, name FROM kanban_pipelines WHERE is_archived = 0 ORDER BY position ASC, created_at ASC", [], client),
+    queryRows(
+      `SELECT id, pipeline_id, name, stage_type, status_key, position
+       FROM kanban_stages
+       WHERE is_archived = 0
+       ORDER BY pipeline_id ASC, position ASC, created_at ASC`,
+      [],
+      client,
+    ),
+  ]);
+
+  const usersByEmail = new Map();
+  const usersByName = new Map();
+  for (const user of users) {
+    const emailKey = normalizeConsultantImportLookup(user.email);
+    const nameKey = normalizeConsultantImportLookup(user.name);
+    if (emailKey) usersByEmail.set(emailKey, user);
+    if (nameKey) {
+      const list = usersByName.get(nameKey) || [];
+      list.push(user);
+      usersByName.set(nameKey, list);
+    }
+  }
+
+  const pipelinesByName = new Map();
+  for (const pipeline of pipelines) {
+    const key = normalizeConsultantImportLookup(pipeline.name);
+    if (key) pipelinesByName.set(key, pipeline);
+  }
+
+  const stagesByPipeline = new Map();
+  for (const stage of stages) {
+    const list = stagesByPipeline.get(stage.pipeline_id) || [];
+    list.push(stage);
+    stagesByPipeline.set(stage.pipeline_id, list);
+  }
+
+  return { usersByEmail, usersByName, pipelinesByName, stagesByPipeline };
+}
+
+function resolveConsultantImportOwner(directory, descriptor = {}) {
+  const ownerName = String(descriptor.ownerName || "").trim();
+  const ownerEmail = String(descriptor.ownerEmail || "").trim();
+  const emailMatch = ownerEmail ? directory.usersByEmail.get(normalizeConsultantImportLookup(ownerEmail)) : null;
+  if (emailMatch) return { status: "matched", user: emailMatch };
+
+  const nameMatches = ownerName ? directory.usersByName.get(normalizeConsultantImportLookup(ownerName)) || [] : [];
+  if (nameMatches.length === 1) return { status: "matched", user: nameMatches[0] };
+  if (nameMatches.length > 1) return { status: "ambiguous", user: null };
+  return { status: "missing", user: null };
+}
+
+function resolveConsultantImportRoute(directory, descriptor = {}) {
+  const pipelineName = String(descriptor.pipelineName || "").trim();
+  const stageName = String(descriptor.stageName || "").trim();
+  const pipeline = resolveConsultantImportPipeline(directory, pipelineName);
+  if (!pipeline) return { status: "missing_pipeline", pipeline: null, stage: null, usesFallbackStage: false };
+
+  const stages = directory.stagesByPipeline.get(pipeline.id) || [];
+  if (isConsultantImportFallbackStage(stageName)) {
+    const fallback = stages.find((stage) => String(stage.stage_type || "open") === "open") || stages[0] || null;
+    return fallback
+      ? { status: "matched", pipeline, stage: fallback, usesFallbackStage: true }
+      : { status: "missing_stage", pipeline, stage: null, usesFallbackStage: true };
+  }
+
+  const stageKey = normalizeConsultantImportLookup(stageName);
+  const stage = stages.find((item) => normalizeConsultantImportLookup(item.name) === stageKey) || null;
+  return stage
+    ? { status: "matched", pipeline, stage, usesFallbackStage: false }
+    : { status: "missing_stage", pipeline, stage: null, usesFallbackStage: false };
+}
+
+async function buildConsultantImportPreflight(owners = [], routes = [], client = pool) {
+  const directory = await loadConsultantImportDirectory(client);
+  const ownerResults = owners.map((descriptor) => {
+    const resolution = resolveConsultantImportOwner(directory, descriptor);
+    return {
+      ownerName: String(descriptor.ownerName || "").trim(),
+      ownerEmail: String(descriptor.ownerEmail || "").trim(),
+      count: Number(descriptor.count || 0),
+      status: resolution.status,
+      userId: resolution.user?.id || "",
+      userName: resolution.user?.name || "",
+      userEmail: resolution.user?.email || "",
+    };
+  });
+  const routeResults = routes.map((descriptor) => {
+    const resolution = resolveConsultantImportRoute(directory, descriptor);
+    return {
+      pipelineName: String(descriptor.pipelineName || "").trim(),
+      stageName: String(descriptor.stageName || "").trim(),
+      count: Number(descriptor.count || 0),
+      status: resolution.status,
+      pipelineId: resolution.pipeline?.id || "",
+      pipelineResolvedName: resolution.pipeline?.name || "",
+      stageId: resolution.stage?.id || "",
+      stageResolvedName: resolution.stage?.name || "",
+      usesFallbackStage: Boolean(resolution.usesFallbackStage),
+    };
+  });
+
+  const missingOwners = ownerResults.filter((item) => item.status !== "matched").length;
+  const missingRoutes = routeResults.filter((item) => item.status !== "matched").length;
+  const fallbackRows = routeResults
+    .filter((item) => item.status === "matched" && item.usesFallbackStage)
+    .reduce((total, item) => total + Number(item.count || 0), 0);
+
+  return {
+    ready: missingOwners === 0 && missingRoutes === 0,
+    owners: ownerResults,
+    routes: routeResults,
+    missingOwners,
+    missingRoutes,
+    fallbackRows,
+    directory,
+  };
+}
+
+async function prepareConsultantImportEntries(entries = [], client = pool) {
+  const owners = [];
+  const routes = [];
+  const ownerSeen = new Set();
+  const routeSeen = new Set();
+
+  for (const entry of entries) {
+    const ownerKey = `${normalizeConsultantImportLookup(entry?.ownerEmail)}|${normalizeConsultantImportLookup(entry?.ownerName)}`;
+    if (!ownerSeen.has(ownerKey)) {
+      ownerSeen.add(ownerKey);
+      owners.push({ ownerName: entry?.ownerName || "", ownerEmail: entry?.ownerEmail || "", count: 1 });
+    }
+    const routeKey = `${normalizeConsultantImportLookup(entry?.pipelineName)}|${normalizeConsultantImportLookup(entry?.stageName)}`;
+    if (!routeSeen.has(routeKey)) {
+      routeSeen.add(routeKey);
+      routes.push({ pipelineName: entry?.pipelineName || "", stageName: entry?.stageName || "", count: 1 });
+    }
+  }
+
+  const preflight = await buildConsultantImportPreflight(owners, routes, client);
+  if (!preflight.ready) {
+    const missingOwner = preflight.owners.find((item) => item.status !== "matched");
+    const missingRoute = preflight.routes.find((item) => item.status !== "matched");
+    const detail = missingOwner
+      ? `Responsável não encontrado: ${missingOwner.ownerName || missingOwner.ownerEmail || "sem identificação"}.`
+      : missingRoute
+        ? `Destino não encontrado: ${missingRoute.pipelineName || "sem funil"} / ${missingRoute.stageName || "etapa padrão"}.`
+        : "Existem responsáveis ou etapas pendentes.";
+    const error = new Error(`A importação especial foi bloqueada pela pré-validação. ${detail}`);
+    error.statusCode = 409;
+    throw error;
+  }
+
+  const prepared = [];
+  for (const entry of entries) {
+    const ownerResolution = resolveConsultantImportOwner(preflight.directory, entry);
+    const routeResolution = resolveConsultantImportRoute(preflight.directory, entry);
+    const stageStatus = getStageStatusUpdate(routeResolution.stage, "Novo lead");
+    const sourceLead = entry?.lead || {};
+    const rawWebsite = String(sourceLead.website || "").trim();
+    const websiteOverflowNote = rawWebsite.length > 500
+      ? `[Conteúdo preservado do campo WEBSITE do CRM anterior]
+${rawWebsite}`
+      : "";
+    const commercialNotes = [String(sourceLead.commercialNotes || "").trim(), websiteOverflowNote]
+      .filter(Boolean)
+      .join("\n\n");
+
+    prepared.push(normalizeLead({
+      ...sourceLead,
+      website: rawWebsite.length > 500 ? "" : rawWebsite,
+      commercialNotes,
+      responsibleUserId: ownerResolution.user.id,
+      responsible: ownerResolution.user.name || ownerResolution.user.email || String(entry?.ownerName || ""),
+      pipelineId: routeResolution.pipeline.id,
+      pipelineStageId: routeResolution.stage.id,
+      status: stageStatus.status,
+      isLost: Boolean(stageStatus.isLost),
+      lostReason: stageStatus.isLost ? String(entry?.lead?.lostReason || "") : "",
+      kanbanPosition: 0,
+      pipelineEnteredAt: "",
+    }));
+  }
+  return prepared;
+}
+
 async function performImportLeadsJob(job) {
   const actor = await getActiveJobActor(job);
   const currentUser = actor;
@@ -3718,7 +3933,11 @@ async function performImportLeadsJob(job) {
     ignoredInsideFile: Number(savedReport.ignoredInsideFile || 0),
   } : { received: leads.length, created: 0, merged: 0, ignoredInsideFile: 0 };
   const accessContext = await getLeadAccessContext(currentUser);
-  const unassignedLeads = leads.map((lead) => ({ ...lead, responsible: "", responsibleUserId: "", responsible_user_id: "" }));
+  const preserveAssignments = Boolean(payload.preserveAssignments);
+  const forcePerLeadRouting = Boolean(payload.forcePerLeadRouting);
+  const importSourceLeads = preserveAssignments
+    ? leads
+    : leads.map((lead) => ({ ...lead, responsible: "", responsibleUserId: "", responsible_user_id: "" }));
   const seenPrimaryKeys = new Set();
   for (let index = 0; index < nextIndex; index += 1) {
     seenPrimaryKeys.add(getImportPrimaryKey(leads[index]));
@@ -3736,7 +3955,7 @@ async function performImportLeadsJob(job) {
   while (nextIndex < leads.length) {
     const batchStart = nextIndex;
     const batchEnd = Math.min(leads.length, batchStart + IMPORT_DB_BATCH_SIZE);
-    const sourceBatch = unassignedLeads.slice(batchStart, batchEnd);
+    const sourceBatch = importSourceLeads.slice(batchStart, batchEnd);
     const assignedBatch = sourceBatch.map((lead) => enforceLeadAssignmentForUser(lead, accessContext.user, accessContext.teamMembers));
 
     const outcome = await withTransaction(async (client, transactionContext) => {
@@ -3747,7 +3966,7 @@ async function performImportLeadsJob(job) {
         transactionContext,
         seenPrimaryKeys,
         acquireIdentityLock: acquireLeadIdentityMutationLock, queryRows, mergeLeadData, resolveLeadResponsibleLink,
-        ensureLeadKanbanAssignment, execute, nowIso, importKanbanTarget,
+        ensureLeadKanbanAssignment, execute, nowIso, importKanbanTarget, forcePerLeadRouting,
         invalidateLeadSummaryCache: () => invalidateLeadSummaryCache(accessContext),
       });
 
@@ -5369,6 +5588,69 @@ async function handleApi(request, response, requestUrl) {
     if (createdHotLead) void hotColdRuntime.adjustStats({ activeDelta: 1 }).then(() => hotColdRuntime.queueAutoArchive({ id: "system", name: "Sistema" })).catch(() => undefined);
 
     sendJson(response, 201, savedLead);
+    return;
+  }
+
+  if (pathname === "/api/leads/import/consultants/preflight" && method === "POST") {
+    requirePermission(currentUser, "import_leads");
+    requirePermission(currentUser, "assign_leads");
+    const body = await readRequestBody(request);
+    const owners = Array.isArray(body.owners) ? body.owners.slice(0, 100) : [];
+    const routes = Array.isArray(body.routes) ? body.routes.slice(0, 100) : [];
+    if (!owners.length || !routes.length) {
+      const error = new Error("Envie os responsáveis e os destinos encontrados nas planilhas para validar a migração.");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const { directory: _directory, ...preflight } = await buildConsultantImportPreflight(owners, routes);
+    sendJson(response, 200, preflight);
+    return;
+  }
+
+  if (pathname === "/api/leads/import/consultants" && method === "POST") {
+    requirePermission(currentUser, "import_leads");
+    requirePermission(currentUser, "assign_leads");
+    const body = await readRequestBody(request);
+    const entries = Array.isArray(body.entries) ? body.entries : [];
+    if (!entries.length) {
+      const error = new Error("Nenhum lead válido foi recebido para a importação especial.");
+      error.statusCode = 400;
+      throw error;
+    }
+    if (entries.length > 750) {
+      const error = new Error("Envie a importação especial em lotes de até 750 leads.");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const preparedLeads = await prepareConsultantImportEntries(entries);
+    const importHash = updateImportDedupeHash(createHash("sha256").update("consultant-pipeline-v1\n"), preparedLeads, null);
+    const importDedupeKey = `import-consultants:${currentUser.id}:${importHash.digest("hex").slice(0, 48)}`;
+    const payloadArtifact = await writeJsonJobPayload({
+      storageRoot: jobArtifactSettings.storageRoot,
+      payload: {
+        leads: preparedLeads,
+        preserveAssignments: true,
+        forcePerLeadRouting: true,
+        importMode: "consultant_pipeline_migration",
+      },
+    });
+    try {
+      const queued = await enqueuePersistentJob({
+        type: JOB_TYPES.IMPORT_LEADS,
+        payload: { received: preparedLeads.length, importMode: "consultant_pipeline_migration" },
+        payloadStorageKey: payloadArtifact.storageKey,
+        actor: currentUser,
+        dedupeKey: importDedupeKey,
+        maxAttempts: 3,
+      });
+      if (!queued.created) await removeJobArtifact({ storageRoot: jobArtifactSettings.storageRoot, storageKey: payloadArtifact.storageKey }).catch(() => undefined);
+      sendJson(response, 202, publicJob(queued.job));
+    } catch (error) {
+      await removeJobArtifact({ storageRoot: jobArtifactSettings.storageRoot, storageKey: payloadArtifact.storageKey }).catch(() => undefined);
+      throw error;
+    }
     return;
   }
 

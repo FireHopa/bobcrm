@@ -31,6 +31,22 @@ function unique(values) {
   return Array.from(new Set(values.filter(Boolean)));
 }
 
+const IMPORT_WEBSITE_MAX_LENGTH = 500;
+
+export function sanitizeImportWebsiteOverflow(rawLead = {}) {
+  const rawWebsite = String(rawLead?.website || "").trim();
+  if (rawWebsite.length <= IMPORT_WEBSITE_MAX_LENGTH) return rawLead;
+
+  const currentNotes = String(rawLead?.commercialNotes || "").trim();
+  const overflowNote = `Conteúdo removido do campo Website durante a importação (${rawWebsite.length} caracteres):\n${rawWebsite}`;
+
+  return {
+    ...rawLead,
+    website: "",
+    commercialNotes: [currentNotes, overflowNote].filter(Boolean).join("\n\n"),
+  };
+}
+
 export function collectImportIdentityKeys(leads = []) {
   const ids = [];
   const emails = [];
@@ -255,6 +271,8 @@ export async function persistImportLeadBatch({
   execute,
   nowIso,
   importKanbanTarget = null,
+  forcePerLeadRouting = false,
+  forcePerLeadKanbanRouting = false,
   invalidateLeadSummaryCache = () => undefined,
 }) {
   await acquireIdentityLock(client, transactionContext);
@@ -268,7 +286,7 @@ export async function persistImportLeadBatch({
   const report = { received: leads.length, created: 0, merged: 0, ignoredInsideFile: 0 };
 
   for (const rawLead of leads) {
-    const normalizedLead = normalizeLead(rawLead);
+    const normalizedLead = normalizeLead(sanitizeImportWebsiteOverflow(rawLead));
     const primaryKey = getImportPrimaryKey(normalizedLead);
     if (localSeenKeys.has(primaryKey)) {
       report.ignoredInsideFile += 1;
@@ -280,7 +298,23 @@ export async function persistImportLeadBatch({
     const duplicateMatch = findImportDuplicateLead(duplicateIndex, normalizedLead);
     let preparedLead;
     if (duplicateMatch?.lead && duplicateMatch.lead.id !== normalizedLead.id) {
-      const mergedLead = mergeLeadData(duplicateMatch.lead, { ...normalizedLead, id: duplicateMatch.lead.id });
+      let mergedLead = mergeLeadData(duplicateMatch.lead, { ...normalizedLead, id: duplicateMatch.lead.id });
+      if (forcePerLeadRouting || forcePerLeadKanbanRouting) {
+        mergedLead = normalizeLead({
+          ...mergedLead,
+          ...(forcePerLeadRouting ? {
+            responsible: normalizedLead.responsible,
+            responsibleUserId: normalizedLead.responsibleUserId,
+          } : {}),
+          pipelineId: normalizedLead.pipelineId,
+          pipelineStageId: normalizedLead.pipelineStageId,
+          status: normalizedLead.status,
+          isLost: normalizedLead.isLost,
+          lostReason: normalizedLead.isLost ? normalizedLead.lostReason : "",
+          kanbanPosition: normalizedLead.kanbanPosition || 0,
+          pipelineEnteredAt: normalizedLead.pipelineEnteredAt || "",
+        });
+      }
       preparedLead = await ensureLeadKanbanAssignment(await resolveLeadResponsibleLink(mergedLead, client), client);
       report.merged += 1;
     } else {

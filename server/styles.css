@@ -7308,6 +7308,10 @@ body::after,
   gap: 8px;
 }
 
+.summaryBarV33.importSummaryWithDestination {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
 .summaryBarV33 article {
   padding: 10px 12px;
   border: 1px solid var(--v33-border);
@@ -9359,7 +9363,7 @@ tbody tr:hover {
 
 .leadFormTabsV34 {
   display: grid !important;
-  grid-template-columns: repeat(6, minmax(132px, 1fr));
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
   align-items: stretch;
   width: 100%;
   padding: 10px 12px !important;
@@ -9442,7 +9446,7 @@ tbody tr:hover {
   }
 
   .leadFormTabsV34 {
-    grid-template-columns: repeat(6, minmax(150px, 1fr));
+    grid-template-columns: repeat(3, minmax(150px, 1fr));
   }
 
   .leadFormV34 > .formStickyActionsV34 {
@@ -11888,4 +11892,594 @@ tbody tr:hover {
 @media (max-width: 900px) {
   .archiveSummaryGridV5 { grid-template-columns: 1fr; }
   .archiveSearchV5 { grid-template-columns: 1fr; }
+}
+
+/* Painel de controle da integração Zape -> BobCRM */
+.integrationDashboardV1 { position: relative; display: grid; gap: 18px; }
+.integrationHealthHero { position: relative; display: grid; grid-template-columns: minmax(280px, 1.3fr) minmax(420px, 1fr) auto; align-items: center; gap: 22px; overflow: hidden; padding: 24px; border: 1px solid #dce5ef; border-radius: 22px; background: linear-gradient(135deg, #ffffff 0%, #f7fafc 100%); box-shadow: 0 12px 32px rgba(15, 23, 42, 0.06); }
+.integrationHealthHero::before { position: absolute; inset: 0 auto 0 0; width: 5px; content: ""; background: #16a34a; }
+.integrationHealthHero.attention::before { background: #f59e0b; }
+.integrationHealthHero.critical::before { background: #dc2626; }
+.integrationHealthIdentity { display: flex; align-items: flex-start; gap: 14px; min-width: 0; }
+.integrationHealthPulse { flex: 0 0 auto; width: 13px; height: 13px; margin-top: 7px; border: 3px solid rgba(22, 163, 74, 0.2); border-radius: 50%; background: #16a34a; box-shadow: 0 0 0 5px rgba(22, 163, 74, 0.08); }
+.integrationHealthHero.attention .integrationHealthPulse { border-color: rgba(245, 158, 11, 0.22); background: #f59e0b; box-shadow: 0 0 0 5px rgba(245, 158, 11, 0.08); }
+.integrationHealthHero.critical .integrationHealthPulse { border-color: rgba(220, 38, 38, 0.2); background: #dc2626; box-shadow: 0 0 0 5px rgba(220, 38, 38, 0.08); }
+.integrationHealthIdentity small { display: block; margin-bottom: 4px; color: #64748b; font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; }
+.integrationHealthIdentity h3 { margin: 0; color: #0f172a; font-size: clamp(25px, 3vw, 34px); line-height: 1; }
+.integrationHealthIdentity p { max-width: 620px; margin: 9px 0 0; color: #475569; line-height: 1.45; }
+.integrationHealthMeta { display: grid; grid-template-columns: repeat(2, minmax(120px, 1fr)); gap: 10px 20px; }
+.integrationHealthMeta span { display: grid; gap: 2px; color: #334155; font-size: 13px; }
+.integrationHealthMeta strong { color: #94a3b8; font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+.integrationRefreshButton { white-space: nowrap; }
+.integrationWarningNotice { border-color: #f6d78b; background: #fff8e7; color: #854d0e; }
+.integrationToolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.integrationPeriodControl { display: inline-flex; padding: 4px; border: 1px solid #dbe4ee; border-radius: 12px; background: #f8fafc; }
+.integrationPeriodControl button { min-height: 34px; padding: 0 14px; border: 0; border-radius: 9px; background: transparent; color: #64748b; font-weight: 750; cursor: pointer; }
+.integrationPeriodControl button.active { background: #ffffff; color: #0f2dc2; box-shadow: 0 2px 8px rgba(15, 23, 42, 0.1); }
+.integrationUpdatedAt { color: #64748b; font-size: 12px; }
+.integrationMetricSection { display: grid; gap: 12px; }
+.integrationSectionTitle { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.integrationSectionTitle h3 { margin: 0; color: #0f172a; font-size: 18px; }
+.integrationSectionTitle p { margin: 4px 0 0; color: #64748b; font-size: 13px; }
+.integrationMetricGrid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.integrationMetricGrid article { position: relative; overflow: hidden; min-height: 124px; padding: 18px; border: 1px solid #e0e7ef; border-radius: 18px; background: #ffffff; box-shadow: 0 7px 20px rgba(15, 23, 42, 0.04); }
+.integrationMetricGrid article::after { position: absolute; right: -20px; bottom: -34px; width: 90px; height: 90px; border-radius: 50%; content: ""; background: rgba(37, 99, 235, 0.05); }
+.integrationMetricGrid article > span { display: block; color: #64748b; font-size: 12px; font-weight: 700; }
+.integrationMetricGrid article > strong { position: relative; z-index: 1; display: block; margin: 13px 0 5px; color: #0f172a; font-size: 30px; line-height: 1; }
+.integrationMetricGrid article > small { position: relative; z-index: 1; color: #94a3b8; font-size: 11px; }
+.integrationMetricGrid article.metricAttention { border-color: #f5d787; background: #fffdf7; }
+.integrationMetricGrid article.metricCritical { border-color: #fecaca; background: #fffafa; }
+.integrationCommercialGrid article::after { background: rgba(124, 58, 237, 0.05); }
+.integrationTenantPanel, .integrationHistoryPanel { padding: 20px; }
+.integrationTableWrap { overflow: auto; margin-top: 16px; border: 1px solid #e2e8f0; border-radius: 14px; }
+.integrationTable { width: 100%; min-width: 1080px; border-collapse: collapse; background: #ffffff; font-size: 12px; }
+.integrationTable th { position: sticky; top: 0; z-index: 1; padding: 12px 13px; border-bottom: 1px solid #dbe4ee; background: #f8fafc; color: #64748b; font-size: 10px; font-weight: 850; letter-spacing: 0.05em; text-align: left; text-transform: uppercase; white-space: nowrap; }
+.integrationTable td { padding: 12px 13px; border-bottom: 1px solid #eef2f6; color: #334155; vertical-align: top; }
+.integrationTable tbody tr:last-child td { border-bottom: 0; }
+.integrationTable tbody tr:hover td { background: #fbfdff; }
+.integrationTable td strong { display: block; color: #172033; font-size: 12px; }
+.integrationTable td small { display: block; max-width: 260px; margin-top: 3px; overflow: hidden; color: #94a3b8; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.integrationTenantLink { padding: 0; border: 0; background: none; color: #1233c9; font-weight: 800; cursor: pointer; }
+.integrationCriticalText { color: #b91c1c; font-weight: 850; }
+.integrationFilters { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(150px, .7fr) minmax(180px, .9fr) minmax(240px, 1.4fr) auto auto; gap: 9px; margin-top: 16px; }
+.integrationFilters select, .integrationFilters input { width: 100%; min-height: 42px; padding: 0 11px; border: 1px solid #d7e0e9; border-radius: 10px; background: #ffffff; color: #1e293b; }
+.integrationStatus { display: inline-flex; align-items: center; min-height: 24px; padding: 0 9px; border-radius: 999px; font-size: 10px; font-weight: 850; }
+.integrationStatusSuccess { background: #dcfce7; color: #166534; }
+.integrationStatusAttention { background: #fef3c7; color: #92400e; }
+.integrationStatusCritical { background: #fee2e2; color: #991b1b; }
+.integrationStatusNeutral { background: #e2e8f0; color: #475569; }
+.integrationErrorPreview { max-width: 220px !important; color: #b91c1c !important; }
+.integrationActionsCell { display: flex; min-width: 170px; flex-wrap: wrap; gap: 6px; }
+.integrationEmptyCell { padding: 28px !important; color: #94a3b8 !important; text-align: center; }
+.integrationPagination { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 14px; color: #64748b; font-size: 12px; }
+.integrationLoadingOverlay { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; border-radius: 18px; background: rgba(248, 250, 252, 0.72); color: #334155; font-weight: 800; backdrop-filter: blur(2px); }
+
+@media (max-width: 1250px) {
+  .integrationHealthHero { grid-template-columns: 1fr auto; }
+  .integrationHealthMeta { grid-column: 1 / -1; grid-row: 2; grid-template-columns: repeat(4, minmax(120px, 1fr)); }
+  .integrationMetricGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 820px) {
+  .integrationHealthHero { grid-template-columns: 1fr; padding: 19px; }
+  .integrationHealthMeta { grid-column: auto; grid-row: auto; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .integrationRefreshButton { width: 100%; }
+  .integrationToolbar { align-items: stretch; flex-direction: column; }
+  .integrationPeriodControl { display: grid; grid-template-columns: repeat(3, 1fr); }
+  .integrationMetricGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .integrationFilters { grid-template-columns: 1fr 1fr; }
+  .integrationFilters input { grid-column: 1 / -1; }
+}
+
+@media (max-width: 520px) {
+  .integrationHealthMeta, .integrationMetricGrid, .integrationFilters { grid-template-columns: 1fr; }
+  .integrationFilters input { grid-column: auto; }
+  .integrationTenantPanel, .integrationHistoryPanel { padding: 14px; }
+  .integrationPagination { align-items: stretch; flex-direction: column; }
+}
+
+/* Integração Zape x BobCRM V2 */
+.integrationDashboardV2 .integrationToolbarActions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.integrationChartsGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:18px 0 28px}
+.integrationChartCard{background:#fff;border:1px solid #e5e7eb;border-radius:18px;padding:18px;min-height:260px;box-shadow:0 8px 24px rgba(15,23,42,.04)}
+.integrationChartCard h4{margin:0 0 4px;font-size:16px;color:#111827}
+.integrationChartCard p{margin:0;color:#64748b;font-size:13px}
+.integrationChartCard svg{width:100%;height:150px;margin-top:18px;overflow:visible}
+.integrationChartCard .chartAxis{stroke:#e5e7eb;stroke-width:1}
+.integrationChartCard .chartLine{stroke:currentColor;color:#2563eb;stroke-width:2.5}
+.integrationChartFooter{display:flex;align-items:center;justify-content:space-between;gap:10px;color:#64748b;font-size:11px;margin-top:8px}
+.integrationChartFooter strong{font-size:18px;color:#111827}
+.integrationConversionFunnel{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}
+.integrationConversionFunnel article{position:relative;background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:18px;min-height:112px}
+.integrationConversionFunnel article:not(:last-child)::after{content:"›";position:absolute;right:-10px;top:38%;font-size:26px;color:#94a3b8;z-index:2}
+.integrationConversionFunnel span{display:block;color:#64748b;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+.integrationConversionFunnel strong{display:block;font-size:30px;line-height:1;margin:14px 0 6px;color:#0f172a}
+.integrationConversionFunnel small{color:#64748b}
+.integrationConversionFunnel .conversionWon{border-color:#86efac;background:#f0fdf4}
+.integrationIncidentPanel{margin:24px 0}
+.integrationIncidentList{display:grid;gap:12px}
+.integrationIncident{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;padding:16px;border:1px solid #e5e7eb;border-radius:14px;background:#fff}
+.integrationIncident.warning{border-left:5px solid #f59e0b}
+.integrationIncident.critical{border-left:5px solid #dc2626}
+.integrationIncident.resolved{opacity:.72;border-left-color:#16a34a}
+.integrationIncident h4{margin:5px 0 6px;font-size:15px}
+.integrationIncident p{margin:0 0 8px;color:#475569}
+.integrationIncident small{display:block;color:#64748b;margin-top:4px}
+.integrationIncidentStatus{display:inline-flex;padding:4px 8px;border-radius:999px;background:#f1f5f9;color:#475569;font-size:11px;font-weight:800;text-transform:uppercase}
+.integrationIncidentActions{display:flex;gap:8px;flex:0 0 auto}
+.badgeRed{background:#fee2e2;color:#b91c1c}
+.badgeGreen{background:#dcfce7;color:#15803d}
+.integrationDrawerBackdrop{position:fixed;inset:0;background:rgba(15,23,42,.46);z-index:5000;display:flex;justify-content:flex-end}
+.integrationDetailDrawer{width:min(760px,94vw);height:100%;overflow:auto;background:#f8fafc;box-shadow:-20px 0 50px rgba(15,23,42,.22);padding:22px}
+.integrationDetailDrawer>header{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;position:sticky;top:-22px;background:#f8fafc;padding:22px 0 16px;z-index:2;border-bottom:1px solid #e5e7eb}
+.integrationDetailDrawer>header small{color:#64748b;text-transform:uppercase;font-weight:800;letter-spacing:.06em}
+.integrationDetailDrawer>header h3{font-size:18px;word-break:break-all;margin:5px 0 0}
+.integrationDrawerLoading{padding:40px 0;text-align:center;color:#64748b}
+.integrationDetailGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:18px 0}
+.integrationDetailGrid article{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px}
+.integrationDetailGrid span{display:block;color:#64748b;font-size:11px;text-transform:uppercase;font-weight:800}
+.integrationDetailGrid strong{display:block;margin-top:8px;color:#0f172a}
+.integrationDetailSection{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin:14px 0}
+.integrationDetailSection h4{margin:0 0 12px}
+.integrationDetailList{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0}
+.integrationDetailList div{padding:10px;background:#f8fafc;border-radius:10px}
+.integrationDetailList dt{font-size:11px;color:#64748b;text-transform:uppercase;font-weight:800}
+.integrationDetailList dd{margin:5px 0 0;color:#0f172a}
+.integrationAttemptTimeline{display:grid;gap:12px}
+.integrationAttemptTimeline article{display:grid;grid-template-columns:14px 1fr;gap:10px}
+.integrationAttemptTimeline article>span{width:10px;height:10px;border-radius:50%;margin-top:5px;background:#94a3b8}
+.integrationAttemptTimeline article>span.success{background:#16a34a}
+.integrationAttemptTimeline article>span.failure{background:#dc2626}
+.integrationAttemptTimeline p{margin:3px 0;color:#64748b;font-size:12px}
+.integrationAttemptTimeline small{color:#b91c1c}
+.integrationCompactList{display:grid;gap:8px}
+.integrationCompactList article{padding:10px 12px;background:#f8fafc;border-radius:10px}
+.integrationCompactList strong,.integrationCompactList small{display:block}
+.integrationCompactList small{margin-top:4px;color:#64748b}
+.integrationTechnicalPayload{background:#0f172a;color:#e2e8f0;border-radius:14px;padding:14px;margin:14px 0}
+.integrationTechnicalPayload summary{cursor:pointer;font-weight:800}
+.integrationTechnicalPayload pre{white-space:pre-wrap;word-break:break-word;font-size:11px;line-height:1.55;max-height:460px;overflow:auto}
+.integrationEmptyText{color:#64748b;text-align:center;padding:18px}
+@media(max-width:1100px){.integrationChartsGrid{grid-template-columns:1fr}.integrationConversionFunnel{grid-template-columns:repeat(3,1fr)}.integrationConversionFunnel article::after{display:none}}
+@media(max-width:720px){.integrationConversionFunnel,.integrationDetailGrid,.integrationDetailList{grid-template-columns:1fr}.integrationIncident{flex-direction:column}.integrationIncidentActions{width:100%;flex-wrap:wrap}.integrationDetailDrawer{width:100vw;padding:16px}.integrationDetailDrawer>header{top:-16px;padding-top:16px}}
+
+
+/* Datas pt-BR e filtros avançados - 2026-08-17 */
+.dateInputBr {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 11px !important;
+  border: 1px solid var(--v32-border, #d9e0ea);
+  border-radius: 10px;
+  background: #fff;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.dateInputBr:focus {
+  outline: 3px solid rgba(37, 99, 235, .12);
+  border-color: #2563eb;
+}
+
+.dateFormatHint {
+  display: inline;
+  margin-left: 4px;
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dateFilterGroup {
+  min-width: 220px;
+}
+
+.dateRangeFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.dateRangeFields label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dateRangeFields small {
+  color: var(--v32-secondary, #64748b);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+@media (max-width: 640px) {
+  .dateRangeFields { grid-template-columns: 1fr; }
+}
+/* V46: calendário único do CRM em DD/MM/AAAA */
+.brDateInput {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.brDateInputControl {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--v32-border, #dbe3ef);
+  border-radius: var(--v32-radius-control, 10px);
+  background: #fff;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease, background 0.14s ease;
+}
+
+.brDateInputControl:focus-within {
+  border-color: rgba(37, 99, 235, 0.72);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.brDateInputControl.isInvalid {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.10);
+}
+
+.brDateInputControl.isDisabled {
+  background: #f8fafc;
+  opacity: 0.72;
+}
+
+.brDateInputControl > input[type="text"] {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 76px 0 12px;
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  color: var(--v32-text, #0f172a);
+  font-size: 13px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.brDateInputControl > input[type="text"]::placeholder {
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.brDateCalendarButton,
+.brDateClearButton {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.brDateCalendarButton { right: 5px; }
+.brDateClearButton { right: 37px; font-size: 18px; line-height: 1; }
+.brDateCalendarButton:hover,
+.brDateClearButton:hover { background: #eff6ff; color: #2563eb; }
+.brDateCalendarButton:disabled { cursor: not-allowed; opacity: 0.5; }
+
+.brDateError {
+  display: block;
+  margin-top: 5px;
+  color: #b91c1c;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.brDatePopover {
+  position: absolute;
+  z-index: 1400;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(320px, calc(100vw - 32px));
+  padding: 12px;
+  border: 1px solid #dbe3ef;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.18), 0 4px 12px rgba(15, 23, 42, 0.08);
+}
+
+.brDateHeader {
+  display: grid;
+  grid-template-columns: 34px 1fr 34px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.brDateHeader strong {
+  text-align: center;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 850;
+  text-transform: capitalize;
+}
+
+.brDateHeader button {
+  width: 34px;
+  height: 34px;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: #fff;
+  color: #334155;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.brDateHeader button:hover { background: #f8fafc; border-color: #cbd5e1; }
+
+.brDateWeekDays,
+.brDateGrid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.brDateWeekDays { margin-bottom: 4px; }
+.brDateWeekDays span {
+  padding: 5px 0;
+  text-align: center;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.brDateGrid button {
+  aspect-ratio: 1;
+  min-width: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #1e293b;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.brDateGrid button:hover:not(:disabled) { background: #eff6ff; color: #1d4ed8; }
+.brDateGrid button.isOutside { color: #cbd5e1; font-weight: 600; }
+.brDateGrid button.isToday { box-shadow: inset 0 0 0 1px #60a5fa; color: #1d4ed8; }
+.brDateGrid button.isSelected { background: #2563eb; color: #fff; box-shadow: none; }
+.brDateGrid button:disabled { color: #e2e8f0; cursor: not-allowed; }
+
+.brDateTimeRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #eef2f7;
+}
+
+.brDateTimeRow label { display: grid; gap: 5px; }
+.brDateTimeRow label span { color: #475569; font-size: 11px; font-weight: 800; }
+.brDateTimeRow input[type="time"] {
+  min-height: 38px;
+  padding: 0 9px;
+  border: 1px solid #dbe3ef;
+  border-radius: 9px;
+  background: #fff;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.brDateApplyButton {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 9px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.brDateApplyButton:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.brDateFooter {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #eef2f7;
+}
+
+.brDateFooter button {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.brDateFooter button:hover:not(:disabled) { background: #eff6ff; }
+.brDateFooter button:disabled { color: #cbd5e1; cursor: not-allowed; }
+
+.dateRangeFields .brDateInput { min-width: 142px; }
+.dateRangeFields .brDateInputControl > input[type="text"] { font-size: 12px; padding-left: 10px; }
+
+@media (max-width: 620px) {
+  .brDatePopover { left: auto; right: 0; }
+  .brDateInputControl > input[type="text"] { font-size: 14px; }
+}
+
+/* Importação exclusiva do Pipeline Consultores de Vendas */
+.consultantImportCard {
+  margin-bottom: 22px;
+  border: 1px solid var(--border, #dfe3ea);
+  border-radius: 16px;
+  background: var(--panel, #fff);
+  overflow: hidden;
+}
+
+.consultantImportHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px;
+}
+
+.consultantImportHeader h3 {
+  margin: 4px 0 6px;
+}
+
+.consultantImportHeader p {
+  margin: 0;
+  max-width: 760px;
+}
+
+.consultantImportBody {
+  border-top: 1px solid var(--border, #dfe3ea);
+  padding: 20px;
+  display: grid;
+  gap: 16px;
+}
+
+.consultantImportNotice,
+.consultantFallbackInfo {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(37, 99, 235, 0.08);
+  font-size: 14px;
+}
+
+.consultantImportDropzone {
+  margin: 0;
+}
+
+.consultantImportSummary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.consultantImportSummary article {
+  border: 1px solid var(--border, #dfe3ea);
+  border-radius: 12px;
+  padding: 14px;
+  display: grid;
+  gap: 6px;
+}
+
+.consultantImportSummary article span {
+  font-size: 12px;
+  opacity: 0.72;
+}
+
+.consultantImportSummary article strong {
+  font-size: 22px;
+}
+
+.consultantPreflight {
+  display: grid;
+  gap: 12px;
+}
+
+.consultantPreflightStatus {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border, #dfe3ea);
+}
+
+.consultantPreflightReady {
+  background: rgba(22, 163, 74, 0.08);
+}
+
+.consultantPreflightPending {
+  background: rgba(245, 158, 11, 0.10);
+}
+
+.consultantMissingBlock {
+  border: 1px solid var(--border, #dfe3ea);
+  border-radius: 12px;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.consultantMissingBlock h4 {
+  margin: 0;
+}
+
+.consultantMissingBlock > div {
+  display: grid;
+  gap: 3px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border, #dfe3ea);
+}
+
+.consultantMissingBlock > div:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.consultantMissingBlock span {
+  font-size: 13px;
+  opacity: 0.76;
+}
+
+.consultantImportProgress {
+  display: grid;
+  gap: 8px;
+}
+
+.consultantImportProgress > div {
+  display: flex;
+  justify-content: space-between;
+}
+
+.consultantImportProgress progress {
+  width: 100%;
+  height: 12px;
+}
+
+.consultantImportProgress p {
+  margin: 0;
+  font-size: 13px;
+  opacity: 0.76;
+}
+
+.consultantImportFooter {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 800px) {
+  .consultantImportHeader,
+  .consultantPreflightStatus {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .consultantImportSummary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
