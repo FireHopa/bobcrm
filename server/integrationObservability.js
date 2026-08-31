@@ -27,8 +27,25 @@ async function fetchZapeOverview({ monitorUrl, monitorKey, timeoutMs = 10000 }) 
   } finally { clearTimeout(timer); }
 }
 
+function timestamp(value) {
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function deriveConditions(result, error) {
-  if (error) return [{ fingerprint: "zape_unreachable", type: "zape_unreachable", severity: "critical", title: "Zape indisponível", description: error.message || "O BobCRM não conseguiu consultar o Zape.", metadata: { code: error.code || "ZAPE_UNREACHABLE" } }];
+  if (error) {
+    const notConfigured = error?.code === "ZAPE_MONITOR_NOT_CONFIGURED";
+    return [{
+      fingerprint: notConfigured ? "zape_monitor_not_configured" : "zape_monitor_unavailable",
+      type: "monitor",
+      severity: "warning",
+      title: notConfigured ? "Telemetria do Zape não configurada" : "Telemetria do Zape indisponível",
+      description: notConfigured
+        ? "O recebimento de leads pode continuar funcionando, mas o BobCRM não consegue consultar o painel técnico do Zape até ZAPE_MONITOR_URL e ZAPE_MONITOR_KEY serem configurados."
+        : "O BobCRM não conseguiu consultar o painel técnico do Zape. Isso não comprova falha na entrega de leads; valide os eventos reconciliados no CRM.",
+      metadata: { code: error.code || "ZAPE_MONITOR_UNAVAILABLE" },
+    }];
+  }
   const data = result?.data || {};
   const queue = data.queue || {};
   const worker = data.worker || {};
@@ -36,16 +53,21 @@ function deriveConditions(result, error) {
   const conditions = [];
   if (storage.configuredMode === "mysql" && storage.activeMode !== "mysql") conditions.push({ fingerprint: "queue_storage_fallback", type: "queue_storage", severity: "critical", title: "Fila MySQL indisponível", description: storage.fallbackReason || "O Zape ativou fallback da fila.", metadata: storage });
   if (!worker.running) conditions.push({ fingerprint: "worker_stopped", type: "worker", severity: "critical", title: "Worker da integração parado", description: "O worker responsável por entregar leads ao CRM não está ativo.", metadata: worker });
-  if (worker.lastCycleError) conditions.push({ fingerprint: "worker_error", type: "worker", severity: "critical", title: "Erro no worker da integração", description: String(worker.lastCycleError).slice(0, 2000), metadata: worker });
+
+  const lastFailureAt = timestamp(worker.lastFailureAt);
+  const lastDeliveryAt = timestamp(worker.lastDeliveryAt || queue.lastDeliveredAt);
+  const workerErrorStillCurrent = Boolean(worker.lastCycleError) && (!lastFailureAt || !lastDeliveryAt || lastFailureAt >= lastDeliveryAt);
+  if (workerErrorStillCurrent) conditions.push({ fingerprint: "worker_error", type: "worker", severity: "warning", title: "Erro recente no worker da integração", description: String(worker.lastCycleError).slice(0, 2000), metadata: worker });
+
   const failed = int(queue?.counts?.failedPermanent);
   const failedTenants = Array.isArray(data.tenants) ? data.tenants.filter((tenant) => int(tenant.failedPermanent) > 0) : [];
   if (failedTenants.length) {
     for (const tenant of failedTenants) {
       const tenantId = String(tenant.tenantId || "unknown");
       const tenantFailed = int(tenant.failedPermanent);
-      conditions.push({ fingerprint: `failed_permanent:${tenantId}`, type: "failed_events", severity: tenantFailed >= 5 ? "critical" : "warning", tenantId, title: `${tenantFailed} falha(s) na conta ${tenantId}`, description: "Existem eventos desta conta que esgotaram as tentativas e precisam ser reprocessados.", metadata: { failed: tenantFailed, tenantId } });
+      conditions.push({ fingerprint: `failed_permanent:${tenantId}`, type: "failed_events", severity: "warning", tenantId, title: `${tenantFailed} falha(s) técnica(s) reportada(s) na conta ${tenantId}`, description: "O Zape esgotou tentativas para estes eventos. O painel do BobCRM deve reconciliar os que já foram confirmados localmente antes de exigir reprocessamento.", metadata: { failed: tenantFailed, tenantId } });
     }
-  } else if (failed > 0) conditions.push({ fingerprint: "failed_permanent", type: "failed_events", severity: failed >= 5 ? "critical" : "warning", title: `${failed} falha(s) permanente(s)`, description: "Existem eventos que esgotaram as tentativas e precisam ser reprocessados.", metadata: { failed } });
+  } else if (failed > 0) conditions.push({ fingerprint: "failed_permanent", type: "failed_events", severity: "warning", title: `${failed} falha(s) técnica(s) reportada(s)`, description: "O Zape reporta eventos com tentativas esgotadas. Isso só vira falha operacional final quando não existe confirmação correspondente no BobCRM.", metadata: { failed } });
   const pendingAge = Number(queue.pendingAgeMinutes || 0);
   if (pendingAge >= 5) conditions.push({ fingerprint: "queue_backlog", type: "backlog", severity: pendingAge >= 15 ? "critical" : "warning", title: "Fila de integração atrasada", description: `O evento pendente mais antigo está há ${Math.round(pendingAge)} minuto(s) na fila.`, metadata: { pendingAgeMinutes: pendingAge, pending: int(queue?.counts?.pending), sending: int(queue?.counts?.sending) } });
   return conditions;
@@ -79,14 +101,14 @@ export async function captureIntegrationHealth({ queryRows, execute, monitorUrl,
   let error = null;
   try { result = await fetchZapeOverview({ monitorUrl, monitorKey, timeoutMs }); } catch (caught) { error = caught; }
   const data = result?.data || {};
-  const health = data.health || { status: "critical", reasons: [error?.message || "Zape indisponível"] };
+  const health = data.health || { status: "attention", reasons: [error?.message || "Telemetria do Zape indisponível"] };
   const queue = data.queue || {};
   const worker = data.worker || {};
   const storage = data.storage || {};
   await execute(`INSERT INTO integration_health_snapshots (id,provider,health_status,zape_online,worker_running,worker_processing,queue_storage,
     pending_count,sending_count,delivered_count,failed_count,oldest_pending_at,last_delivered_at,latency_ms,delivery_rate,average_delivery_ms,
     reasons_json,payload_json,captured_at) VALUES (?,'zape',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
-    randomUUID(), health.status || "critical", error ? 0 : 1, worker.running ? 1 : 0, worker.processing ? 1 : 0,
+    randomUUID(), health.status || "attention", error ? 0 : 1, worker.running ? 1 : 0, worker.processing ? 1 : 0,
     storage.activeMode || storage.configuredMode || "", int(queue?.counts?.pending), int(queue?.counts?.sending), int(queue?.counts?.delivered), int(queue?.counts?.failedPermanent),
     queue.oldestPendingAt || "", queue.lastDeliveredAt || "", int(result?.latencyMs), Number(data.metrics?.deliveryRate || 0), int(data.metrics?.averageDeliveryMs),
     JSON.stringify(health.reasons || []), JSON.stringify(error ? { error: error.message, code: error.code || "" } : {
@@ -97,7 +119,7 @@ export async function captureIntegrationHealth({ queryRows, execute, monitorUrl,
   ]);
   const conditions = deriveConditions(result, error);
   await syncIncidents({ queryRows, execute, conditions, capturedAt });
-  return { ok: !error, capturedAt: capturedAt.toISOString(), healthStatus: health.status || "critical", conditions: conditions.length, error: error?.message || "" };
+  return { ok: !error, capturedAt: capturedAt.toISOString(), healthStatus: health.status || "attention", conditions: conditions.length, error: error?.message || "" };
 }
 
 export async function cleanupIntegrationHistory({ execute, snapshotRetentionDays = 730, incidentRetentionDays = 1095 }) {

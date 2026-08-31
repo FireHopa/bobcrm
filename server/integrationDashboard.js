@@ -152,9 +152,75 @@ async function loadReverseSyncData(queryRows) {
   } catch { return { enabled:false,total:0,pending:0,sending:0,delivered:0,failed:0,lastDeliveredAt:'',lastUpdatedAt:'' }; }
 }
 
-function mergeTenantData(zapeTenants = [], crmTenants = []) { const map = new Map(); for (const tenant of zapeTenants) map.set(String(tenant.tenantId), { ...tenant }); for (const tenant of crmTenants) { const key = String(tenant.tenantId); map.set(key, { ...(map.get(key) || { tenantId: key }), ...tenant }); } return Array.from(map.values()).sort((a,b) => Number(b.total || b.receivedByCrm || 0)-Number(a.total || a.receivedByCrm || 0)); }
-function mergeEventData(zapeEvents = [], crmEvents = []) { const crmMap = new Map(crmEvents.map((event) => [event.eventKey,event])); const merged = zapeEvents.map((event) => ({ ...event, ...(crmMap.get(event.eventKey) || {}) })); return zapeEvents.length ? merged : crmEvents; }
-function consolidatedHealth(zapeResult, zapeError, crmData) { if (zapeError) return { status:"critical", label:"Crítico", reasons:[zapeError.message || "O BobCRM não conseguiu consultar o Zape."] }; const zapeHealth=zapeResult?.data?.health || {status:"attention",reasons:[]}; const reasons=Array.isArray(zapeHealth.reasons)?[...zapeHealth.reasons]:[]; if(crmData.statuses.processing>0) reasons.push(`${crmData.statuses.processing} evento(s) ainda em processamento no BobCRM.`); const status=zapeHealth.status==="critical"?"critical":zapeHealth.status==="attention"||crmData.statuses.processing>0?"attention":"healthy"; return {status,label:status==="healthy"?"Saudável":status==="attention"?"Atenção":"Crítico",reasons}; }
+function reconcileEvent(zapeEvent = {}, crmEvent = null) {
+  const merged = { ...zapeEvent, ...(crmEvent || {}) };
+  const technicalStatus = String(zapeEvent.status || crmEvent?.crmStatus || "");
+  const crmConfirmed = String(crmEvent?.crmStatus || "") === "completed" && Boolean(String(crmEvent?.crmLeadId || "").trim());
+  const reconciled = crmConfirmed && ["failed_permanent", "failed"].includes(technicalStatus);
+  const effectiveStatus = crmConfirmed ? "delivered" : technicalStatus || String(crmEvent?.crmStatus || "");
+  return { ...merged, technicalStatus, effectiveStatus, status: effectiveStatus, reconciled };
+}
+
+function mergeEventData(zapeEvents = [], crmEvents = []) {
+  const crmMap = new Map(crmEvents.map((event) => [event.eventKey, event]));
+  if (zapeEvents.length) return zapeEvents.map((event) => reconcileEvent(event, crmMap.get(event.eventKey) || null));
+  return crmEvents.map((event) => reconcileEvent({}, event));
+}
+
+function filterCrmEvents(events, query) {
+  const status = String(query.status || "").trim();
+  const tenantId = String(query.tenantId || "").trim().toLowerCase();
+  const eventType = String(query.eventType || "").trim();
+  const search = String(query.search || "").trim().toLowerCase();
+  return events.filter((event) => {
+    if (status && event.status !== status && event.crmStatus !== status && !(status === "delivered" && event.crmStatus === "completed")) return false;
+    if (tenantId && String(event.tenantId || "").toLowerCase() !== tenantId) return false;
+    if (eventType && event.eventType !== eventType) return false;
+    if (search && !([event.eventKey,event.externalLeadId,event.leadName,event.phoneMasked,event.crmLeadId,event.responsible].join(" ").toLowerCase().includes(search))) return false;
+    return true;
+  });
+}
+
+function mergeTenantData(zapeTenants = [], crmTenants = [], events = []) {
+  const map = new Map();
+  for (const tenant of zapeTenants) map.set(String(tenant.tenantId), { ...tenant });
+  for (const tenant of crmTenants) {
+    const key = String(tenant.tenantId);
+    map.set(key, { ...(map.get(key) || { tenantId: key }), ...tenant });
+  }
+  const effectiveFailures = new Map();
+  const reconciledFailures = new Map();
+  for (const event of events) {
+    const key = String(event.tenantId || "unknown");
+    if (["failed_permanent", "failed"].includes(String(event.status || ""))) effectiveFailures.set(key, Number(effectiveFailures.get(key) || 0) + 1);
+    if (event.reconciled) reconciledFailures.set(key, Number(reconciledFailures.get(key) || 0) + 1);
+  }
+  return Array.from(map.values()).map((tenant) => ({
+    ...tenant,
+    effectiveFailed: Number(effectiveFailures.get(String(tenant.tenantId)) || 0),
+    reconciledFailures: Number(reconciledFailures.get(String(tenant.tenantId)) || 0),
+  })).sort((a,b) => Number(b.total || b.receivedByCrm || 0)-Number(a.total || a.receivedByCrm || 0));
+}
+
+function consolidatedHealth(zapeResult, zapeError, crmData, effectiveFailed = 0) {
+  const reasons = [];
+  if (zapeError) {
+    const notConfigured = zapeError?.code === "ZAPE_MONITOR_NOT_CONFIGURED";
+    reasons.push(notConfigured
+      ? "Telemetria do Zape não configurada. O fluxo de leads pode continuar funcionando normalmente."
+      : "Telemetria do Zape indisponível. Isso não comprova falha na entrega de leads.");
+    if (crmData.statuses.processing > 0) reasons.push(`${crmData.statuses.processing} evento(s) ainda em processamento no BobCRM.`);
+    return { status: "attention", label: "Atenção", reasons };
+  }
+  const zapeHealth = zapeResult?.data?.health || { status: "attention", reasons: [] };
+  if (Array.isArray(zapeHealth.reasons)) reasons.push(...zapeHealth.reasons);
+  if (crmData.statuses.processing > 0) reasons.push(`${crmData.statuses.processing} evento(s) ainda em processamento no BobCRM.`);
+  if (effectiveFailed > 0) reasons.push(`${effectiveFailed} falha(s) ainda não reconciliada(s) na lista atual.`);
+  const status = effectiveFailed > 0 || zapeHealth.status === "attention" || crmData.statuses.processing > 0
+    ? "attention"
+    : zapeHealth.status === "critical" ? "critical" : "healthy";
+  return { status, label: status === "healthy" ? "Saudável" : status === "attention" ? "Atenção" : "Crítico", reasons };
+}
 
 export async function getIntegrationDashboardOverview({ queryRows, monitorUrl, monitorKey, timeoutMs=DEFAULT_TIMEOUT_MS, query={} }) {
   const range=resolvePeriod(query.period); const limit=safeInteger(query.limit,50,1,200); const offset=safeInteger(query.offset,0,0,1_000_000);
@@ -167,9 +233,16 @@ export async function getIntegrationDashboardOverview({ queryRows, monitorUrl, m
     loadReverseSyncData(queryRows),
   ]);
   const zapeResult=zapeSettled.value,zapeError=zapeSettled.error,zapeData=zapeResult?.data||null;
-  const summary={detected:Number(zapeData?.queue?.counts?.total??crmData.statuses.total),delivered:Number(zapeData?.queue?.counts?.delivered??crmData.statuses.completed),pending:Number(zapeData?.queue?.counts?.pending||0)+Number(zapeData?.queue?.counts?.sending||0),failed:Number(zapeData?.queue?.counts?.failedPermanent||0),deliveryRate:Number(zapeData?.metrics?.deliveryRate??(crmData.statuses.total?(crmData.statuses.completed/crmData.statuses.total)*100:100)),averageDeliveryMs:Number(zapeData?.metrics?.averageDeliveryMs||0),created:crmData.actions.created,updated:crmData.actions.updated,reactivated:crmData.actions.reactivated,duplicatesAvoided:crmData.events.filter(event=>event.duplicateMatched).length,assigned:crmData.events.filter(event=>Boolean(event.responsibleUserId||event.responsible)).length,withoutOwner:crmData.leadsWithoutOwner};
-  const events=mergeEventData(zapeData?.events||[],crmData.events); const tenantIds=new Set([...(zapeData?.tenants||[]).map(t=>t.tenantId),...crmData.tenants.map(t=>t.tenantId)]); const eventTypes=new Set([...Object.keys(zapeData?.metrics?.eventTypes||{}),...Object.keys(crmData.eventTypeCounts)]);
-  return {ok:true,generatedAt:nowIso(),period:range,health:consolidatedHealth(zapeResult,zapeError,crmData),zape:{online:Boolean(zapeResult),latencyMs:Number(zapeResult?.latencyMs||0),error:zapeError?String(zapeError.message||zapeError):"",code:zapeError?.code||"",configured:Boolean(zapeData?.configured),targetBaseUrl:String(zapeData?.targetBaseUrl||""),worker:zapeData?.worker||null,queue:zapeData?.queue||null,storage:zapeData?.storage||null},crm:crmData,reverseSync,summary,commercial:crmData.commercial,trends:{queue:zapeData?.trends?.daily||[],health:snapshots},incidents,tenants:mergeTenantData(zapeData?.tenants||[],crmData.tenants),events,pagination:zapeData?.pagination||{total:crmData.events.length,limit,offset,hasMore:offset+limit<crmData.events.length},filters:{tenants:Array.from(tenantIds).filter(Boolean).sort(),eventTypes:Array.from(eventTypes).filter(Boolean).sort()}};
+  const allEvents=mergeEventData(zapeData?.events||[],crmData.events);
+  const events=zapeData ? allEvents : filterCrmEvents(allEvents,query).slice(offset,offset+limit);
+  const effectiveFailed=events.filter((event)=>["failed_permanent","failed"].includes(String(event.status||""))).length;
+  const reconciledFailures=events.filter((event)=>Boolean(event.reconciled)).length;
+  const failedReported=Number(zapeData?.queue?.counts?.failedPermanent||0);
+  const summary={detected:Number(zapeData?.queue?.counts?.total??crmData.statuses.total),delivered:Number(zapeData?.queue?.counts?.delivered??crmData.statuses.completed),pending:Number(zapeData?.queue?.counts?.pending||0)+Number(zapeData?.queue?.counts?.sending||0),failed:effectiveFailed,failedReported,reconciledFailures,deliveryRate:Number(zapeData?.metrics?.deliveryRate??(crmData.statuses.total?(crmData.statuses.completed/crmData.statuses.total)*100:100)),averageDeliveryMs:Number(zapeData?.metrics?.averageDeliveryMs||0),created:crmData.actions.created,updated:crmData.actions.updated,reactivated:crmData.actions.reactivated,duplicatesAvoided:crmData.events.filter(event=>event.duplicateMatched).length,assigned:crmData.events.filter(event=>Boolean(event.responsibleUserId||event.responsible)).length,withoutOwner:crmData.leadsWithoutOwner};
+  const tenantIds=new Set([...(zapeData?.tenants||[]).map(t=>t.tenantId),...crmData.tenants.map(t=>t.tenantId)]); const eventTypes=new Set([...Object.keys(zapeData?.metrics?.eventTypes||{}),...Object.keys(crmData.eventTypeCounts)]);
+  const fallbackFiltered=zapeData?null:filterCrmEvents(allEvents,query);
+  const pagination=zapeData?.pagination||{total:fallbackFiltered.length,limit,offset,hasMore:offset+limit<fallbackFiltered.length};
+  return {ok:true,generatedAt:nowIso(),period:range,health:consolidatedHealth(zapeResult,zapeError,crmData,effectiveFailed),zape:{online:Boolean(zapeResult),latencyMs:Number(zapeResult?.latencyMs||0),error:zapeError?String(zapeError.message||zapeError):"",code:zapeError?.code||"",configured:Boolean(zapeData?.configured),targetBaseUrl:String(zapeData?.targetBaseUrl||""),worker:zapeData?.worker||null,queue:zapeData?.queue||null,storage:zapeData?.storage||null},crm:crmData,reverseSync,summary,commercial:crmData.commercial,trends:{queue:zapeData?.trends?.daily||[],health:snapshots},incidents:incidents.filter((incident)=>incident.status!=="resolved"),tenants:mergeTenantData(zapeData?.tenants||[],crmData.tenants,events),events,pagination,filters:{tenants:Array.from(tenantIds).filter(Boolean).sort(),eventTypes:Array.from(eventTypes).filter(Boolean).sort()}};
 }
 
 export async function getIntegrationEventDetail({ queryRows, monitorUrl, monitorKey, timeoutMs=DEFAULT_TIMEOUT_MS, eventKey }) {
@@ -180,12 +253,16 @@ export async function getIntegrationEventDetail({ queryRows, monitorUrl, monitor
       FROM integration_events ie LEFT JOIN leads l ON l.id=ie.lead_id LEFT JOIN kanban_stages ks ON ks.id=l.pipeline_stage_id WHERE ie.event_key=? LIMIT 1`,[eventKey]),
   ]);
   const row=rows[0]||null; const response=parseJson(row?.response_json,{}); const leadId=String(row?.lead_id||response.leadId||zape?.crmLeadId||"");
+  const technicalStatus=String(zape?.status||row?.status||"");
+  const reconciled=Boolean(row&&row.status==="completed"&&leadId&&["failed_permanent","failed"].includes(technicalStatus));
+  const effectiveStatus=row?.status==="completed"&&leadId?"delivered":technicalStatus;
+  const reconciledZape={...zape,technicalStatus,effectiveStatus,status:effectiveStatus,reconciled};
   const [origins,audit,tasks]=leadId?await Promise.all([
     queryRows("SELECT * FROM lead_external_origins WHERE lead_id=? ORDER BY last_seen_at DESC LIMIT 50",[leadId]),
     queryRows("SELECT action,actor_name,summary,changes_json,created_at FROM audit_log WHERE entity_type='lead' AND entity_id=? ORDER BY created_at DESC LIMIT 100",[leadId]),
     queryRows("SELECT id,type,title,status,due_at,completed_at,responsible_name,created_at FROM tasks WHERE lead_id=? ORDER BY created_at DESC LIMIT 100",[leadId]),
   ]):[[],[],[]];
-  return {ok:true,eventKey,zape,crm:row?{status:row.status,action:responseAction(response),leadId,lead:{name:row.lead_name||"",phoneMasked:maskPhone(row.lead_phone),email:row.lead_email||"",company:row.company||"",status:row.lead_status||"",responsible:row.responsible||"",responsibleUserId:row.responsible_user_id||"",pipelineId:row.pipeline_id||"",stageId:row.pipeline_stage_id||"",stageName:row.stage_name||"",stageType:row.stage_type||""},response,createdAt:row.created_at,updatedAt:row.updated_at}:null,origins:origins.map(origin=>({...origin,metadata:parseJson(origin.metadata_json,{})})),audit:audit.map(item=>({...item,changes:parseJson(item.changes_json,{})})),tasks};
+  return {ok:true,eventKey,zape:reconciledZape,crm:row?{status:row.status,action:responseAction(response),leadId,lead:{name:row.lead_name||"",phoneMasked:maskPhone(row.lead_phone),email:row.lead_email||"",company:row.company||"",status:row.lead_status||"",responsible:row.responsible||"",responsibleUserId:row.responsible_user_id||"",pipelineId:row.pipeline_id||"",stageId:row.pipeline_stage_id||"",stageName:row.stage_name||"",stageType:row.stage_type||""},response,createdAt:row.created_at,updatedAt:row.updated_at}:null,origins:origins.map(origin=>({...origin,metadata:parseJson(origin.metadata_json,{})})),audit:audit.map(item=>({...item,changes:parseJson(item.changes_json,{})})),tasks};
 }
 
 function csvCell(value){const text=String(value??"");return /[";,\n\r]/.test(text)?`"${text.replace(/"/g,'""')}"`:text;}
@@ -204,7 +281,7 @@ export async function buildIntegrationEventsCsv(options){
     for(const key of ["status","tenantId","eventType","search"]){const value=String(query[key]||"").trim();if(value)params.set(key,value);}
     let page;
     try{page=(await requestZape({baseUrl:normalizeZapeBaseUrl(options.monitorUrl),key:options.monitorKey,path:`/api/integration-monitor/overview?${params.toString()}`,timeoutMs:options.timeoutMs||DEFAULT_TIMEOUT_MS})).data;}catch{zapeAvailable=false;break;}
-    const rows=(page.events||[]).map((event)=>({...event,...(crmMap.get(event.eventKey)||{})}));
+    const rows=(page.events||[]).map((event)=>reconcileEvent(event,crmMap.get(event.eventKey)||null));
     exported.push(...rows);
     offset+=rows.length;
     if(!page.pagination?.hasMore||!rows.length)break;
@@ -223,11 +300,11 @@ export async function buildIntegrationEventsCsv(options){
     }).slice(0,maxRows));
   }
   const unique=Array.from(new Map(exported.map((event)=>[event.eventKey,event])).values()).slice(0,maxRows);
-  const headers=["Data","Conta","Canal","Evento","Status técnico","Lead","Telefone mascarado","ID do lead","Ação CRM","Funil/etapa","Responsável","Tentativas","HTTP","Erro","Chave do evento"];
-  const rows=unique.map((event)=>[event.createdAt,event.tenantId,event.channel,event.eventType,event.status||event.crmStatus,event.leadName,event.phoneMasked,event.crmLeadId,event.crmAction,event.stageName||event.stageId,event.responsible,event.attempts,event.lastHttpStatus,event.lastError,event.eventKey]);
+  const headers=["Data","Conta","Canal","Evento","Status efetivo","Status técnico","Reconciliado","Lead","Telefone mascarado","ID do lead","Ação CRM","Funil/etapa","Responsável","Tentativas","HTTP","Erro","Chave do evento"];
+  const rows=unique.map((event)=>[event.createdAt,event.tenantId,event.channel,event.eventType,event.status||event.crmStatus,event.technicalStatus||event.crmStatus,event.reconciled?"sim":"não",event.leadName,event.phoneMasked,event.crmLeadId,event.crmAction,event.stageName||event.stageId,event.responsible,event.attempts,event.lastHttpStatus,event.lastError,event.eventKey]);
   return [headers,...rows].map((row)=>row.map(csvCell).join(';')).join('\r\n');
 }
 
 export async function retryIntegrationEvents({monitorUrl,monitorKey,timeoutMs=DEFAULT_TIMEOUT_MS,eventKey="",tenantId=""}){return requestZape({baseUrl:normalizeZapeBaseUrl(monitorUrl),key:monitorKey,path:"/api/integration-monitor/retry",method:"POST",body:{eventKey:String(eventKey||"").trim(),tenantId:String(tenantId||"").trim()},timeoutMs}).then(result=>result.data);}
 
-export const integrationDashboardInternals={resolvePeriod,maskPhone,mergeTenantData,mergeEventData,consolidatedHealth};
+export const integrationDashboardInternals={resolvePeriod,maskPhone,mergeTenantData,mergeEventData,reconcileEvent,consolidatedHealth};

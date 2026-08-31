@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import packageMetadata from "../package.json";
 import { Header } from "./components/Header";
+import { ChangePasswordDialog } from "./components/ChangePasswordDialog";
 import { ActionFeedbackHost, notifyAction } from "./components/ActionFeedback";
 import { useConfirmationDialog } from "./components/ConfirmationDialog";
 import { DailyOperation } from "./components/DailyOperation";
@@ -35,7 +36,7 @@ import { type ImportDeduplicationReport } from "./utils/commercial";
 import { isPastDate, isToday } from "./utils/formatters";
 import { clearLegacyStoredLeads, getLegacyStoredLeads } from "./utils/storage";
 
-type ActiveTab = "operation" | "leads" | "opportunity-map" | "new-lead" | "import" | "settings";
+type ActiveTab = "operation" | "leads" | "opportunity-map" | "new-lead" | "import" | "handoffs" | "settings";
 type DrawerMode = "view" | "edit";
 type ServerStatus = "loading" | "online" | "offline";
 
@@ -46,6 +47,7 @@ const LeadDetailsDrawer = lazy(() => import("./components/LeadDetailsDrawer").th
 const LeadHandoffDialog = lazy(() => import("./components/LeadHandoffDialog").then((module) => ({ default: module.LeadHandoffDialog })));
 const LeadForm = lazy(() => import("./components/LeadForm").then((module) => ({ default: module.LeadForm })));
 const ServiceOpportunityMap = lazy(() => import("./components/ServiceOpportunityMap").then((module) => ({ default: module.ServiceOpportunityMap })));
+const HandoffActivityDashboard = lazy(() => import("./components/HandoffActivityDashboard").then((module) => ({ default: module.HandoffActivityDashboard })));
 const SettingsCenter = lazy(() => import("./components/SettingsCenter").then((module) => ({ default: module.SettingsCenter })));
 
 function WorkspaceModuleLoading() {
@@ -117,6 +119,7 @@ export default function App() {
   const [legacyLocalLeads, setLegacyLocalLeads] = useState<Lead[]>([]);
   const [importReport, setImportReport] = useState<ImportDeduplicationReport | null>(null);
   const [globalSearch, setGlobalSearch] = useState("");
+  const [showChangePassword, setShowChangePassword] = useState(false);
   const [kanbanRefreshVersion, setKanbanRefreshVersion] = useState(0);
   const [opportunityRefreshVersion, setOpportunityRefreshVersion] = useState(0);
   const leadsRef = useRef<Lead[]>([]);
@@ -630,6 +633,7 @@ export default function App() {
     { id: "opportunity-map" as ActiveTab, label: "Oportunidades" },
     ...(hasPermission(currentUser, "create_leads") ? [{ id: "new-lead" as ActiveTab, label: "Novo lead" }] : []),
     ...(hasPermission(currentUser, "import_leads") ? [{ id: "import" as ActiveTab, label: "Importar" }] : []),
+    ...(currentUser?.role === "pre_venda" ? [{ id: "handoffs" as ActiveTab, label: "Encaminhamentos" }] : []),
     ...(hasPermission(currentUser, "manage_users") ? [{ id: "settings" as ActiveTab, label: "Administração" }] : []),
   ];
 
@@ -682,6 +686,15 @@ export default function App() {
         { label: "Follow-ups vencidos", value: dueFollowUpsCount },
       ],
     },
+    handoffs: {
+      title: "Meus encaminhamentos",
+      description: "Acompanhe quais leads você distribuiu, para quem e em que ritmo.",
+      stats: [
+        { label: "Papel", value: currentUser ? currentUser.roleLabel : "-" },
+        { label: "Visão", value: "Somente minhas ações" },
+        { label: "Auditoria", value: "Ativa" },
+      ],
+    },
     settings: {
       title: "Equipe e administração",
       description: "Usuários, backups, lixeira, duplicados, auditoria e saúde da base.",
@@ -720,9 +733,12 @@ export default function App() {
         globalSearch={globalSearch}
         onGlobalSearchChange={handleGlobalSearchChange}
         onGlobalSearchSubmit={handleGlobalSearchSubmit}
+        onChangePassword={() => setShowChangePassword(true)}
         onLogout={handleLogout}
         totalLeadsCount={totalLeadsCount}
       />
+
+      {showChangePassword ? <ChangePasswordDialog onClose={() => setShowChangePassword(false)} /> : null}
 
       <nav className="crmTabs cockpitTabs cockpitTabsV37" aria-label="Navegação principal do CRM">
         {visibleTabs.map((tab) => (
@@ -888,6 +904,14 @@ export default function App() {
           </section>
         ) : null}
   
+        {!isLoading && activeTab === "handoffs" && currentUser.role === "pre_venda" ? (
+          <HandoffActivityDashboard
+            mode="sdr"
+            currentUser={currentUser}
+            onViewLead={handleViewLead}
+          />
+        ) : null}
+
         {!isLoading && activeTab === "settings" ? (
           <SettingsCenter
             currentUser={currentUser}

@@ -8,6 +8,7 @@ type HeaderProps = {
   globalSearch?: string;
   onGlobalSearchChange?: (value: string) => void;
   onGlobalSearchSubmit?: (value: string) => void | Promise<void>;
+  onChangePassword?: () => void;
   onLogout?: () => void;
   totalLeadsCount?: number;
 };
@@ -19,6 +20,7 @@ export const Header = memo(function Header({
   globalSearch = "",
   onGlobalSearchChange,
   onGlobalSearchSubmit,
+  onChangePassword,
   onLogout,
   totalLeadsCount = 0,
 }: HeaderProps) {
@@ -64,9 +66,14 @@ export const Header = memo(function Header({
               <strong>{currentUser.name}</strong>
               <span>{currentUser.roleLabel}</span>
             </div>
-            <button className="ghostButton" type="button" onClick={onLogout}>
-              Sair
-            </button>
+            <div className="userPillActionsV46">
+              <button className="ghostButton" type="button" onClick={onChangePassword}>
+                Alterar senha
+              </button>
+              <button className="ghostButton" type="button" onClick={onLogout}>
+                Sair
+              </button>
+            </div>
           </div>
         ) : null}
       </div>

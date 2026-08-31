@@ -6,6 +6,7 @@ import {
   createTeamOnServer,
   createUserOnServer,
   deactivateUserOnServer,
+  describeApiError,
   downloadBackupById,
   downloadDatabaseBackup,
   downloadLeadsCsvExport,
@@ -37,6 +38,7 @@ import {
 } from "../utils/api";
 import { useConfirmationDialog } from "./ConfirmationDialog";
 import { IntegrationDashboard } from "./IntegrationDashboard";
+import { HandoffActivityDashboard } from "./HandoffActivityDashboard";
 
 type SettingsCenterProps = {
   currentUser: CRMUser;
@@ -58,7 +60,17 @@ type UserFormState = {
   leadAccessScope: CRMUser["leadAccessScope"];
 };
 
-type AdminTab = "summary" | "users" | "backups" | "archive" | "trash" | "duplicates" | "audit" | "integrations" | "system";
+type AdminTab = "summary" | "users" | "backups" | "archive" | "trash" | "duplicates" | "handoffs" | "audit" | "integrations" | "system";
+type AdminLoadModule = "users" | "teams" | "overview" | "trash" | "backups" | "audit";
+
+const adminLoadModuleLabels: Record<AdminLoadModule, string> = {
+  users: "Usuários",
+  teams: "Equipes",
+  overview: "Resumo administrativo",
+  trash: "Lixeira",
+  backups: "Backups",
+  audit: "Auditoria",
+};
 
 
 const emptyAdminLeadOverview: AdminLeadOverview = {
@@ -71,7 +83,10 @@ const emptyAdminLeadOverview: AdminLeadOverview = {
   withoutOwner: 0,
   withoutConfirmedDiagnosis: 0,
   highMappingUrgency: 0,
+  commercialMetricsAvailable: true,
+  commercialMetricsReason: "",
   duplicateGroups: 0,
+  duplicatesAvailable: true,
 };
 
 const emptyDuplicatePagination: DuplicateGroupsPage["pagination"] = {
@@ -158,6 +173,7 @@ export function SettingsCenter({
   const [userForm, setUserForm] = useState<UserFormState>(initialUserForm);
   const [panelMessage, setPanelMessage] = useState("");
   const [panelError, setPanelError] = useState("");
+  const [adminLoadErrors, setAdminLoadErrors] = useState<Partial<Record<AdminLoadModule, string>>>({});
   const [isBusy, setIsBusy] = useState(false);
   const [activeAdminTab, setActiveAdminTab] = useState<AdminTab>("summary");
   const { confirm, confirmationDialog } = useConfirmationDialog();
@@ -172,6 +188,7 @@ export function SettingsCenter({
     withoutOwner,
     withoutConfirmedDiagnosis,
     highMappingUrgency,
+    commercialMetricsAvailable = true,
   } = adminOverview;
   const lastBackup = backups[0];
   const lastAudit = auditEntries[0];
@@ -185,7 +202,7 @@ export function SettingsCenter({
   const canAudit = hasPermission(currentUser, "read_audit");
 
   useEffect(() => {
-    loadProductionData();
+    void loadProductionData();
   }, []);
 
   useEffect(() => {
@@ -219,23 +236,31 @@ export function SettingsCenter({
 
   async function loadProductionData() {
     setPanelError("");
-    const tasks: Promise<unknown>[] = [];
+    const tasks: Array<{ module: AdminLoadModule; run: () => Promise<unknown> }> = [];
 
     if (canManageUsers) {
-      tasks.push(fetchUsersFromServer().then(setUsers));
-      tasks.push(fetchTeamsFromServer().then(setTeams));
-      tasks.push(fetchAdminLeadOverviewFromServer({ includeDuplicates: false }).then((overview) => {
+      tasks.push({ module: "users", run: () => fetchUsersFromServer().then(setUsers) });
+      tasks.push({ module: "teams", run: () => fetchTeamsFromServer().then(setTeams) });
+      tasks.push({ module: "overview", run: () => fetchAdminLeadOverviewFromServer({ includeDuplicates: false }).then((overview) => {
         setAdminOverview((current) => ({ ...overview, duplicateGroups: current.duplicateGroups }));
-      }));
+      }) });
     }
-    if (canRestore) tasks.push(fetchDeletedLeadsFromServer({ limit: emptyDeletedPagination.limit, offset: 0 }).then((result) => {
+    if (canRestore) tasks.push({ module: "trash", run: () => fetchDeletedLeadsFromServer({ limit: emptyDeletedPagination.limit, offset: 0 }).then((result) => {
       setDeletedLeads(result.leads);
       setDeletedPagination(result.pagination);
-    }));
-    if (canBackup) tasks.push(fetchBackupsFromServer().then(setBackups));
-    if (canAudit) tasks.push(fetchRecentAuditFromServer().then(setAuditEntries));
+    }) });
+    if (canBackup) tasks.push({ module: "backups", run: () => fetchBackupsFromServer().then(setBackups) });
+    if (canAudit) tasks.push({ module: "audit", run: () => fetchRecentAuditFromServer().then(setAuditEntries) });
 
-    await Promise.all(tasks).catch((error) => setPanelError(error instanceof Error ? error.message : "Não foi possível carregar dados de produção."));
+    const results = await Promise.allSettled(tasks.map((task) => task.run()));
+    const nextErrors: Partial<Record<AdminLoadModule, string>> = {};
+    results.forEach((result, index) => {
+      if (result.status === "rejected") {
+        const task = tasks[index];
+        nextErrors[task.module] = describeApiError(result.reason, `Não foi possível carregar ${adminLoadModuleLabels[task.module]}.`);
+      }
+    });
+    setAdminLoadErrors(nextErrors);
   }
 
   async function refreshArchiveStats(refresh = false) {
@@ -437,6 +462,7 @@ export function SettingsCenter({
     ...(canManageUsers ? [{ id: "archive" as AdminTab, label: "Arquivo de Leads", count: archiveStats?.archivedLeads || 0 }] : []),
     ...(canRestore ? [{ id: "trash" as AdminTab, label: "Lixeira", count: deletedPagination.total }] : []),
     { id: "duplicates" as AdminTab, label: "Duplicados", count: adminOverview.duplicateGroups },
+    ...(canManageUsers ? [{ id: "handoffs" as AdminTab, label: "Encaminhamentos", count: 0 }] : []),
     ...(canAudit ? [{ id: "audit" as AdminTab, label: "Auditoria", count: auditEntries.length }] : []),
     ...(canAudit ? [{ id: "integrations" as AdminTab, label: "Integrações", count: 0 }] : []),
     { id: "system" as AdminTab, label: "Sistema", count: 0 },
@@ -453,7 +479,16 @@ export function SettingsCenter({
         ))}
       </div>
 
-      {panelError ? <div className="systemNotice systemNoticeError"><strong>Erro:</strong><span>{panelError}</span></div> : null}
+      {panelError ? <div className="systemNotice systemNoticeError"><strong>Erro na ação:</strong><span>{panelError}</span></div> : null}
+      {Object.keys(adminLoadErrors).length ? (
+        <div className="systemNotice systemNoticeAttention" role="status">
+          <div>
+            <strong>Administração carregada parcialmente</strong>
+            <span>{(Object.entries(adminLoadErrors) as Array<[AdminLoadModule, string]>).map(([module, error]) => `${adminLoadModuleLabels[module]}: ${error}`).join(" | ")}</span>
+          </div>
+          <div className="systemNoticeActions"><button className="secondaryButton" type="button" onClick={() => void loadProductionData()}>Tentar novamente</button></div>
+        </div>
+      ) : null}
       {panelMessage ? <div className="systemNotice systemNoticeMigration"><strong>Pronto:</strong><span>{panelMessage}</span></div> : null}
       {isBusy ? <div className="syncBar">Processando ação administrativa...</div> : null}
 
@@ -538,9 +573,13 @@ export function SettingsCenter({
               <h3>Alertas comerciais</h3>
               <p>O que precisa ser corrigido antes de escalar a operação.</p>
 
+              {!commercialMetricsAvailable ? (
+                <p>Indicadores comerciais temporariamente indisponíveis enquanto o perfil comercial é recalculado. O restante do resumo continua válido.</p>
+              ) : null}
+
               <div className="alertStatsGrid alertStatsGridV33 alertStatsGridV34">
-                <article><span>Sem diagnóstico</span><strong>{withoutConfirmedDiagnosis}</strong><button className="secondaryButton" type="button" onClick={() => onOpenOpportunityFilter("diagnosis")}>Ver leads</button></article>
-                <article><span>Mapeamento crítico</span><strong>{highMappingUrgency}</strong><button className="secondaryButton" type="button" onClick={() => onOpenOpportunityFilter("mapping-critical")}>Mapear agora</button></article>
+                <article><span>Sem diagnóstico</span><strong>{commercialMetricsAvailable ? withoutConfirmedDiagnosis : "—"}</strong><button className="secondaryButton" type="button" disabled={!commercialMetricsAvailable} onClick={() => onOpenOpportunityFilter("diagnosis")}>Ver leads</button></article>
+                <article><span>Mapeamento crítico</span><strong>{commercialMetricsAvailable ? highMappingUrgency : "—"}</strong><button className="secondaryButton" type="button" disabled={!commercialMetricsAvailable} onClick={() => onOpenOpportunityFilter("mapping-critical")}>Mapear agora</button></article>
                 <article><span>Duplicados</span><strong>{adminOverview.duplicateGroups}</strong><button className="primaryButton" type="button" onClick={() => setActiveAdminTab("duplicates")}>Resolver</button></article>
               </div>
             </section>
@@ -843,6 +882,10 @@ export function SettingsCenter({
             </div>
           ) : null}
         </section>
+      ) : null}
+
+      {activeAdminTab === "handoffs" && canManageUsers ? (
+        <HandoffActivityDashboard mode="admin" currentUser={currentUser} onViewLead={onViewLead} />
       ) : null}
 
       {activeAdminTab === "audit" && canAudit ? (

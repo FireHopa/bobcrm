@@ -13,6 +13,7 @@ import { buildLeadOwnerOptionsSql } from "./leadFilterOptionsSql.js";
 import { normalizeZapePayload, phoneKeyVariants, safeSecretEquals } from "./zapeIntegration.js";
 import { buildIntegrationEventsCsv, getIntegrationDashboardOverview, getIntegrationEventDetail, retryIntegrationEvents } from "./integrationDashboard.js";
 import { createIntegrationHealthCollector, updateIntegrationIncident } from "./integrationObservability.js";
+import { createProcessHeartbeatRuntime, readProcessHeartbeat } from "./processHeartbeat.js";
 import { createZapeBidirectionalSyncRuntime } from "./zapeBidirectionalSync.js";
 import { ensureWhatsappAttribution, getWhatsappAccountConversionReport, recordWhatsappActivity, resolveWhatsappReportRange, whatsappConversionCsv } from "./whatsappAttribution.js";
 import { getAssignmentCandidatesForTenant, matchAssignmentUsers, nextRoundRobinUser, parseAssignmentCandidates, parseTenantAssignmentMap } from "./zapeAssignment.js";
@@ -54,6 +55,8 @@ import { description as bidirectionalSyncMigrationDescription, up as runBidirect
 import { description as instagramChannelAdvertisingMigrationDescription, up as runInstagramChannelAdvertisingMigration, version as instagramChannelAdvertisingMigrationVersion } from "./migrations/20260807_21_instagram_channel_advertising.js";
 import { description as taskDueMinutePrecisionMigrationDescription, up as runTaskDueMinutePrecisionMigration, version as taskDueMinutePrecisionMigrationVersion } from "./migrations/20260827_22_task_due_minute_precision.js";
 import { description as sdrOriginAttributionMigrationDescription, up as runSdrOriginAttributionMigration, version as sdrOriginAttributionMigrationVersion } from "./migrations/20260827_23_sdr_origin_attribution.js";
+import { description as runtimeProcessHeartbeatMigrationDescription, up as runRuntimeProcessHeartbeatMigration, version as runtimeProcessHeartbeatMigrationVersion } from "./migrations/20260827_24_runtime_process_heartbeat.js";
+import { description as leadHandoffAuditMigrationDescription, up as runLeadHandoffAuditMigration, version as leadHandoffAuditMigrationVersion } from "./migrations/20260827_25_lead_handoff_audit.js";
 import {
   createEncryptedMysqlBackup,
   removeBackupArtifact,
@@ -92,6 +95,15 @@ import {
 } from "./taskPolicy.js";
 import { assertLeadHandoffAllowed, assertLeadHandoffPayload } from "./leadHandoffPolicy.js";
 import {
+  assertHandoffDashboardAccess,
+  buildHandoffDashboardFilter,
+  buildHandoffTimeOnlyFilter,
+  mapHandoffActorMetric,
+  mapHandoffDailyMetric,
+  mapHandoffRow,
+  mapHandoffTargetMetric,
+} from "./handoffAudit.js";
+import {
   assertAssignmentUsesHandoff,
   assertConsultantCanBeDeactivated,
   assertHandoffTargetStage,
@@ -101,9 +113,11 @@ import {
 import { buildLeadDashboardSummarySql, mapLeadDashboardSummaryRow } from "./dashboardSummarySql.js";
 import { assertResourceFresh, claimMutationReceipt, completeMutationReceipt } from "./mutationReceipts.js";
 import {
-  buildAdminLeadOverviewSql,
+  buildAdminLeadCommercialOverviewSql,
+  buildAdminLeadCoreOverviewSql,
   buildOpportunityQuickFilterSql,
-  mapAdminLeadOverviewRow,
+  mapAdminLeadCommercialOverviewRow,
+  mapAdminLeadCoreOverviewRow,
 } from "./opportunityRules.js";
 import {
   buildDuplicateGroupsCountSql,
@@ -119,6 +133,7 @@ import {
   sanitizeSpreadsheetCell,
   validateBootstrapAdminConfig,
   validatePasswordStrength,
+  PASSWORD_POLICY,
 } from "./security.js";
 import {
   assertCsrfToken,
@@ -302,6 +317,8 @@ const LEAD_IDENTITY_LOCK_TIMEOUT_SECONDS = readBoundedEnvironmentInteger("LEAD_I
 const JOB_WORKER_CONCURRENCY = readBoundedEnvironmentInteger("JOB_WORKER_CONCURRENCY", 2, 1, 8);
 const JOB_POLL_INTERVAL_MS = readBoundedEnvironmentInteger("JOB_POLL_INTERVAL_MS", 1500, 100, 10000);
 const JOB_HEARTBEAT_INTERVAL_MS = readBoundedEnvironmentInteger("JOB_HEARTBEAT_INTERVAL_MS", 10000, 1000, 60000);
+const PROCESS_HEARTBEAT_INTERVAL_MS = readBoundedEnvironmentInteger("PROCESS_HEARTBEAT_INTERVAL_MS", 10000, 1000, 60000);
+const PROCESS_HEARTBEAT_TTL_MS = readBoundedEnvironmentInteger("PROCESS_HEARTBEAT_TTL_MS", 30000, 5000, 300000);
 const JOB_STALE_AFTER_MS = readBoundedEnvironmentInteger("JOB_STALE_AFTER_MS", 120000, 30000, 3600000);
 const JOB_CLEANUP_INTERVAL_MS = readBoundedEnvironmentInteger("JOB_CLEANUP_INTERVAL_MS", 15 * 60 * 1000, 60000, 24 * 60 * 60 * 1000);
 const OPERATIONAL_SETTINGS = resolveOperationalSettings(process.env);
@@ -365,6 +382,7 @@ let jobCleanupTimer = null;
 let commercialProfileReadinessTimer = null;
 let datetimeColumnsReadinessTimer = null;
 let integrationHealthCollector = null;
+let processHeartbeatRuntime = null;
 let zapeBidirectionalSyncRuntime = null;
 let operationalRuntime = null;
 let databaseReady = false;
@@ -372,7 +390,9 @@ let isShuttingDown = false;
 let activeRequestCount = 0;
 const openSockets = new Set();
 const shutdownController = new AbortController();
+const PROCESS_INSTANCE_ID = randomUUID();
 const RESPONSE_REQUEST = Symbol("responseRequest");
+const RESPONSE_REQUEST_ID = Symbol("responseRequestId");
 const EXPECTED_SHUTDOWN_ERROR_CODES = new Set([
   "ABORT_ERR",
   "ERR_SERVER_NOT_RUNNING",
@@ -392,6 +412,13 @@ function createDatabaseUnavailableError() {
   error.statusCode = 503;
   error.code = isShuttingDown ? "SERVER_SHUTTING_DOWN" : "MYSQL_POOL_UNAVAILABLE";
   return error;
+}
+function sanitizeServerLogMessage(value, maxLength = 800) {
+  const compact = String(value || "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return compact ? compact.slice(0, maxLength) : undefined;
 }
 function requireDatabaseClient(client) {
   if (client) return client;
@@ -649,6 +676,10 @@ async function runSchemaMigrations() {
     () => runTaskDueMinutePrecisionMigration({ execute }));
   await runVersionedMigration(sdrOriginAttributionMigrationVersion, sdrOriginAttributionMigrationDescription,
     () => runSdrOriginAttributionMigration({ addColumnIfMissing, addIndexIfMissing, execute }));
+  await runVersionedMigration(runtimeProcessHeartbeatMigrationVersion, runtimeProcessHeartbeatMigrationDescription,
+    () => runRuntimeProcessHeartbeatMigration({ execute }));
+  await runVersionedMigration(leadHandoffAuditMigrationVersion, leadHandoffAuditMigrationDescription,
+    () => runLeadHandoffAuditMigration({ execute }));
   try {
     await addIndexIfMissing("leads", "ft_leads_search_text", "FULLTEXT INDEX ft_leads_search_text (search_text)");
     leadSearchFullTextEnabled = true;
@@ -941,8 +972,12 @@ async function getLeadAccessContext(user, client = pool) {
   return { user: scopedUser, teamMembers, accessSql: buildLeadAccessSql(scopedUser, teamMembers), scope: describeLeadScope(scopedUser, teamMembers) };
 }
 
+function buildAliasedLeadAccess(accessContext, alias = "") {
+  return buildLeadAccessSql(accessContext.user, accessContext.teamMembers, alias);
+}
+
 function addLeadAccessClause(whereParts, params, accessContext, alias = "") {
-  const accessSql = buildLeadAccessSql(accessContext.user, accessContext.teamMembers, alias);
+  const accessSql = buildAliasedLeadAccess(accessContext, alias);
   whereParts.push(accessSql.clause);
   params.push(...accessSql.params);
 }
@@ -1044,17 +1079,64 @@ async function getDuplicateGroupCount(accessContext, client = pool) {
 async function getAdminLeadOverview(accessContext, client = pool, options = {}) {
   const accessSql = buildAliasedLeadAccess(accessContext, "l");
   const where = `l.deleted_at = '' AND ${accessSql.clause}`;
-  const row = await statementFirstRow(
-    buildAdminLeadOverviewSql({ where, alias: "l", useMaterialized: commercialProfileRuntime.isReady() }),
+
+  // O resumo básico não depende da materialização comercial nem de JSON_EXTRACT.
+  // Assim, Administração continua utilizável mesmo durante backfill ou falha isolada
+  // da inteligência comercial.
+  const coreRow = await statementFirstRow(
+    buildAdminLeadCoreOverviewSql({ where, alias: "l" }),
     accessSql.params,
     client,
   );
-  const overview = mapAdminLeadOverviewRow(row);
+  const overview = mapAdminLeadCoreOverviewRow(coreRow);
+
+  let commercialMetricsAvailable = false;
+  let commercialMetricsReason = "COMMERCIAL_PROFILE_BACKFILL_PENDING";
+  let commercialMetrics = { withoutConfirmedDiagnosis: 0, highMappingUrgency: 0 };
+
+  if (commercialProfileRuntime.isReady()) {
+    try {
+      const commercialRow = await statementFirstRow(
+        buildAdminLeadCommercialOverviewSql({ where, alias: "l", useMaterialized: true }),
+        accessSql.params,
+        client,
+      );
+      commercialMetrics = mapAdminLeadCommercialOverviewRow(commercialRow);
+      commercialMetricsAvailable = true;
+      commercialMetricsReason = "";
+    } catch (error) {
+      commercialMetricsReason = String(error?.code || "COMMERCIAL_METRICS_UNAVAILABLE");
+      console.warn("Métricas comerciais do resumo administrativo indisponíveis; resumo básico será mantido.", {
+        code: error?.code || "COMMERCIAL_METRICS_UNAVAILABLE",
+        errno: Number(error?.errno || 0) || undefined,
+        sqlState: error?.sqlState || undefined,
+        message: sanitizeServerLogMessage(error?.message),
+      });
+    }
+  }
+
   const includeDuplicates = options.includeDuplicates !== false;
-  const duplicateGroups = includeDuplicates ? await getDuplicateGroupCount(accessContext, client) : 0;
+  let duplicateGroups = 0;
+  let duplicatesAvailable = true;
+  if (includeDuplicates) {
+    try {
+      duplicateGroups = await getDuplicateGroupCount(accessContext, client);
+    } catch (error) {
+      duplicatesAvailable = false;
+      console.warn("Contagem de duplicados indisponível no resumo administrativo; resumo básico será mantido.", {
+        code: error?.code || "DUPLICATE_COUNT_UNAVAILABLE",
+        message: sanitizeServerLogMessage(error?.message),
+      });
+    }
+  }
+
   return {
     ...overview,
+    ...commercialMetrics,
+    commercialMetricsAvailable,
+    commercialMetricsReason,
     duplicateGroups,
+    duplicatesAvailable,
     scope: accessContext.scope,
     generatedAt: nowIso(),
   };
@@ -2173,6 +2255,17 @@ async function assertLoginRateLimit(request, email) {
     LOGIN_RATE_LIMIT_MAX_EMAIL,
     LOGIN_RATE_LIMIT_WINDOW_MS,
     "Muitas tentativas para esta conta. Aguarde alguns minutos e tente novamente.",
+  );
+}
+
+async function assertPasswordChangeRateLimit(request, userId) {
+  const clientIp = resolveClientIp(request, TRUST_PROXY_POLICY);
+  await enforceRateLimit(
+    "password-change",
+    `${String(userId || "unknown")}:${clientIp}`,
+    10,
+    15 * 60 * 1000,
+    "Muitas tentativas de alteração de senha. Aguarde alguns minutos e tente novamente.",
   );
 }
 
@@ -3338,6 +3431,104 @@ async function getRecentAudit(limit = 80) {
   return rows.map(rowToAudit);
 }
 
+async function getHandoffDashboard(currentUser, options = {}, client = pool) {
+  const filter = buildHandoffDashboardFilter(currentUser, options);
+  const limit = parseBoundedInteger(options.limit, 80, 1, 200);
+  const offset = parseBoundedInteger(options.offset, 0, 0, 100000);
+
+  const [summaryRow, actorRows, targetRows, dailyRows, historyRows] = await Promise.all([
+    statementFirstRow(
+      `SELECT COUNT(*) AS total, COUNT(DISTINCT lead_id) AS unique_leads, COUNT(DISTINCT to_user_id) AS destinations
+       FROM lead_handoffs WHERE ${filter.where}`,
+      filter.params,
+      client,
+    ),
+    queryRows(
+      `SELECT actor_user_id, actor_name, actor_role, COUNT(*) AS total,
+              COUNT(DISTINCT lead_id) AS unique_leads, COUNT(DISTINCT to_user_id) AS destinations
+       FROM lead_handoffs WHERE ${filter.where}
+       GROUP BY actor_user_id, actor_name, actor_role
+       ORDER BY total DESC, actor_name ASC`,
+      filter.params,
+      client,
+    ),
+    queryRows(
+      `SELECT to_user_id, to_user_name, COUNT(*) AS total, COUNT(DISTINCT lead_id) AS unique_leads
+       FROM lead_handoffs WHERE ${filter.where}
+       GROUP BY to_user_id, to_user_name
+       ORDER BY total DESC, to_user_name ASC
+       LIMIT 30`,
+      filter.params,
+      client,
+    ),
+    queryRows(
+      `SELECT LEFT(created_at, 10) AS day, COUNT(*) AS total
+       FROM lead_handoffs WHERE ${filter.where}
+       GROUP BY LEFT(created_at, 10)
+       ORDER BY day ASC`,
+      filter.params,
+      client,
+    ),
+    queryRows(
+      `SELECT * FROM lead_handoffs WHERE ${filter.where}
+       ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`,
+      [...filter.params, limit, offset],
+      client,
+    ),
+  ]);
+
+  let availableActors = actorRows.map(mapHandoffActorMetric);
+  if (filter.role === USER_ROLES.ADMIN) {
+    const timeFilter = buildHandoffTimeOnlyFilter(options);
+    const rows = await queryRows(
+      `SELECT actor_user_id, actor_name, actor_role, COUNT(*) AS total,
+              COUNT(DISTINCT lead_id) AS unique_leads, COUNT(DISTINCT to_user_id) AS destinations
+       FROM lead_handoffs WHERE ${timeFilter.where}
+       GROUP BY actor_user_id, actor_name, actor_role
+       ORDER BY actor_name ASC`,
+      timeFilter.params,
+      client,
+    );
+    availableActors = rows.map(mapHandoffActorMetric);
+  }
+
+  const total = Number(summaryRow?.total || 0);
+  return {
+    scope: filter.role === USER_ROLES.ADMIN ? "all" : "own",
+    rangeDays: filter.rangeDays,
+    summary: {
+      total,
+      uniqueLeads: Number(summaryRow?.unique_leads || 0),
+      destinations: Number(summaryRow?.destinations || 0),
+      averagePerDay: Number((total / Math.max(filter.rangeDays, 1)).toFixed(1)),
+    },
+    byActor: actorRows.map(mapHandoffActorMetric),
+    byTarget: targetRows.map(mapHandoffTargetMetric),
+    daily: dailyRows.map(mapHandoffDailyMetric),
+    availableActors,
+    handoffs: historyRows.map(mapHandoffRow),
+    pagination: { total, limit, offset, hasMore: offset + historyRows.length < total },
+    generatedAt: nowIso(),
+  };
+}
+
+async function getLeadHandoffOrigin(currentUser, leadId, client = pool) {
+  await assertLeadAccess(currentUser, leadId, {}, client);
+  const role = normalizeUserRole(currentUser?.role);
+  const params = [leadId];
+  let targetClause = "";
+  if (role === USER_ROLES.SALES_CONSULTANT) {
+    targetClause = " AND to_user_id = ?";
+    params.push(String(currentUser.id || ""));
+  }
+  const row = await statementFirstRow(
+    `SELECT * FROM lead_handoffs WHERE lead_id = ?${targetClause} ORDER BY created_at DESC, id DESC LIMIT 1`,
+    params,
+    client,
+  );
+  return row ? mapHandoffRow(row) : null;
+}
+
 const LEAD_EXPORT_HEADERS = [
   "Nome",
   "Email",
@@ -4388,9 +4579,34 @@ async function buildReadinessReport() {
   } catch {
     database = false;
   }
-  const roleReadiness = buildRoleReadiness({ database, localWorkerRunning: jobWorker?.isRunning, capabilities: PROCESS_CAPABILITIES });
+  let externalWorkerHeartbeat = null;
+  if (PROCESS_ROLE === PROCESS_ROLES.API && database) {
+    externalWorkerHeartbeat = await readProcessHeartbeat({ queryRows, role: PROCESS_ROLES.WORKER, ttlMs: PROCESS_HEARTBEAT_TTL_MS }).catch((error) => ({
+      present: false,
+      fresh: false,
+      ageMs: null,
+      heartbeatAt: "",
+      instanceId: "",
+      metadata: {},
+      error: error?.code || error?.message || "WORKER_HEARTBEAT_UNAVAILABLE",
+    }));
+  }
+  const roleReadiness = buildRoleReadiness({
+    database,
+    localWorkerRunning: jobWorker?.isRunning,
+    externalWorkerReady: PROCESS_ROLE === PROCESS_ROLES.API ? Boolean(externalWorkerHeartbeat?.fresh) : undefined,
+    capabilities: PROCESS_CAPABILITIES,
+  });
   const perf = performanceMonitor.getSnapshot();
-  return { ...roleReadiness, database, processRole: PROCESS_ROLE, activeJobs: Number(jobWorker?.activeCount || 0), latencyMs: Date.now() - startedAt, observability: { runtime: perf.runtime, alerts: perf.alerts.slice(0, 3) } };
+  return {
+    ...roleReadiness,
+    database,
+    processRole: PROCESS_ROLE,
+    activeJobs: Number(jobWorker?.activeCount || 0),
+    latencyMs: Date.now() - startedAt,
+    workerHeartbeat: externalWorkerHeartbeat,
+    observability: { runtime: perf.runtime, alerts: perf.alerts.slice(0, 3) },
+  };
 }
 
 function buildLivenessReport() {
@@ -4488,6 +4704,11 @@ async function handleApi(request, response, requestUrl) {
     return;
   }
 
+  if (pathname === "/api/auth/password-policy" && method === "GET") {
+    sendJson(response, 200, { ...PASSWORD_POLICY });
+    return;
+  }
+
   if (pathname === "/api/admin/integrations/zape/overview" && method === "GET") {
     requirePermission(currentUser, "read_audit");
     const query = Object.fromEntries(requestUrl.searchParams.entries());
@@ -4554,6 +4775,93 @@ async function handleApi(request, response, requestUrl) {
     providedToken: request.headers["x-csrf-token"],
     expectedHash: authContext.csrfTokenHash,
   });
+
+  if (pathname === "/api/auth/change-password" && method === "POST") {
+    await assertPasswordChangeRateLimit(request, currentUser.id);
+    const body = await readRequestBody(request);
+    const currentPassword = String(body.currentPassword || "");
+    const newPassword = String(body.newPassword || "");
+    const confirmPassword = String(body.confirmPassword || "");
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      const error = new Error("Informe a senha atual, a nova senha e a confirmação.");
+      error.statusCode = 400;
+      error.code = "PASSWORD_FIELDS_REQUIRED";
+      throw error;
+    }
+
+    if (currentPassword.length > PASSWORD_POLICY.maxLength) {
+      const error = new Error("A senha atual está incorreta.");
+      error.statusCode = 400;
+      error.code = "CURRENT_PASSWORD_INVALID";
+      throw error;
+    }
+
+    if (newPassword !== confirmPassword) {
+      const error = new Error("A confirmação da nova senha não confere.");
+      error.statusCode = 400;
+      error.code = "PASSWORD_CONFIRMATION_MISMATCH";
+      throw error;
+    }
+
+    const passwordErrors = validatePasswordStrength(newPassword);
+    if (passwordErrors.length) {
+      const error = new Error(passwordErrors.join(" "));
+      error.statusCode = 400;
+      error.code = "PASSWORD_POLICY_FAILED";
+      throw error;
+    }
+
+    const result = await withTransaction(async (client) => {
+      const userRow = await statementFirstRow(
+        "SELECT id, email, password_hash FROM users WHERE id = ? LIMIT 1 FOR UPDATE",
+        [currentUser.id],
+        client,
+      );
+
+      if (!userRow || !verifyPassword(currentPassword, userRow.password_hash)) {
+        const error = new Error("A senha atual está incorreta.");
+        error.statusCode = 400;
+        error.code = "CURRENT_PASSWORD_INVALID";
+        throw error;
+      }
+
+      if (verifyPassword(newPassword, userRow.password_hash)) {
+        const error = new Error("A nova senha precisa ser diferente da senha atual.");
+        error.statusCode = 400;
+        error.code = "PASSWORD_UNCHANGED";
+        throw error;
+      }
+
+      const at = nowIso();
+      await execute(
+        "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+        [hashPassword(newPassword), at, currentUser.id],
+        client,
+      );
+
+      const revoked = await execute(
+        "DELETE FROM sessions WHERE user_id = ? AND token <> ?",
+        [currentUser.id, authContext.sessionTokenHash],
+        client,
+      );
+      const revokedSessions = Number(revoked?.affectedRows || 0);
+
+      await recordAudit({
+        entityType: "user",
+        entityId: currentUser.id,
+        action: "password_changed",
+        actor: currentUser,
+        summary: `Senha alterada pelo próprio usuário: ${currentUser.email}`,
+        changes: { revokedSessions },
+      }, client);
+
+      return { revokedSessions };
+    });
+
+    sendJson(response, 200, { ok: true, revokedSessions: result.revokedSessions });
+    return;
+  }
 
   const jobDownloadMatch = pathname.match(/^\/api\/jobs\/([^/]+)\/download$/);
   if (jobDownloadMatch && method === "GET") {
@@ -5381,6 +5689,17 @@ async function handleApi(request, response, requestUrl) {
 
   if (await hotColdRuntime.handleApi({ pathname, method, request, requestUrl, response, currentUser })) return;
 
+  if (pathname === "/api/handoffs" && method === "GET") {
+    assertHandoffDashboardAccess(currentUser);
+    sendJson(response, 200, await getHandoffDashboard(currentUser, {
+      rangeDays: requestUrl.searchParams.get("rangeDays"),
+      actorUserId: requestUrl.searchParams.get("actorUserId"),
+      limit: requestUrl.searchParams.get("limit"),
+      offset: requestUrl.searchParams.get("offset"),
+    }));
+    return;
+  }
+
   if (pathname === "/api/admin/observability" && method === "GET") {
     requirePermission(currentUser, "read_audit");
     if (!operationalRuntime) { sendJson(response, 503, { ok: false, message: "Observabilidade operacional ainda não inicializada." }); return; }
@@ -5882,6 +6201,22 @@ async function handleApi(request, response, requestUrl) {
       // Consolida next_contact_at + perfil comercial uma única vez ao final do handoff.
       await refreshLeadNextContactFromTasks(leadId, client);
       const savedLead = await getLeadById(leadId, {}, client);
+      await execute(
+        `INSERT INTO lead_handoffs (
+          id, lead_id, lead_name, lead_company,
+          from_user_id, from_user_name, actor_user_id, actor_name, actor_role,
+          to_user_id, to_user_name, to_user_role,
+          pipeline_id, pipeline_name, stage_id, stage_name, request_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          randomUUID(), leadId, savedLead?.name || before.name || "", savedLead?.company || before.company || "",
+          before.responsibleUserId || "", before.responsible || "",
+          currentUser.id || "", currentUser.name || currentUser.email || "Usuário", normalizeUserRole(currentUser.role),
+          consultant.id, consultant.name || consultant.email || "", normalizeUserRole(consultant.role),
+          pipeline.id, pipeline.name || "", stage.id, stage.name || "", handoff.requestId, at,
+        ],
+        client,
+      );
       await recordAudit({
         entityType: "lead",
         entityId: leadId,
@@ -5904,6 +6239,14 @@ async function handleApi(request, response, requestUrl) {
 
     invalidateLeadSummaryCache(currentUser);
     sendJson(response, 200, result);
+    return;
+  }
+
+  const leadHandoffOriginMatch = pathname.match(/^\/api\/leads\/([^/]+)\/handoff-origin$/);
+  if (leadHandoffOriginMatch && method === "GET") {
+    requirePermission(currentUser, "read_leads");
+    const leadId = decodeURIComponent(leadHandoffOriginMatch[1]);
+    sendJson(response, 200, { handoff: await getLeadHandoffOrigin(currentUser, leadId) });
     return;
   }
 
@@ -6159,6 +6502,12 @@ async function handleRequest(request, response) {
 async function handleRequestInstrumented(request, response, requestUrl) {
   activeRequestCount += 1;
   response[RESPONSE_REQUEST] = request;
+  const incomingRequestId = String(request.headers["x-request-id"] || "").trim();
+  const requestId = /^[A-Za-z0-9._:-]{6,128}$/.test(incomingRequestId) ? incomingRequestId : randomUUID();
+  response[RESPONSE_REQUEST_ID] = requestId;
+  response.setHeader("X-Request-Id", requestId);
+  const performanceContext = performanceMonitor.currentRequest?.();
+  if (performanceContext) performanceContext.requestId = requestId;
   let finalized = false;
   const finalize = () => {
     if (finalized) return;
@@ -6201,24 +6550,32 @@ async function handleRequestInstrumented(request, response, requestUrl) {
     if (statusCode === 429 && Number(caughtError?.retryAfterSeconds) > 0) {
       response.setHeader("Retry-After", String(Math.ceil(Number(caughtError.retryAfterSeconds))));
     }
+    const safePublicMessage = typeof caughtError?.publicMessage === "string" ? caughtError.publicMessage.trim() : "";
+    const errorCode = String(caughtError?.code || (statusCode >= 500 ? "INTERNAL_ERROR" : "REQUEST_FAILED")).slice(0, 120);
     const publicMessage = shutdownFailure
       ? "Servidor em encerramento gracioso. Tente novamente em instantes."
       : statusCode >= 500
-        ? "Erro interno no servidor. Tente novamente e, se o problema continuar, contate o administrador."
+        ? safePublicMessage || "Erro interno no servidor. Tente novamente e, se o problema continuar, contate o administrador."
         : caughtError instanceof Error ? caughtError.message : "Não foi possível concluir a solicitação.";
 
     if (statusCode >= 500 && !shutdownFailure) {
       console.error("Falha interna no CRM", {
+        requestId,
         method: request.method || "GET",
         pathname: requestUrl.pathname,
-        code: caughtError?.code || "INTERNAL_ERROR",
+        code: errorCode,
         name: caughtError?.name || "Error",
         databaseReady,
+        publicMessage: safePublicMessage || undefined,
+        cause: sanitizeServerLogMessage(caughtError?.message),
+        errno: Number(caughtError?.errno || 0) || undefined,
+        sqlState: caughtError?.sqlState || undefined,
+        stack: sanitizeServerLogMessage(caughtError?.stack, 1600),
       });
     }
 
     if (!response.destroyed && !response.writableEnded) {
-      sendJson(response, statusCode, { ok: false, message: publicMessage });
+      sendJson(response, statusCode, { ok: false, code: errorCode, message: publicMessage, requestId });
     }
   }
 }
@@ -6255,6 +6612,7 @@ async function gracefulShutdown(signal) {
   if (datetimeColumnsReadinessTimer) clearInterval(datetimeColumnsReadinessTimer);
   operationalRuntime?.stop();
   integrationHealthCollector?.stop();
+  processHeartbeatRuntime?.stop();
   await zapeBidirectionalSyncRuntime?.stop?.();
   performanceMonitor.stop();
   shutdownController.abort();
@@ -6287,6 +6645,17 @@ async function startRuntime() {
 
   if (PROCESS_CAPABILITIES.runsJobWorker) {
     await startPersistentJobWorker();
+    processHeartbeatRuntime = createProcessHeartbeatRuntime({
+      execute,
+      role: PROCESS_ROLES.WORKER,
+      instanceId: PROCESS_INSTANCE_ID,
+      intervalMs: PROCESS_HEARTBEAT_INTERVAL_MS,
+      getMetadata: () => ({ processRole: PROCESS_ROLE, pid: process.pid, activeJobs: Number(jobWorker?.activeCount || 0), workerRunning: Boolean(jobWorker?.isRunning) }),
+    });
+    await processHeartbeatRuntime.start().catch((error) => {
+      console.warn("Heartbeat inicial do worker indisponível; nova tentativa ocorrerá pelo runtime.", { code: error?.code || "WORKER_HEARTBEAT_START_FAILED" });
+      void processHeartbeatRuntime?.beat().catch(() => undefined);
+    });
   }
   performanceMonitor.startRuntimeSampler(() => pool);
   operationalRuntime = createOperationalRuntime({ settings: OPERATIONAL_SETTINGS, queryRows, execute, databaseName: MYSQL_DATABASE, processRole: PROCESS_ROLE, performanceMonitor, getActiveRequests: () => activeRequestCount, getActiveJobs: () => Number(jobWorker?.activeCount || 0) });

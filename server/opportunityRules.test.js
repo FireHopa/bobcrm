@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   SERVICE_OPTIONS,
+  buildAdminLeadCommercialOverviewSql,
+  buildAdminLeadCoreOverviewSql,
   buildAdminLeadOverviewSql,
   buildOpportunityQuickFilterSql,
   buildOpportunitySummarySql,
@@ -109,4 +111,20 @@ test("overview administrativo calcula qualidade sobre consulta global autorizada
   assert.match(sql, /overview_without_diagnosis/);
   assert.match(sql, /overview_mapping_critical/);
   assert.match(sql, /l\.responsible_user_id = \?/);
+});
+
+
+test("overview administrativo separa núcleo leve das métricas comerciais", () => {
+  const coreSql = buildAdminLeadCoreOverviewSql({ where: "l.deleted_at = ''", alias: "l" });
+  const commercialSql = buildAdminLeadCommercialOverviewSql({ where: "l.deleted_at = ''", alias: "l", useMaterialized: true });
+
+  assert.match(coreSql, /overview_total/);
+  assert.match(coreSql, /overview_with_owner/);
+  assert.doesNotMatch(coreSql, /overview_without_diagnosis/);
+  assert.doesNotMatch(coreSql, /JSON_EXTRACT/);
+
+  assert.match(commercialSql, /overview_without_diagnosis/);
+  assert.match(commercialSql, /overview_mapping_critical/);
+  assert.match(commercialSql, /commercial_potential_score|mapping_urgency_score|service_casa_count/);
+  assert.doesNotMatch(commercialSql, /JSON_EXTRACT/);
 });

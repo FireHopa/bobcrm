@@ -49,12 +49,23 @@ function mutationKey(operation: string, payload: unknown) { return `${operation}
 
 export class ApiRequestError extends Error {
   status: number;
+  code: string;
+  requestId: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, options: { code?: string; requestId?: string } = {}) {
     super(message);
     this.name = "ApiRequestError";
     this.status = status;
+    this.code = String(options.code || "");
+    this.requestId = String(options.requestId || "");
   }
+}
+
+export function describeApiError(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) return fallback;
+  if (!(error instanceof ApiRequestError)) return error.message || fallback;
+  const details = [error.code ? `código ${error.code}` : "", error.requestId ? `referência ${error.requestId}` : ""].filter(Boolean).join(" · ");
+  return details ? `${error.message} (${details})` : error.message;
 }
 
 export type ServerImportReport = {
@@ -161,7 +172,10 @@ export type AdminLeadOverview = {
   withoutOwner: number;
   withoutConfirmedDiagnosis: number;
   highMappingUrgency: number;
+  commercialMetricsAvailable?: boolean;
+  commercialMetricsReason?: string;
   duplicateGroups: number;
+  duplicatesAvailable?: boolean;
   scope?: LeadScopeMeta;
   generatedAt?: string;
 };
@@ -352,7 +366,9 @@ async function requestApi<ResponseBody>(path: string, options: ApiRequestOptions
   if (!response.ok) {
     if (response.status === 401) clearServerSessionState();
     const message = payload?.message || `Erro ${response.status} ao comunicar com o servidor.`;
-    throw new ApiRequestError(message, response.status);
+    const requestId = String(payload?.requestId || response.headers.get("x-request-id") || "");
+    const code = String(payload?.code || "");
+    throw new ApiRequestError(message, response.status, { code, requestId });
   }
 
   return payload as ResponseBody;
@@ -369,7 +385,10 @@ async function downloadFile(path: string, fallbackFileName: string) {
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
     if (response.status === 401) clearServerSessionState();
-    throw new ApiRequestError(payload?.message || `Erro ${response.status} ao baixar o arquivo.`, response.status);
+    throw new ApiRequestError(payload?.message || `Erro ${response.status} ao baixar o arquivo.`, response.status, {
+      code: String(payload?.code || ""),
+      requestId: String(payload?.requestId || response.headers.get("x-request-id") || ""),
+    });
   }
 
   const blob = await response.blob();
@@ -650,6 +669,35 @@ export async function logoutFromServer(): Promise<void> {
   } finally {
     clearServerSessionState();
   }
+}
+
+export type PasswordPolicy = {
+  minLength: number;
+  maxLength: number;
+  requireLowercase: boolean;
+  requireUppercase: boolean;
+  requireNumber: boolean;
+  requireSpecial: boolean;
+};
+
+export type ChangeOwnPasswordResult = {
+  ok: boolean;
+  revokedSessions: number;
+};
+
+export async function fetchPasswordPolicyFromServer(): Promise<PasswordPolicy> {
+  return requestApi<PasswordPolicy>("/api/auth/password-policy");
+}
+
+export async function changeOwnPasswordOnServer(payload: {
+  currentPassword: string;
+  newPassword: string;
+  confirmPassword: string;
+}): Promise<ChangeOwnPasswordResult> {
+  return requestApi<ChangeOwnPasswordResult>("/api/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function fetchLeadPageFromServer(
@@ -1222,12 +1270,88 @@ export type LeadHandoffResult = {
   idempotentReplay?: boolean;
 };
 
+export type HandoffEntry = {
+  id: string;
+  leadId: string;
+  leadName: string;
+  leadCompany: string;
+  fromUserId: string;
+  fromUserName: string;
+  actorUserId: string;
+  actorName: string;
+  actorRole: string;
+  toUserId: string;
+  toUserName: string;
+  toUserRole: string;
+  pipelineId: string;
+  pipelineName: string;
+  stageId: string;
+  stageName: string;
+  requestId: string;
+  createdAt: string;
+};
+
+export type HandoffActorMetric = {
+  userId: string;
+  name: string;
+  role: string;
+  total: number;
+  uniqueLeads: number;
+  destinations: number;
+};
+
+export type HandoffTargetMetric = {
+  userId: string;
+  name: string;
+  total: number;
+  uniqueLeads: number;
+};
+
+export type HandoffDailyMetric = {
+  date: string;
+  total: number;
+};
+
+export type HandoffDashboard = {
+  scope: "all" | "own";
+  rangeDays: number;
+  summary: {
+    total: number;
+    uniqueLeads: number;
+    destinations: number;
+    averagePerDay: number;
+  };
+  byActor: HandoffActorMetric[];
+  byTarget: HandoffTargetMetric[];
+  daily: HandoffDailyMetric[];
+  availableActors: HandoffActorMetric[];
+  handoffs: HandoffEntry[];
+  pagination: { total: number; limit: number; offset: number; hasMore: boolean };
+  generatedAt: string;
+};
+
+
 export async function handoffLeadToConsultant(leadId: string, payload: LeadHandoffPayload): Promise<LeadHandoffResult> {
   const response = await requestApi<{ lead: Partial<Lead>; task: CRMTask; idempotentReplay?: boolean }>(`/api/leads/${encodeURIComponent(leadId)}/handoff`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
   return { lead: normalizeLeadFromApi(response.lead), task: response.task, idempotentReplay: response.idempotentReplay };
+}
+
+export async function fetchHandoffDashboardFromServer(params: { rangeDays?: number; actorUserId?: string; limit?: number; offset?: number } = {}): Promise<HandoffDashboard> {
+  const search = new URLSearchParams();
+  if (params.rangeDays) search.set("rangeDays", String(params.rangeDays));
+  if (params.actorUserId) search.set("actorUserId", params.actorUserId);
+  if (params.limit) search.set("limit", String(params.limit));
+  if (params.offset) search.set("offset", String(params.offset));
+  const suffix = search.toString();
+  return requestApi<HandoffDashboard>(`/api/handoffs${suffix ? `?${suffix}` : ""}`);
+}
+
+export async function fetchLeadHandoffOriginFromServer(leadId: string): Promise<HandoffEntry | null> {
+  const response = await requestApi<{ handoff: HandoffEntry | null }>(`/api/leads/${encodeURIComponent(leadId)}/handoff-origin`);
+  return response.handoff || null;
 }
 
 export async function fetchTodayDashboardFromServer(params: { responsibleUserId?: string } = {}): Promise<TodayDashboard> {
@@ -1377,7 +1501,7 @@ export type IntegrationHealthStatus = "healthy" | "attention" | "critical";
 
 export type IntegrationDashboardEvent = {
   id?: string; eventKey: string; eventType: string; tenantId: string; channel?: string; externalLeadId: string;
-  leadName: string; phoneMasked: string; status: string; crmStatus?: string; attempts: number; nextAttemptAt?: string;
+  leadName: string; phoneMasked: string; status: string; technicalStatus?: string; effectiveStatus?: string; reconciled?: boolean; crmStatus?: string; attempts: number; nextAttemptAt?: string;
   lastAttemptAt?: string; lastHttpStatus: number; lastError: string; crmLeadId: string; crmAction: string;
   responsible: string; responsibleUserId?: string; assignmentMode: string; duplicateMatched: boolean;
   pipelineId?: string; stageId?: string; stageName?: string; stageType?: string; leadStatus?: string;
@@ -1387,7 +1511,7 @@ export type IntegrationDashboardEvent = {
 export type IntegrationDashboardTenant = {
   tenantId: string; total?: number; pending?: number; sending?: number; delivered?: number; failedPermanent?: number;
   created?: number; updated?: number; reactivated?: number; lastDeliveredAt?: string; lastError?: string;
-  receivedByCrm?: number; completedByCrm?: number; withoutOwner?: number; lastReceivedAt?: string;
+  receivedByCrm?: number; completedByCrm?: number; withoutOwner?: number; lastReceivedAt?: string; effectiveFailed?: number; reconciledFailures?: number;
 };
 
 export type IntegrationIncident = {
@@ -1414,7 +1538,7 @@ export type IntegrationDashboardOverview = {
     storage: null | { configuredMode: string; activeMode: string; mysqlConnected: boolean; fallbackReason: string; migration?: { attempted: boolean; imported: number; skipped: number; archivedTo: string; error: string } };
   };
   reverseSync: { enabled: boolean; total: number; pending: number; sending: number; delivered: number; failed: number; lastDeliveredAt: string; lastUpdatedAt: string };
-  summary: { detected: number; delivered: number; pending: number; failed: number; deliveryRate: number; averageDeliveryMs: number; created: number; updated: number; reactivated: number; duplicatesAvoided: number; assigned: number; withoutOwner: number };
+  summary: { detected: number; delivered: number; pending: number; failed: number; failedReported: number; reconciledFailures: number; deliveryRate: number; averageDeliveryMs: number; created: number; updated: number; reactivated: number; duplicatesAvoided: number; assigned: number; withoutOwner: number };
   commercial: IntegrationCommercialMetrics;
   trends: {
     queue: Array<{ date: string; detected: number; delivered: number; failed: number; pending: number; averageDeliveryMs: number }>;
@@ -1428,7 +1552,7 @@ export type IntegrationDashboardOverview = {
 
 export type IntegrationEventDetail = {
   ok: boolean; eventKey: string;
-  zape: Record<string, unknown> & { attemptHistory?: Array<{ attempt: number; startedAt: string; completedAt: string; latencyMs: number; httpStatus: number; outcome: string; error: string }> };
+  zape: Record<string, unknown> & { technicalStatus?: string; effectiveStatus?: string; reconciled?: boolean; attemptHistory?: Array<{ attempt: number; startedAt: string; completedAt: string; latencyMs: number; httpStatus: number; outcome: string; error: string }> };
   crm: null | { status: string; action: string; leadId: string; lead: { name: string; phoneMasked: string; email: string; company: string; status: string; responsible: string; responsibleUserId: string; pipelineId: string; stageId: string; stageName: string; stageType: string }; response: Record<string, unknown>; createdAt: string; updatedAt: string };
   origins: Array<Record<string, unknown>>; audit: Array<Record<string, unknown>>; tasks: Array<Record<string, unknown>>;
 };

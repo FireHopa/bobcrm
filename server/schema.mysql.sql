@@ -176,6 +176,33 @@ CREATE TABLE IF NOT EXISTS audit_log (
   INDEX idx_audit_actor_created (actor_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS lead_handoffs (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  lead_id VARCHAR(64) NOT NULL,
+  lead_name VARCHAR(255) NOT NULL DEFAULT '',
+  lead_company VARCHAR(255) NOT NULL DEFAULT '',
+  from_user_id VARCHAR(64) NOT NULL DEFAULT '',
+  from_user_name VARCHAR(255) NOT NULL DEFAULT '',
+  actor_user_id VARCHAR(64) NOT NULL DEFAULT '',
+  actor_name VARCHAR(255) NOT NULL DEFAULT '',
+  actor_role VARCHAR(40) NOT NULL DEFAULT '',
+  to_user_id VARCHAR(64) NOT NULL DEFAULT '',
+  to_user_name VARCHAR(255) NOT NULL DEFAULT '',
+  to_user_role VARCHAR(40) NOT NULL DEFAULT '',
+  pipeline_id VARCHAR(64) NOT NULL DEFAULT '',
+  pipeline_name VARCHAR(160) NOT NULL DEFAULT '',
+  stage_id VARCHAR(64) NOT NULL DEFAULT '',
+  stage_name VARCHAR(160) NOT NULL DEFAULT '',
+  request_id VARCHAR(128) NOT NULL DEFAULT '',
+  created_at VARCHAR(40) NOT NULL DEFAULT '',
+  INDEX idx_lead_handoffs_actor_created (actor_user_id, created_at),
+  INDEX idx_lead_handoffs_target_created (to_user_id, created_at),
+  INDEX idx_lead_handoffs_lead_created (lead_id, created_at),
+  INDEX idx_lead_handoffs_role_created (actor_role, created_at),
+  INDEX idx_lead_handoffs_created (created_at),
+  INDEX idx_lead_handoffs_request (request_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS lead_notes (
   id VARCHAR(64) NOT NULL PRIMARY KEY,
   lead_id VARCHAR(64) NOT NULL,

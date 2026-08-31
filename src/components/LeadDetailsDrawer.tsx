@@ -33,11 +33,13 @@ import {
   createTaskOnServer,
   fetchLeadAuditFromServer,
   fetchLeadExternalOriginsFromServer,
+  fetchLeadHandoffOriginFromServer,
   fetchLeadNotesFromServer,
   fetchKanbanPipelines,
   fetchTasksFromServer,
   hasPermission,
   moveKanbanCard,
+  type HandoffEntry,
 } from "../utils/api";
 import { formatCurrencyBRL, formatDate, formatPhone, normalizeWebsite } from "../utils/formatters";
 import { TaskCompletionDialog, type TaskCompletionPayload } from "./TaskCompletionDialog";
@@ -118,6 +120,8 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
   const [formErrors, setFormErrors] = useState<LeadDrawerFormErrors>({});
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [auditError, setAuditError] = useState("");
+  const [handoffOrigin, setHandoffOrigin] = useState<HandoffEntry | null>(null);
+  const [handoffOriginError, setHandoffOriginError] = useState("");
   const [externalOrigins, setExternalOrigins] = useState<ExternalLeadOrigin[]>([]);
   const [externalOriginsError, setExternalOriginsError] = useState("");
   const [notes, setNotes] = useState<LeadNote[]>([]);
@@ -163,6 +167,8 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
     setFormErrors({});
     setAuditEntries([]);
     setAuditError("");
+    setHandoffOrigin(null);
+    setHandoffOriginError("");
     setExternalOrigins([]);
     setExternalOriginsError("");
     setNotes([]);
@@ -199,6 +205,12 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
       fetchLeadAuditFromServer(lead.id)
         .then(setAuditEntries)
         .catch((error) => setAuditError(error instanceof Error ? error.message : "Não foi possível carregar o histórico."));
+    }
+
+    if (currentUser?.role === "consultor_vendas") {
+      fetchLeadHandoffOriginFromServer(lead.id)
+        .then(setHandoffOrigin)
+        .catch((error) => setHandoffOriginError(error instanceof Error ? error.message : "Não foi possível identificar a origem do encaminhamento."));
     }
 
     if (currentUser?.role === "consultor_vendas" && canMoveLeadStage && lead.pipelineId) {
@@ -576,6 +588,21 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
           </span>
           <span className="badge badgeGreen">{formState.responsible || "Sem responsável"}</span>
         </div>
+
+        {currentUser?.role === "consultor_vendas" && handoffOrigin ? (
+          <section className="leadHandoffOriginV45" aria-label="Origem do encaminhamento">
+            <div>
+              <span className="eyebrow">Encaminhado para você</span>
+              <strong>{handoffOrigin.actorName || "Usuário de pré-venda"} enviou este lead para sua carteira.</strong>
+              <p>
+                {handoffOrigin.createdAt ? new Date(handoffOrigin.createdAt).toLocaleString("pt-BR") : "Data não registrada"}
+                {handoffOrigin.pipelineName ? ` • ${handoffOrigin.pipelineName}` : ""}
+                {handoffOrigin.stageName ? ` / ${handoffOrigin.stageName}` : ""}
+              </p>
+            </div>
+          </section>
+        ) : null}
+        {currentUser?.role === "consultor_vendas" && handoffOriginError ? <p className="mutedText handoffOriginErrorV45">{handoffOriginError}</p> : null}
 
         {canHandoffLead && !lead.responsibleUserId ? (
           <section className="leadHandoffCalloutV44" aria-label="Lead sem consultor">

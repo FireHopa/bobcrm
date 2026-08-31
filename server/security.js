@@ -32,16 +32,25 @@ export function sanitizeDownloadFileName(value, fallback = "download") {
   return normalized || fallback;
 }
 
+export const PASSWORD_POLICY = Object.freeze({
+  minLength: 12,
+  maxLength: 256,
+  requireLowercase: true,
+  requireUppercase: true,
+  requireNumber: true,
+  requireSpecial: true,
+});
+
 export function validatePasswordStrength(value) {
   const password = String(value || "");
   const errors = [];
 
-  if (password.length < 12) errors.push("A senha deve possuir pelo menos 12 caracteres.");
-  if (password.length > 256) errors.push("A senha deve possuir no máximo 256 caracteres.");
-  if (!/[a-z]/.test(password)) errors.push("A senha deve conter letra minúscula.");
-  if (!/[A-Z]/.test(password)) errors.push("A senha deve conter letra maiúscula.");
-  if (!/\d/.test(password)) errors.push("A senha deve conter número.");
-  if (!/[^A-Za-z0-9]/.test(password)) errors.push("A senha deve conter caractere especial.");
+  if (password.length < PASSWORD_POLICY.minLength) errors.push(`A senha deve possuir pelo menos ${PASSWORD_POLICY.minLength} caracteres.`);
+  if (password.length > PASSWORD_POLICY.maxLength) errors.push(`A senha deve possuir no máximo ${PASSWORD_POLICY.maxLength} caracteres.`);
+  if (PASSWORD_POLICY.requireLowercase && !/[a-z]/.test(password)) errors.push("A senha deve conter letra minúscula.");
+  if (PASSWORD_POLICY.requireUppercase && !/[A-Z]/.test(password)) errors.push("A senha deve conter letra maiúscula.");
+  if (PASSWORD_POLICY.requireNumber && !/\d/.test(password)) errors.push("A senha deve conter número.");
+  if (PASSWORD_POLICY.requireSpecial && !/[^A-Za-z0-9]/.test(password)) errors.push("A senha deve conter caractere especial.");
 
   return errors;
 }

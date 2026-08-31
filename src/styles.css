@@ -2985,6 +2985,11 @@ tbody tr:hover {
   background: linear-gradient(135deg, rgba(239, 246, 255, 0.98), rgba(255, 255, 255, 0.94));
 }
 
+.systemNoticeAttention {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: linear-gradient(135deg, rgba(255, 251, 235, 0.98), rgba(255, 255, 255, 0.94));
+}
+
 .systemNoticeActions {
   display: flex;
   align-items: center;
@@ -12324,4 +12329,396 @@ tbody tr:hover {
 @media (max-width: 620px) {
   .brDatePopover { left: auto; right: 0; }
   .brDateInputControl > input[type="text"] { font-size: 14px; }
+}
+
+.integrationReconciledNote {
+  display: block;
+  margin-top: 4px;
+  color: #15803d;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.integrationResolutionField {
+  display: grid;
+  gap: 8px;
+}
+
+.integrationResolutionField span {
+  font-size: 13px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.integrationResolutionField textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 96px;
+}
+
+/* V45: auditoria de encaminhamentos SDR -> consultor */
+.handoffAuditWorkspaceV45 {
+  display: grid;
+  gap: 16px;
+  min-height: 0;
+}
+
+.handoffAuditToolbarV45 {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.handoffAuditToolbarV45 h3,
+.handoffAuditChartCardV45 h4,
+.handoffAuditHistoryV45 h4 {
+  margin: 4px 0 6px;
+  color: #0f172a;
+}
+
+.handoffAuditToolbarV45 p,
+.handoffAuditChartCardV45 p,
+.handoffAuditHistoryV45 p {
+  margin: 0;
+  color: #64748b;
+}
+
+.handoffAuditFiltersV45 {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.handoffAuditFiltersV45 label {
+  display: grid;
+  gap: 6px;
+}
+
+.handoffAuditFiltersV45 label > span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.handoffAuditFiltersV45 select {
+  min-height: 40px;
+  min-width: 150px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.handoffAuditSummaryV45 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.handoffAuditSummaryV45 article {
+  display: grid;
+  gap: 5px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: var(--shadow-card);
+}
+
+.handoffAuditSummaryV45 span,
+.handoffAuditSummaryV45 small {
+  color: #64748b;
+}
+
+.handoffAuditSummaryV45 strong {
+  font-size: 28px;
+  line-height: 1;
+  color: #0f172a;
+}
+
+.handoffAuditChartsGridV45 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.handoffAuditChartCardV45,
+.handoffAuditHistoryV45 {
+  min-width: 0;
+}
+
+.handoffMetricBarsV45 {
+  display: grid;
+  gap: 11px;
+  margin-top: 16px;
+}
+
+.handoffMetricRowV45 {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.15fr) minmax(120px, 2fr) 44px;
+  gap: 10px;
+  align-items: center;
+}
+
+.handoffMetricRowV45 > div:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.handoffMetricRowV45 strong,
+.handoffMetricRowV45 span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.handoffMetricRowV45 span {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.handoffMetricRowV45 b {
+  color: #0f172a;
+  text-align: right;
+}
+
+.handoffMetricBarTrackV45 {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eef2f7;
+}
+
+.handoffMetricBarTrackV45 > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #4285f4, #34a853);
+}
+
+.handoffDailyChartV45 {
+  display: flex;
+  align-items: flex-end;
+  gap: 7px;
+  min-height: 170px;
+  margin-top: 18px;
+  padding: 8px 4px 0;
+  overflow-x: auto;
+}
+
+.handoffDailyBarV45 {
+  display: grid;
+  flex: 1 0 34px;
+  gap: 4px;
+  min-width: 34px;
+  text-align: center;
+}
+
+.handoffDailyBarV45 > div {
+  display: flex;
+  align-items: flex-end;
+  height: 112px;
+  padding: 0 7px;
+}
+
+.handoffDailyBarV45 > div > span {
+  display: block;
+  width: 100%;
+  min-height: 8px;
+  border-radius: 8px 8px 3px 3px;
+  background: linear-gradient(180deg, #4285f4, #2563eb);
+}
+
+.handoffDailyBarV45 strong {
+  font-size: 12px;
+  color: #0f172a;
+}
+
+.handoffDailyBarV45 small {
+  color: #64748b;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.handoffAuditTableWrapV45 {
+  margin-top: 14px;
+  overflow: auto;
+  border: 1px solid #eef2f7;
+  border-radius: 14px;
+}
+
+.handoffAuditTableV45 {
+  width: 100%;
+  min-width: 860px;
+  border-collapse: collapse;
+  background: #fff;
+}
+
+.handoffAuditTableV45 th,
+.handoffAuditTableV45 td {
+  padding: 12px 14px;
+  border-bottom: 1px solid #eef2f7;
+  vertical-align: top;
+  text-align: left;
+}
+
+.handoffAuditTableV45 th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.handoffAuditTableV45 td {
+  color: #334155;
+  font-size: 13px;
+}
+
+.handoffAuditTableV45 td strong,
+.handoffAuditTableV45 td small {
+  display: block;
+}
+
+.handoffAuditTableV45 td small {
+  margin-top: 3px;
+  color: #64748b;
+}
+
+.leadHandoffOriginV45 {
+  display: flex;
+  gap: 12px;
+  margin: 0 18px 12px;
+  padding: 14px 16px;
+  border: 1px solid #bfdbfe;
+  border-radius: 14px;
+  background: #eff6ff;
+}
+
+.leadHandoffOriginV45 div {
+  display: grid;
+  gap: 3px;
+}
+
+.leadHandoffOriginV45 strong {
+  color: #1e3a8a;
+}
+
+.leadHandoffOriginV45 p {
+  margin: 0;
+  color: #475569;
+  font-size: 12px;
+}
+
+.handoffOriginErrorV45 {
+  margin: 0 18px 12px;
+}
+
+@media (max-width: 980px) {
+  .handoffAuditToolbarV45 {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .handoffAuditSummaryV45,
+  .handoffAuditChartsGridV45 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .handoffAuditSummaryV45,
+  .handoffAuditChartsGridV45 {
+    grid-template-columns: 1fr;
+  }
+  .handoffMetricRowV45 {
+    grid-template-columns: 1fr 70px 34px;
+  }
+  .handoffMetricRowV45 > div:first-child {
+    grid-column: 1 / -1;
+  }
+}
+
+/* V46 · Alteração da própria senha */
+.userPillActionsV46 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.passwordChangeFormV46 {
+  display: grid;
+  gap: 14px;
+}
+
+.passwordRequirementsV46 {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 12px 14px;
+}
+
+.passwordRequirementsV46 > strong {
+  display: block;
+  margin-bottom: 8px;
+  color: #334155;
+  font-size: 13px;
+}
+
+.passwordRequirementsV46 ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.passwordRequirementsV46 li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.passwordRuleOkV46,
+.passwordMatchOkV46 {
+  color: #166534;
+}
+
+.passwordRulePendingV46 {
+  color: #64748b;
+}
+
+.passwordMatchErrorV46 {
+  color: #b91c1c;
+}
+
+.passwordChangeSuccessV46 {
+  display: grid;
+  gap: 8px;
+}
+
+.passwordChangeSuccessV46 strong {
+  color: #166534;
+}
+
+.passwordChangeSuccessV46 p {
+  margin: 0;
+  color: #475569;
+}
+
+@media (max-width: 900px) {
+  .userPillActionsV46 {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
 }

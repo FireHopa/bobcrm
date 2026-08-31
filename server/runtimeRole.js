@@ -21,14 +21,15 @@ export function findMissingWorkerTables(rows = []) {
   return REQUIRED_WORKER_TABLES.filter((table) => !existing.has(table));
 }
 
-export function buildRoleReadiness({ database, localWorkerRunning, capabilities }) {
+export function buildRoleReadiness({ database, localWorkerRunning, externalWorkerReady, capabilities }) {
   const localWorkerRequired = Boolean(capabilities?.runsJobWorker);
-  const worker = localWorkerRequired ? Boolean(localWorkerRunning) : null;
-  const workerReady = localWorkerRequired ? Boolean(worker) : true;
+  const workerMode = localWorkerRequired ? "local" : "external";
+  const worker = localWorkerRequired ? Boolean(localWorkerRunning) : Boolean(externalWorkerReady);
+  const workerReady = Boolean(worker);
   return {
     ok: Boolean(database) && workerReady,
     reason: database ? (workerReady ? "ready" : "worker_not_ready") : "database_not_ready",
     worker,
-    workerMode: localWorkerRequired ? "local" : "external",
+    workerMode,
   };
 }

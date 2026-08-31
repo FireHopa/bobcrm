@@ -12,6 +12,8 @@ import {
   type IntegrationIncident,
 } from "../utils/api";
 import { WhatsappAccountConversionPanel } from "./WhatsappAccountConversionPanel";
+import { useConfirmationDialog } from "./ConfirmationDialog";
+import { ModalDialog } from "./ModalDialog";
 
 type IntegrationDashboardProps = { onViewLead: (leadId: string) => void };
 
@@ -64,7 +66,8 @@ function EventDetailDrawer({ detail, loading, onClose, onViewLead }: { detail: I
         {loading ? <div className="integrationDrawerLoading">Carregando histórico técnico e comercial...</div> : null}
         {detail ? <>
           <section className="integrationDetailGrid">
-            <article><span>Status técnico</span><strong>{statusLabel(String(zape.status || ""))}</strong></article>
+            <article><span>Status efetivo</span><strong>{statusLabel(String(zape.effectiveStatus || zape.status || ""))}</strong>{zape.reconciled ? <small>Falha técnica reconciliada pelo BobCRM</small> : null}</article>
+            <article><span>Status técnico Zape</span><strong>{statusLabel(String(zape.technicalStatus || zape.status || ""))}</strong></article>
             <article><span>Conta</span><strong>{String(zape.tenantId || "-")}</strong></article>
             <article><span>Tentativas</span><strong>{formatNumber(Number(zape.attempts || 0))}</strong></article>
             <article><span>HTTP</span><strong>{String(zape.lastHttpStatus || "-")}</strong></article>
@@ -93,7 +96,10 @@ export function IntegrationDashboard({ onViewLead }: IntegrationDashboardProps) 
   const [message, setMessage] = useState("");
   const [detail, setDetail] = useState<IntegrationEventDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [resolutionIncident, setResolutionIncident] = useState<IntegrationIncident | null>(null);
+  const [resolutionNote, setResolutionNote] = useState("");
   const mountedRef = useRef(true);
+  const { confirm, confirmationDialog } = useConfirmationDialog();
 
   const loadOverview = useCallback(async (nextFilters: IntegrationDashboardFilters = filters, silent = false) => {
     if (!silent) setLoading(true); else setRefreshing(true);
@@ -113,7 +119,15 @@ export function IntegrationDashboard({ onViewLead }: IntegrationDashboardProps) 
   function handleSearch(event: FormEvent<HTMLFormElement>) { event.preventDefault(); applyFilter("search", searchDraft.trim()); }
 
   async function handleRetry(event: IntegrationDashboardEvent) {
-    if (event.status !== "failed_permanent" || !window.confirm(`Reprocessar o evento ${event.eventKey}?`)) return;
+    if (event.status !== "failed_permanent") return;
+    const confirmed = await confirm({
+      title: "Reprocessar evento?",
+      message: event.eventKey,
+      detail: "Use esta ação somente para falhas que continuam não reconciliadas no BobCRM.",
+      confirmLabel: "Reprocessar",
+      tone: "danger",
+    });
+    if (!confirmed) return;
     setActionKey(event.eventKey); setError(""); setMessage("");
     try { const result = await retryIntegrationEventsOnServer({ eventKey: event.eventKey }); setMessage(result.retried ? "Evento reenfileirado com sucesso." : "O evento não estava mais elegível."); await loadOverview(filters, true); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Não foi possível reprocessar o evento."); }
@@ -121,7 +135,14 @@ export function IntegrationDashboard({ onViewLead }: IntegrationDashboardProps) 
   }
 
   async function handleRetryTenant(tenantId: string) {
-    if (!window.confirm(`Reprocessar todas as falhas permanentes da conta ${tenantId}?`)) return;
+    const confirmed = await confirm({
+      title: "Reprocessar falhas da conta?",
+      message: tenantId,
+      detail: "Somente eventos ainda elegíveis no Zape serão reenfileirados.",
+      confirmLabel: "Reprocessar conta",
+      tone: "danger",
+    });
+    if (!confirmed) return;
     setActionKey(`tenant:${tenantId}`);
     try { const result = await retryIntegrationEventsOnServer({ tenantId }); setMessage(`${formatNumber(result.retried)} evento(s) reenfileirado(s).`); await loadOverview(filters, true); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Não foi possível reprocessar a conta."); }
@@ -135,20 +156,35 @@ export function IntegrationDashboard({ onViewLead }: IntegrationDashboardProps) 
     finally { setDetailLoading(false); }
   }
 
-  async function handleIncident(incident: IntegrationIncident, action: "acknowledge" | "resolve" | "reopen") {
-    let note = "";
-    if (action === "resolve") note = window.prompt("Registre como o incidente foi resolvido:") || "";
+  async function performIncidentAction(incident: IntegrationIncident, action: "acknowledge" | "resolve" | "reopen", note = "") {
     setActionKey(`incident:${incident.id}`);
     try { await updateIntegrationIncidentOnServer(incident.id, action, note); setMessage("Incidente atualizado."); await loadOverview(filters, true); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Não foi possível atualizar o incidente."); }
     finally { setActionKey(""); }
   }
 
+  function handleIncident(incident: IntegrationIncident, action: "acknowledge" | "resolve" | "reopen") {
+    if (action === "resolve") {
+      setResolutionIncident(incident);
+      setResolutionNote("");
+      return;
+    }
+    void performIncidentAction(incident, action);
+  }
+
+  async function handleResolveIncident() {
+    if (!resolutionIncident) return;
+    const incident = resolutionIncident;
+    await performIncidentAction(incident, "resolve", resolutionNote.trim());
+    setResolutionIncident(null);
+    setResolutionNote("");
+  }
+
   return (
     <section className="integrationDashboardV1 integrationDashboardV2">
       <div className={`integrationHealthHero ${health?.status || "attention"}`}>
         <div className="integrationHealthIdentity"><span className="integrationHealthPulse" aria-hidden="true" /><div><small>Saúde da integração</small><h3>{health?.label || (loading ? "Carregando" : "Indisponível")}</h3><p>{health?.reasons?.[0] || "Zape e BobCRM estão processando os leads normalmente."}</p></div></div>
-        <div className="integrationHealthMeta"><span><strong>Zape</strong>{overview?.zape.online ? "Online" : "Offline"}</span><span><strong>Worker</strong>{worker?.running ? (worker.processing ? "Processando" : "Ativo") : "Parado"}</span><span><strong>Fila</strong>{overview?.zape.storage?.activeMode === "mysql" ? "MySQL" : "JSON"}</span><span><strong>Última entrega</strong>{relativeTime(worker?.lastDeliveryAt || queue?.lastDeliveredAt)}</span><span><strong>Consulta</strong>{overview?.zape.latencyMs ? `${overview.zape.latencyMs} ms` : "Sem resposta"}</span><span><strong>CRM → Zape</strong>{overview?.reverseSync?.enabled ? `${formatNumber(Number(overview.reverseSync.pending || 0) + Number(overview.reverseSync.sending || 0))} pendente(s)` : "Desativado"}</span></div>
+        <div className="integrationHealthMeta"><span><strong>Telemetria Zape</strong>{overview?.zape.online ? "Online" : overview?.zape.code === "ZAPE_MONITOR_NOT_CONFIGURED" ? "Não configurada" : "Indisponível"}</span><span><strong>Worker Zape</strong>{worker ? (worker.running ? (worker.processing ? "Processando" : "Ativo") : "Parado") : "Sem telemetria"}</span><span><strong>Fila Zape</strong>{overview?.zape.storage ? (overview.zape.storage.activeMode === "mysql" ? "MySQL" : overview.zape.storage.activeMode || "Fallback") : "Sem telemetria"}</span><span><strong>Última entrega</strong>{relativeTime(worker?.lastDeliveryAt || queue?.lastDeliveredAt)}</span><span><strong>Consulta</strong>{overview?.zape.latencyMs ? `${overview.zape.latencyMs} ms` : "Sem resposta"}</span><span><strong>CRM → Zape</strong>{overview?.reverseSync?.enabled ? `${formatNumber(Number(overview.reverseSync.pending || 0) + Number(overview.reverseSync.sending || 0))} pendente(s)` : "Desativado"}</span></div>
         <button className="secondaryButton integrationRefreshButton" type="button" onClick={() => void loadOverview(filters, true)} disabled={refreshing}>{refreshing ? "Atualizando..." : "Atualizar agora"}</button>
       </div>
 
@@ -158,7 +194,7 @@ export function IntegrationDashboard({ onViewLead }: IntegrationDashboardProps) 
 
       <div className="integrationToolbar"><div className="integrationPeriodControl">{(["24h", "7d", "30d", "90d"] as const).map((period) => <button key={period} type="button" className={filters.period === period ? "active" : ""} onClick={() => applyFilter("period", period)}>{period === "24h" ? "24 horas" : period === "7d" ? "7 dias" : period === "30d" ? "30 dias" : "90 dias"}</button>)}</div><div className="integrationToolbarActions"><button className="secondaryButton" type="button" onClick={() => void downloadIntegrationEventsCsv(filters)}>Exportar CSV</button><span className="integrationUpdatedAt">Atualizado em {formatDateTime(overview?.generatedAt)}</span></div></div>
 
-      <div className="integrationMetricSection"><div className="integrationSectionTitle"><div><h3>Operação técnica</h3><p>Da detecção no WhatsApp até a confirmação do BobCRM.</p></div></div><div className="integrationMetricGrid"><article><span>Eventos detectados</span><strong>{formatNumber(summary?.detected)}</strong><small>No período</small></article><article><span>Entregues ao CRM</span><strong>{formatNumber(summary?.delivered)}</strong><small>{formatPercent(summary?.deliveryRate)} de entrega</small></article><article className={summary?.pending ? "metricAttention" : ""}><span>Pendentes</span><strong>{formatNumber(summary?.pending)}</strong><small>Mais antigo: {queue?.pendingAgeMinutes ? `${queue.pendingAgeMinutes} min` : "sem fila"}</small></article><article className={summary?.failed ? "metricCritical" : ""}><span>Falhas permanentes</span><strong>{formatNumber(summary?.failed)}</strong><small>{summary?.failed ? "Exigem ação" : "Nenhuma falha"}</small></article><article><span>Tempo médio</span><strong>{formatDuration(summary?.averageDeliveryMs)}</strong><small>Zape até BobCRM</small></article></div></div>
+      <div className="integrationMetricSection"><div className="integrationSectionTitle"><div><h3>Operação técnica</h3><p>Da detecção no WhatsApp até a confirmação do BobCRM.</p></div></div><div className="integrationMetricGrid"><article><span>Eventos detectados</span><strong>{formatNumber(summary?.detected)}</strong><small>No período</small></article><article><span>Entregues ao CRM</span><strong>{formatNumber(summary?.delivered)}</strong><small>{formatPercent(summary?.deliveryRate)} de entrega</small></article><article className={summary?.pending ? "metricAttention" : ""}><span>Pendentes</span><strong>{formatNumber(summary?.pending)}</strong><small>Mais antigo: {queue?.pendingAgeMinutes ? `${queue.pendingAgeMinutes} min` : "sem fila"}</small></article><article className={summary?.failed ? "metricCritical" : ""}><span>Falhas não reconciliadas</span><strong>{formatNumber(summary?.failed)}</strong><small>{summary?.failed ? "Na lista atual" : summary?.failedReported ? `${formatNumber(summary.failedReported)} técnica(s) reportada(s) pelo Zape, sem falha efetiva nesta lista` : "Nenhuma falha"}</small></article><article><span>Tempo médio</span><strong>{formatDuration(summary?.averageDeliveryMs)}</strong><small>Zape até BobCRM</small></article></div></div>
 
       <div className="integrationChartsGrid"><LineChart title="Entregas ao CRM" description="Eventos entregues ao longo do período." rows={(overview?.trends.queue || []) as Array<Record<string, unknown>>} valueKey="delivered" /><LineChart title="Fila pendente" description="Evolução histórica do backlog." rows={(overview?.trends.health || []) as Array<Record<string, unknown>>} valueKey="pending_max" /><LineChart title="Latência do monitor" description="Tempo médio de resposta do Zape." rows={(overview?.trends.health || []) as Array<Record<string, unknown>>} valueKey="latency_avg" /></div>
 
@@ -168,10 +204,23 @@ export function IntegrationDashboard({ onViewLead }: IntegrationDashboardProps) 
 
       <section className="panel integrationIncidentPanel"><div className="integrationSectionTitle"><div><h3>Gestão de incidentes</h3><p>Registro permanente de falhas, atrasos, indisponibilidades e normalizações.</p></div><span className={`badge ${openIncidents.length ? "badgeRed" : "badgeGreen"}`}>{formatNumber(openIncidents.length)} aberto(s)</span></div><div className="integrationIncidentList">{overview?.incidents.map((incident) => <article key={incident.id} className={`integrationIncident ${incident.severity} ${incident.status}`}><div><span className="integrationIncidentStatus">{incident.status === "open" ? "Aberto" : incident.status === "acknowledged" ? "Em análise" : "Resolvido"}</span><h4>{incident.title}</h4><p>{incident.description}</p><small>Primeiro: {formatDateTime(incident.firstSeenAt)} · Último: {relativeTime(incident.lastSeenAt)} · {formatNumber(incident.occurrences)} ocorrência(s)</small>{incident.resolutionNote ? <small>Resolução: {incident.resolutionNote}</small> : null}</div><div className="integrationIncidentActions">{incident.status === "open" ? <button className="secondaryButton" type="button" disabled={actionKey === `incident:${incident.id}`} onClick={() => void handleIncident(incident, "acknowledge")}>Assumir</button> : null}{incident.status !== "resolved" ? <button className="primaryButton" type="button" disabled={actionKey === `incident:${incident.id}`} onClick={() => void handleIncident(incident, "resolve")}>Resolver</button> : <button className="secondaryButton" type="button" onClick={() => void handleIncident(incident, "reopen")}>Reabrir</button>}</div></article>)}{!overview?.incidents.length ? <p className="integrationEmptyText">Nenhum incidente registrado.</p> : null}</div></section>
 
-      <section className="panel integrationTenantPanel"><div className="integrationSectionTitle"><div><h3>Contas do WhatsApp</h3><p>Visão técnica e comercial por conta.</p></div><span className="badge badgeBlue">{formatNumber(overview?.tenants.length)} conta(s)</span></div><div className="integrationTableWrap"><table className="integrationTable"><thead><tr><th>Conta</th><th>Detectados</th><th>Entregues</th><th>Pendentes</th><th>Falhas</th><th>Criados</th><th>Reativados</th><th>Sem responsável</th><th>Última entrega</th><th /></tr></thead><tbody>{overview?.tenants.map((tenant) => <tr key={tenant.tenantId}><td><button className="integrationTenantLink" type="button" onClick={() => applyFilter("tenantId", tenant.tenantId)}>{tenant.tenantId}</button></td><td>{formatNumber(tenant.total || tenant.receivedByCrm)}</td><td>{formatNumber(tenant.delivered || tenant.completedByCrm)}</td><td>{formatNumber(Number(tenant.pending || 0) + Number(tenant.sending || 0))}</td><td><span className={tenant.failedPermanent ? "integrationCriticalText" : ""}>{formatNumber(tenant.failedPermanent)}</span></td><td>{formatNumber(tenant.created)}</td><td>{formatNumber(tenant.reactivated)}</td><td>{formatNumber(tenant.withoutOwner)}</td><td>{relativeTime(tenant.lastDeliveredAt || tenant.lastReceivedAt)}</td><td>{tenant.failedPermanent ? <button className="tableActionButton dangerTableAction" type="button" disabled={actionKey === `tenant:${tenant.tenantId}`} onClick={() => void handleRetryTenant(tenant.tenantId)}>Reprocessar</button> : null}</td></tr>)}{!overview?.tenants.length && !loading ? <tr><td colSpan={10} className="integrationEmptyCell">Nenhuma conta com eventos.</td></tr> : null}</tbody></table></div></section>
+      <section className="panel integrationTenantPanel"><div className="integrationSectionTitle"><div><h3>Contas do WhatsApp</h3><p>Visão técnica e comercial por conta.</p></div><span className="badge badgeBlue">{formatNumber(overview?.tenants.length)} conta(s)</span></div><div className="integrationTableWrap"><table className="integrationTable"><thead><tr><th>Conta</th><th>Detectados</th><th>Entregues</th><th>Pendentes</th><th>Falhas</th><th>Criados</th><th>Reativados</th><th>Sem responsável</th><th>Última entrega</th><th /></tr></thead><tbody>{overview?.tenants.map((tenant) => <tr key={tenant.tenantId}><td><button className="integrationTenantLink" type="button" onClick={() => applyFilter("tenantId", tenant.tenantId)}>{tenant.tenantId}</button></td><td>{formatNumber(tenant.total || tenant.receivedByCrm)}</td><td>{formatNumber(tenant.delivered || tenant.completedByCrm)}</td><td>{formatNumber(Number(tenant.pending || 0) + Number(tenant.sending || 0))}</td><td><span className={tenant.effectiveFailed ? "integrationCriticalText" : ""}>{formatNumber(tenant.effectiveFailed)}</span>{tenant.failedPermanent ? <small title="Falhas técnicas reportadas pelo Zape">Zape: {formatNumber(tenant.failedPermanent)} técnica(s)</small> : null}</td><td>{formatNumber(tenant.created)}</td><td>{formatNumber(tenant.reactivated)}</td><td>{formatNumber(tenant.withoutOwner)}</td><td>{relativeTime(tenant.lastDeliveredAt || tenant.lastReceivedAt)}</td><td>{tenant.effectiveFailed ? <button className="tableActionButton dangerTableAction" type="button" disabled={actionKey === `tenant:${tenant.tenantId}`} onClick={() => void handleRetryTenant(tenant.tenantId)}>Reprocessar</button> : null}</td></tr>)}{!overview?.tenants.length && !loading ? <tr><td colSpan={10} className="integrationEmptyCell">Nenhuma conta com eventos.</td></tr> : null}</tbody></table></div></section>
 
-      <section className="panel integrationHistoryPanel"><div className="integrationSectionTitle"><div><h3>Histórico de eventos</h3><p>{eventCountText}. Clique em detalhes para abrir toda a linha do tempo.</p></div></div><form className="integrationFilters" onSubmit={handleSearch}><select value={filters.tenantId || ""} onChange={(event: ChangeEvent<HTMLSelectElement>) => applyFilter("tenantId", event.target.value)}><option value="">Todas as contas</option>{overview?.filters.tenants.map((tenant) => <option key={tenant} value={tenant}>{tenant}</option>)}</select><select value={filters.status || ""} onChange={(event: ChangeEvent<HTMLSelectElement>) => applyFilter("status", event.target.value)}><option value="">Todos os status</option><option value="delivered">Entregues</option><option value="pending">Pendentes</option><option value="sending">Processando</option><option value="failed_permanent">Falhas</option></select><select value={filters.eventType || ""} onChange={(event: ChangeEvent<HTMLSelectElement>) => applyFilter("eventType", event.target.value)}><option value="">Todos os eventos</option>{overview?.filters.eventTypes.map((type) => <option key={type} value={type}>{eventTypeLabel(type)}</option>)}</select><input value={searchDraft} onChange={(event: ChangeEvent<HTMLInputElement>) => setSearchDraft(event.target.value)} placeholder="Nome, telefone, evento ou lead" /><button className="secondaryButton" type="submit">Buscar</button>{(filters.tenantId || filters.status || filters.eventType || filters.search) ? <button className="ghostButton" type="button" onClick={() => { setSearchDraft(""); setFilters(emptyFilters); }}>Limpar</button> : null}</form><div className="integrationTableWrap"><table className="integrationTable integrationEventTable"><thead><tr><th>Horário</th><th>Conta</th><th>Evento</th><th>Status</th><th>Lead</th><th>Ação no CRM</th><th>Responsável</th><th>Tentativas</th><th>HTTP</th><th /></tr></thead><tbody>{overview?.events.map((event) => <tr key={event.eventKey}><td title={formatDateTime(event.createdAt)}>{relativeTime(event.createdAt)}</td><td>{event.tenantId}</td><td><strong>{eventTypeLabel(event.eventType)}</strong><small>{event.channel || "WhatsApp"}</small></td><td><span className={`integrationStatus ${statusClass(event.status)}`}>{statusLabel(event.status)}</span>{event.lastError ? <small className="integrationErrorPreview" title={event.lastError}>{event.lastError}</small> : null}</td><td><strong>{event.leadName || "Sem nome"}</strong><small>{event.phoneMasked || event.externalLeadId}</small></td><td><strong>{actionLabel(event.crmAction)}</strong>{event.duplicateMatched ? <small>Duplicidade evitada</small> : null}</td><td>{event.responsible || "Sem responsável"}</td><td>{event.attempts}</td><td>{event.lastHttpStatus || "-"}</td><td className="integrationActionsCell"><button className="tableActionButton" type="button" onClick={() => void openDetail(event.eventKey)}>Detalhes</button>{event.crmLeadId ? <button className="tableActionButton primaryTableAction" type="button" onClick={() => onViewLead(event.crmLeadId)}>Abrir lead</button> : null}{event.status === "failed_permanent" ? <button className="tableActionButton dangerTableAction" type="button" disabled={actionKey === event.eventKey} onClick={() => void handleRetry(event)}>Reprocessar</button> : null}</td></tr>)}{!overview?.events.length && !loading ? <tr><td colSpan={10} className="integrationEmptyCell">Nenhum evento encontrado.</td></tr> : null}</tbody></table></div><div className="integrationPagination"><button className="secondaryButton" type="button" disabled={!Number(filters.offset || 0)} onClick={() => setFilters((current) => ({ ...current, offset: Math.max(0, Number(current.offset || 0) - Number(current.limit || 50)) }))}>Anterior</button><span>{Number(filters.offset || 0) + 1} a {Math.min(Number(filters.offset || 0) + Number(filters.limit || 50), overview?.pagination.total || 0)} de {formatNumber(overview?.pagination.total)}</span><button className="secondaryButton" type="button" disabled={!overview?.pagination.hasMore} onClick={() => setFilters((current) => ({ ...current, offset: Number(current.offset || 0) + Number(current.limit || 50) }))}>Próxima</button></div></section>
+      <section className="panel integrationHistoryPanel"><div className="integrationSectionTitle"><div><h3>Histórico de eventos</h3><p>{eventCountText}. Clique em detalhes para abrir toda a linha do tempo.</p></div></div><form className="integrationFilters" onSubmit={handleSearch}><select value={filters.tenantId || ""} onChange={(event: ChangeEvent<HTMLSelectElement>) => applyFilter("tenantId", event.target.value)}><option value="">Todas as contas</option>{overview?.filters.tenants.map((tenant) => <option key={tenant} value={tenant}>{tenant}</option>)}</select><select value={filters.status || ""} onChange={(event: ChangeEvent<HTMLSelectElement>) => applyFilter("status", event.target.value)}><option value="">Todos os status</option><option value="delivered">Entregues</option><option value="pending">Pendentes</option><option value="sending">Processando</option><option value="failed_permanent">Falhas</option></select><select value={filters.eventType || ""} onChange={(event: ChangeEvent<HTMLSelectElement>) => applyFilter("eventType", event.target.value)}><option value="">Todos os eventos</option>{overview?.filters.eventTypes.map((type) => <option key={type} value={type}>{eventTypeLabel(type)}</option>)}</select><input value={searchDraft} onChange={(event: ChangeEvent<HTMLInputElement>) => setSearchDraft(event.target.value)} placeholder="Nome, telefone, evento ou lead" /><button className="secondaryButton" type="submit">Buscar</button>{(filters.tenantId || filters.status || filters.eventType || filters.search) ? <button className="ghostButton" type="button" onClick={() => { setSearchDraft(""); setFilters(emptyFilters); }}>Limpar</button> : null}</form><div className="integrationTableWrap"><table className="integrationTable integrationEventTable"><thead><tr><th>Horário</th><th>Conta</th><th>Evento</th><th>Status</th><th>Lead</th><th>Ação no CRM</th><th>Responsável</th><th>Tentativas</th><th>HTTP</th><th /></tr></thead><tbody>{overview?.events.map((event) => <tr key={event.eventKey}><td title={formatDateTime(event.createdAt)}>{relativeTime(event.createdAt)}</td><td>{event.tenantId}</td><td><strong>{eventTypeLabel(event.eventType)}</strong><small>{event.channel || "WhatsApp"}</small></td><td><span className={`integrationStatus ${statusClass(event.status)}`}>{statusLabel(event.status)}</span>{event.reconciled ? <small className="integrationReconciledNote">Falha técnica reconciliada</small> : event.lastError ? <small className="integrationErrorPreview" title={event.lastError}>{event.lastError}</small> : null}</td><td><strong>{event.leadName || "Sem nome"}</strong><small>{event.phoneMasked || event.externalLeadId}</small></td><td><strong>{actionLabel(event.crmAction)}</strong>{event.duplicateMatched ? <small>Duplicidade evitada</small> : null}</td><td>{event.responsible || "Sem responsável"}</td><td>{event.attempts}</td><td>{event.lastHttpStatus || "-"}</td><td className="integrationActionsCell"><button className="tableActionButton" type="button" onClick={() => void openDetail(event.eventKey)}>Detalhes</button>{event.crmLeadId ? <button className="tableActionButton primaryTableAction" type="button" onClick={() => onViewLead(event.crmLeadId)}>Abrir lead</button> : null}{event.status === "failed_permanent" ? <button className="tableActionButton dangerTableAction" type="button" disabled={actionKey === event.eventKey} onClick={() => void handleRetry(event)}>Reprocessar</button> : null}</td></tr>)}{!overview?.events.length && !loading ? <tr><td colSpan={10} className="integrationEmptyCell">Nenhum evento encontrado.</td></tr> : null}</tbody></table></div><div className="integrationPagination"><button className="secondaryButton" type="button" disabled={!Number(filters.offset || 0)} onClick={() => setFilters((current) => ({ ...current, offset: Math.max(0, Number(current.offset || 0) - Number(current.limit || 50)) }))}>Anterior</button><span>{Number(filters.offset || 0) + 1} a {Math.min(Number(filters.offset || 0) + Number(filters.limit || 50), overview?.pagination.total || 0)} de {formatNumber(overview?.pagination.total)}</span><button className="secondaryButton" type="button" disabled={!overview?.pagination.hasMore} onClick={() => setFilters((current) => ({ ...current, offset: Number(current.offset || 0) + Number(current.limit || 50) }))}>Próxima</button></div></section>
 
+      {resolutionIncident ? (
+        <ModalDialog
+          title="Resolver incidente"
+          description={resolutionIncident.title}
+          size="small"
+          onClose={() => { setResolutionIncident(null); setResolutionNote(""); }}
+          closeDisabled={actionKey === `incident:${resolutionIncident.id}`}
+          footer={<><button className="secondaryButton" type="button" onClick={() => { setResolutionIncident(null); setResolutionNote(""); }} disabled={actionKey === `incident:${resolutionIncident.id}`}>Cancelar</button><button className="primaryButton" type="button" data-dialog-initial-focus onClick={() => void handleResolveIncident()} disabled={actionKey === `incident:${resolutionIncident.id}`}>Registrar resolução</button></>}
+        >
+          <label className="integrationResolutionField"><span>Como foi resolvido?</span><textarea value={resolutionNote} onChange={(event) => setResolutionNote(event.target.value)} rows={4} maxLength={5000} placeholder="Ex.: falha técnica já estava reconciliada no CRM; monitor normalizado." /></label>
+        </ModalDialog>
+      ) : null}
+      {confirmationDialog}
       <EventDetailDrawer detail={detail} loading={detailLoading} onClose={() => { setDetail(null); setDetailLoading(false); }} onViewLead={onViewLead} />
       {loading ? <div className="integrationLoadingOverlay">Carregando dados da integração...</div> : null}
     </section>

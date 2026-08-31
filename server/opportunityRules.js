@@ -241,6 +241,36 @@ export function mapOpportunitySummaryRow(row = {}) {
   };
 }
 
+export function buildAdminLeadCoreOverviewSql({ where = "1 = 1", alias = "l" } = {}) {
+  const responsible = column(alias, "responsible");
+  const responsibleUserId = column(alias, "responsible_user_id");
+  const temperature = column(alias, "temperature");
+  const pain = column(alias, "pain");
+  const nextContactAt = column(alias, "next_contact_at");
+  const website = column(alias, "website");
+
+  return `SELECT
+      COUNT(*) AS overview_total,
+      SUM(CASE WHEN TRIM(COALESCE(${responsible}, '')) != '' OR TRIM(COALESCE(${responsibleUserId}, '')) != '' THEN 1 ELSE 0 END) AS overview_with_owner,
+      SUM(CASE WHEN TRIM(COALESCE(${temperature}, '')) != '' THEN 1 ELSE 0 END) AS overview_with_temperature,
+      SUM(CASE WHEN TRIM(COALESCE(${pain}, '')) != '' THEN 1 ELSE 0 END) AS overview_with_pain,
+      SUM(CASE WHEN TRIM(COALESCE(${nextContactAt}, '')) != '' THEN 1 ELSE 0 END) AS overview_with_next_contact,
+      SUM(CASE WHEN TRIM(COALESCE(${website}, '')) != '' THEN 1 ELSE 0 END) AS overview_with_website
+    FROM leads ${alias}
+    WHERE ${where}`;
+}
+
+export function buildAdminLeadCommercialOverviewSql({ where = "1 = 1", alias = "l", useMaterialized = true } = {}) {
+  const expressions = buildCommercialSqlExpressions(alias, { useMaterialized });
+  return `SELECT
+      SUM(CASE WHEN ${expressions.withoutDiagnosis} THEN 1 ELSE 0 END) AS overview_without_diagnosis,
+      SUM(CASE WHEN ${expressions.mappingCritical} THEN 1 ELSE 0 END) AS overview_mapping_critical
+    FROM leads ${alias}
+    WHERE ${where}`;
+}
+
+// Compatibilidade com consumidores e testes antigos. O endpoint administrativo novo
+// executa o núcleo e as métricas comerciais separadamente para permitir degradação parcial.
 export function buildAdminLeadOverviewSql({ where = "1 = 1", alias = "l", useMaterialized = true } = {}) {
   const expressions = buildCommercialSqlExpressions(alias, { useMaterialized });
   const responsible = column(alias, "responsible");
@@ -263,7 +293,7 @@ export function buildAdminLeadOverviewSql({ where = "1 = 1", alias = "l", useMat
     WHERE ${where}`;
 }
 
-export function mapAdminLeadOverviewRow(row = {}) {
+export function mapAdminLeadCoreOverviewRow(row = {}) {
   const total = Number(row.overview_total || 0);
   const withOwner = Number(row.overview_with_owner || 0);
   return {
@@ -274,7 +304,19 @@ export function mapAdminLeadOverviewRow(row = {}) {
     withNextContact: Number(row.overview_with_next_contact || 0),
     withWebsite: Number(row.overview_with_website || 0),
     withoutOwner: Math.max(0, total - withOwner),
+  };
+}
+
+export function mapAdminLeadCommercialOverviewRow(row = {}) {
+  return {
     withoutConfirmedDiagnosis: Number(row.overview_without_diagnosis || 0),
     highMappingUrgency: Number(row.overview_mapping_critical || 0),
+  };
+}
+
+export function mapAdminLeadOverviewRow(row = {}) {
+  return {
+    ...mapAdminLeadCoreOverviewRow(row),
+    ...mapAdminLeadCommercialOverviewRow(row),
   };
 }
