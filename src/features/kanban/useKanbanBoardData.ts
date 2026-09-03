@@ -57,6 +57,7 @@ export function useKanbanBoardData({ filters, externalRefreshVersion, onBoardLoa
         status: filters.status || "",
         temperature: filters.temperature || "",
         responsible: filters.responsible || "",
+        source: filters.source || "",
         quickFilter: filters.quickFilter || "",
       };
       const result = await fetchKanbanBoard(pipelineId, stableFilters, INITIAL_CARDS_PER_STAGE, controller.signal);
@@ -73,7 +74,7 @@ export function useKanbanBoardData({ filters, externalRefreshVersion, onBoardLoa
         setIsLoading(false);
       }
     }
-  }, [filters.search, filters.status, filters.temperature, filters.responsible, filters.quickFilter, onBoardLoaded]);
+  }, [filters.search, filters.status, filters.temperature, filters.responsible, filters.source, filters.quickFilter, onBoardLoaded]);
 
   useEffect(() => {
     const controller = new AbortController();

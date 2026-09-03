@@ -9,7 +9,7 @@ import { createPerformanceMonitor } from "./performanceMetrics.js";
 import { createOperationalRuntime, resolveOperationalSettings } from "./operationalObservability.js";
 import { createTtlCache } from "./runtimeCache.js";
 import { decodeLeadCursor, encodeLeadCursor, leadCursorFilterKey } from "./leadCursor.js";
-import { buildLeadOwnerOptionsSql } from "./leadFilterOptionsSql.js";
+import { buildLeadOwnerOptionsSql, buildLeadSourceOptionsSql } from "./leadFilterOptionsSql.js";
 import { normalizeZapePayload, phoneKeyVariants, safeSecretEquals } from "./zapeIntegration.js";
 import { buildIntegrationEventsCsv, getIntegrationDashboardOverview, getIntegrationEventDetail, retryIntegrationEvents } from "./integrationDashboard.js";
 import { createIntegrationHealthCollector, updateIntegrationIncident } from "./integrationObservability.js";
@@ -1243,6 +1243,24 @@ async function buildLeadsPageQuery(params = {}, accessContext = null, alias = ""
     sqlParams.push(params.responsible);
   }
 
+  if (params.source) {
+    const leadIdReference = alias ? `${alias}.id` : "leads.id";
+    whereParts.push(`(
+      ${prefix}source = ?
+      OR EXISTS (
+        SELECT 1
+        FROM lead_external_origins leo_source_filter
+        WHERE leo_source_filter.lead_id = ${leadIdReference}
+          AND leo_source_filter.provider = 'zape'
+          AND (
+            leo_source_filter.webhook_name = ?
+            OR leo_source_filter.source = ?
+          )
+      )
+    )`);
+    sqlParams.push(params.source, params.source, params.source);
+  }
+
   addLeadQuickFilterClause(whereParts, params.quickFilter, alias);
 
   const baseWhere = whereParts.join(" AND ");
@@ -1282,6 +1300,7 @@ async function getLeadsPageFromRequest(requestUrl, currentUser) {
     status: searchParams.get("status") || "",
     temperature: searchParams.get("temperature") || "",
     responsible: searchParams.get("responsible") || "",
+    source: searchParams.get("source") || "",
     quickFilter: searchParams.get("quickFilter") || "",
   };
   const filterKey = leadCursorFilterKey(filters);
@@ -1635,6 +1654,7 @@ function getKanbanFiltersFromUrl(requestUrl) {
     status: requestUrl.searchParams.get("status") || "",
     temperature: requestUrl.searchParams.get("temperature") || "",
     responsible: requestUrl.searchParams.get("responsible") || "",
+    source: requestUrl.searchParams.get("source") || "",
     quickFilter: requestUrl.searchParams.get("quickFilter") || "",
   };
 }
@@ -3148,6 +3168,27 @@ async function createTaskRecord(payload, currentUser, client = pool, options = {
   const id = options.id || randomUUID();
   const at = nowIso();
   const sourceKey = options.sourceKey || null;
+
+  if (!sourceKey && leadId && validated.type === "follow_up") {
+    const canonicalSourceKey = `lead-next-contact:${leadId}`;
+    const canonicalTask = await statementFirstRow(
+      "SELECT * FROM tasks WHERE source_key = ? LIMIT 1 FOR UPDATE",
+      [canonicalSourceKey],
+      client,
+    );
+    if (canonicalTask && canonicalTask.status === "pending" && String(canonicalTask.due_at || "") === validated.dueAt) {
+      await execute(
+        `UPDATE tasks
+         SET title = ?, description = ?, responsible_user_id = ?, responsible_name = ?, priority = ?, source = 'manual', updated_at = ?
+         WHERE id = ?`,
+        [validated.title, validated.description, responsible.id, responsible.name || responsible.email, validated.priority, at, canonicalTask.id],
+        client,
+      );
+      if (!options.deferLeadRefresh) await refreshLeadNextContactFromTasks(leadId, client);
+      return getTaskById(canonicalTask.id, client);
+    }
+  }
+
   if (sourceKey) {
     const existing = await statementFirstRow("SELECT id FROM tasks WHERE source_key = ? LIMIT 1 FOR UPDATE", [sourceKey], client);
     if (existing) return getTaskById(existing.id, client);
@@ -3205,6 +3246,33 @@ async function syncLeadNextContactTask(lead, actor, client = pool) {
         client,
       );
     }
+    await refreshLeadNextContactFromTasks(leadId, client);
+    return;
+  }
+
+  const matchingManualTask = await statementFirstRow(
+    `SELECT * FROM tasks
+     WHERE lead_id = ? AND type = 'follow_up' AND status = 'pending' AND due_at = ?
+       AND (source_key IS NULL OR source_key = '' OR source_key = ?)
+     ORDER BY CASE WHEN source = 'manual' THEN 0 ELSE 1 END, created_at ASC
+     LIMIT 1 FOR UPDATE`,
+    [leadId, dueAt, sourceKey],
+    client,
+  );
+
+  if (matchingManualTask && (!existing || matchingManualTask.id !== existing.id)) {
+    if (existing) {
+      if (existing.source === "lead_next_contact") {
+        await execute(
+          "UPDATE tasks SET status = 'canceled', source_key = NULL, updated_at = ? WHERE id = ? AND status = 'pending'",
+          [nowIso(), existing.id],
+          client,
+        );
+      } else {
+        await execute("UPDATE tasks SET source_key = NULL, updated_at = ? WHERE id = ?", [nowIso(), existing.id], client);
+      }
+    }
+    await execute("UPDATE tasks SET source_key = ?, updated_at = ? WHERE id = ?", [sourceKey, nowIso(), matchingManualTask.id], client);
     await refreshLeadNextContactFromTasks(leadId, client);
     return;
   }
@@ -4687,6 +4755,11 @@ async function handleApi(request, response, requestUrl) {
     await assertZapeIntegrationAccess(request);
     const body = await readRequestBody(request, INTEGRATION_MAX_BODY_BYTES);
     const result = await withTransaction((client, transactionContext) => processZapeLeadIntegration(body, client, transactionContext));
+    if (!result.idempotentReplay) {
+      invalidateLeadSummaryCache();
+      invalidateKanbanCountsCache();
+      filterOptionsCache.clear();
+    }
     sendJson(response, result.idempotentReplay ? 200 : result.action === "created" ? 201 : 200, result);
     return;
   }
@@ -5644,8 +5717,8 @@ async function handleApi(request, response, requestUrl) {
     requirePermission(currentUser, "read_leads");
     const accessContext = await getLeadAccessContext(currentUser);
     const scopedAccess = buildLeadAccessSql(accessContext.user, accessContext.teamMembers, "l");
-    const cacheKey = `owners:${leadDashboardCacheKey(accessContext)}`;
-    const owners = await filterOptionsCache.getOrLoad(cacheKey, async () => {
+    const scopeCacheKey = leadDashboardCacheKey(accessContext);
+    const owners = await filterOptionsCache.getOrLoad(`owners:${scopeCacheKey}`, async () => {
       const ownersSql = buildLeadOwnerOptionsSql(scopedAccess.clause);
       const rows = await queryRows(
         withMaxExecutionTimeHint(ownersSql, accessContext.scope?.scope === "own" ? CONSULTANT_INTERACTIVE_SQL_TIMEOUT_MS : 0),
@@ -5653,7 +5726,15 @@ async function handleApi(request, response, requestUrl) {
       );
       return rows.map((row) => ({ name: String(row.name || ""), total: Number(row.total || 0) }));
     });
-    sendJson(response, 200, { owners, scope: accessContext.scope });
+    const sources = await filterOptionsCache.getOrLoad(`sources:${scopeCacheKey}`, async () => {
+      const sourcesSql = buildLeadSourceOptionsSql(scopedAccess.clause);
+      const rows = await queryRows(
+        withMaxExecutionTimeHint(sourcesSql, accessContext.scope?.scope === "own" ? CONSULTANT_INTERACTIVE_SQL_TIMEOUT_MS : 0),
+        scopedAccess.params,
+      );
+      return rows.map((row) => ({ name: String(row.name || ""), total: Number(row.total || 0) }));
+    });
+    sendJson(response, 200, { owners, sources, scope: accessContext.scope });
     return;
   }
 

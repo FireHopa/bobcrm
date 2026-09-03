@@ -146,7 +146,7 @@ const KanbanCardItem = memo(function KanbanCardItem({
     <article
       data-lead-id={lead.id}
       data-stage-id={stageId}
-      className={`kanbanCardV40 ${isDragging ? "kanbanCardDragging" : ""} ${isDropBefore ? "kanbanCardDropBefore" : ""}`}
+      className={`kanbanCardV40 ${canMoveCards ? "kanbanCardWithMove" : "kanbanCardReadOnly"} ${isDragging ? "kanbanCardDragging" : ""} ${isDropBefore ? "kanbanCardDropBefore" : ""}`}
       draggable={canMoveCards}
       onDragStart={(event) => onDragStartCard(event, lead, stageId)}
       onDragEnd={onDragEndCard}

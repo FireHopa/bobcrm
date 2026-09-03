@@ -10338,6 +10338,7 @@ tbody tr:hover {
 .kanbanCardV40 {
   position: relative;
   display: flex;
+  box-sizing: border-box;
   flex-direction: column;
   gap: 9px;
   padding: 12px;
@@ -10346,6 +10347,14 @@ tbody tr:hover {
   background: #fff;
   box-shadow: 0 2px 7px rgba(15, 23, 42, .04);
   transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease, opacity .14s ease;
+}
+
+.kanbanCardV40.kanbanCardWithMove {
+  height: 204px;
+}
+
+.kanbanCardV40.kanbanCardReadOnly {
+  height: 155px;
 }
 
 .kanbanCardV40[draggable="true"] {
@@ -10386,6 +10395,7 @@ tbody tr:hover {
 
 .kanbanCardTopline {
   display: flex;
+  min-height: 35px;
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
@@ -10424,12 +10434,24 @@ tbody tr:hover {
 
 .kanbanCardBadges {
   display: flex;
+  min-height: 22px;
+  max-height: 22px;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.kanbanCardBadges .badge {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .kanbanCardNextAction {
   display: -webkit-box;
+  min-height: 32px;
+  max-height: 32px;
   margin: 0;
   overflow: hidden;
   color: #475569;
@@ -10441,6 +10463,8 @@ tbody tr:hover {
 
 .kanbanCardMeta {
   display: flex;
+  min-height: 15px;
+  max-height: 15px;
   align-items: center;
   justify-content: space-between;
   gap: 8px;

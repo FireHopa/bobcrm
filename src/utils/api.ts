@@ -203,6 +203,7 @@ export type DuplicateGroupsPage = {
 
 export type LeadFilterOptions = {
   owners: { name: string; total: number }[];
+  sources: { name: string; total: number }[];
   scope?: LeadScopeMeta;
 };
 
@@ -211,6 +212,7 @@ export type FetchLeadsParams = {
   status?: string;
   temperature?: string;
   responsible?: string;
+  source?: string;
   nextStepDateFilter?: string;
   nextStepFrom?: string;
   nextStepTo?: string;
@@ -554,6 +556,7 @@ function buildQueryString(params: FetchLeadsParams = {}): string {
   if (params.status?.trim()) searchParams.set("status", params.status.trim());
   if (params.temperature?.trim()) searchParams.set("temperature", params.temperature.trim());
   if (params.responsible?.trim()) searchParams.set("responsible", params.responsible.trim());
+  if (params.source?.trim()) searchParams.set("source", params.source.trim());
   if (params.nextStepDateFilter?.trim()) searchParams.set("nextStepDateFilter", params.nextStepDateFilter.trim());
   if (params.nextStepFrom?.trim()) searchParams.set("nextStepFrom", params.nextStepFrom.trim());
   if (params.nextStepTo?.trim()) searchParams.set("nextStepTo", params.nextStepTo.trim());
@@ -786,6 +789,7 @@ function buildKanbanQueryString(filters: KanbanBoardFilters = {}, extra: Record<
   if (filters.status?.trim()) params.set("status", filters.status.trim());
   if (filters.temperature?.trim()) params.set("temperature", filters.temperature.trim());
   if (filters.responsible?.trim()) params.set("responsible", filters.responsible.trim());
+  if (filters.source?.trim()) params.set("source", filters.source.trim());
   if (filters.nextStepDateFilter?.trim()) params.set("nextStepDateFilter", filters.nextStepDateFilter.trim());
   if (filters.nextStepFrom?.trim()) params.set("nextStepFrom", filters.nextStepFrom.trim());
   if (filters.nextStepTo?.trim()) params.set("nextStepTo", filters.nextStepTo.trim());

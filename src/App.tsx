@@ -104,7 +104,7 @@ export default function App() {
   const [opportunityQuickFilter, setOpportunityQuickFilter] = useState<OpportunityQuickFilter>("all");
   const [requestedLeadQuickFilter, setRequestedLeadQuickFilter] = useState<"owner" | undefined>();
   const [requestedLeadQuickFilterKey, setRequestedLeadQuickFilterKey] = useState(0);
-  const [leadFilterOptions, setLeadFilterOptions] = useState<LeadFilterOptions>({ owners: [] });
+  const [leadFilterOptions, setLeadFilterOptions] = useState<LeadFilterOptions>({ owners: [], sources: [] });
   const [assignableUsers, setAssignableUsers] = useState<CRMUser[]>([]);
   const [activeTab, setActiveTab] = useState<ActiveTab>("operation");
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
@@ -197,7 +197,7 @@ export default function App() {
     await logoutFromServer().catch(() => undefined);
     setCurrentUser(null);
     setLeads([]);
-    setLeadFilterOptions({ owners: [] });
+    setLeadFilterOptions({ owners: [], sources: [] });
     setAssignableUsers([]);
     setSelectedLeadId(null);
     setHandoffLead(null);
@@ -846,6 +846,7 @@ export default function App() {
               pagination={leadPagination}
               summary={leadSummary}
               ownerOptions={leadFilterOptions.owners}
+              sourceOptions={leadFilterOptions.sources}
               isLoading={isLeadsRefreshing}
               onQueryChange={handleLeadQueryChange}
               onViewLead={handleViewLead}

@@ -451,7 +451,10 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
         type: taskType,
         priority: taskPriority,
       });
-      setTasks((currentTasks) => [...currentTasks, createdTask].sort((a, b) => a.dueAt.localeCompare(b.dueAt)));
+      setTasks((currentTasks) => [
+        ...currentTasks.filter((task) => task.id !== createdTask.id),
+        createdTask,
+      ].sort((a, b) => a.dueAt.localeCompare(b.dueAt)));
       setTaskTitle("");
       setTaskDueAt("");
       onTaskChanged?.();

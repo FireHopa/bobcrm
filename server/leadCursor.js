@@ -20,6 +20,7 @@ export function leadCursorFilterKey(filters = {}) {
     filters.status || "",
     filters.temperature || "",
     filters.responsible || "",
+    filters.source || "",
     filters.quickFilter || "",
   ]);
 }

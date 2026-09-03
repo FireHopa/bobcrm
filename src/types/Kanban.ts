@@ -47,6 +47,7 @@ export type KanbanBoardFilters = {
   status?: string;
   temperature?: string;
   responsible?: string;
+  source?: string;
   nextStepDateFilter?: string;
   nextStepFrom?: string;
   nextStepTo?: string;

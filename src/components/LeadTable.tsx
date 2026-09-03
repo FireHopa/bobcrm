@@ -15,6 +15,7 @@ type LeadTableProps = {
   pagination?: LeadPagination;
   summary?: LeadSummary;
   ownerOptions?: { name: string; total: number }[];
+  sourceOptions?: { name: string; total: number }[];
   isLoading?: boolean;
   onQueryChange?: (params: FetchLeadsParams, options?: { append?: boolean }) => Promise<void> | void;
   onViewLead: (leadId: string) => void;
@@ -339,6 +340,7 @@ export const LeadTable = memo(function LeadTable({
   pagination,
   summary,
   ownerOptions: serverOwnerOptions = [],
+  sourceOptions: serverSourceOptions = [],
   isLoading = false,
   onQueryChange,
   onViewLead,
@@ -363,6 +365,7 @@ export const LeadTable = memo(function LeadTable({
   const [statusFilter, setStatusFilter] = useState<LeadStatus | "">("");
   const [temperatureFilter, setTemperatureFilter] = useState<LeadTemperature | "">("");
   const [ownerFilter, setOwnerFilter] = useState("");
+  const [sourceFilter, setSourceFilter] = useState("");
   const [nextStepDateFilter, setNextStepDateFilter] = useState<DateFilterPreset>("");
   const [nextStepFrom, setNextStepFrom] = useState("");
   const [nextStepTo, setNextStepTo] = useState("");
@@ -381,6 +384,7 @@ export const LeadTable = memo(function LeadTable({
     status: "" as LeadStatus | "",
     temperature: "" as LeadTemperature | "",
     responsible: "",
+    source: "",
     nextStepDateFilter: "", nextStepFrom: "", nextStepTo: "",
     expectedCloseDateFilter: "", expectedCloseFrom: "", expectedCloseTo: "",
     quickFilter: isSalesConsultant ? "all" : (requestedQuickFilter || "all"),
@@ -412,6 +416,7 @@ export const LeadTable = memo(function LeadTable({
         status: statusFilter,
         temperature: temperatureFilter,
         responsible: ownerFilter,
+        source: sourceFilter,
         nextStepDateFilter, nextStepFrom, nextStepTo,
         expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo,
         quickFilter: getServerQuickFilter(quickFilter),
@@ -423,7 +428,7 @@ export const LeadTable = memo(function LeadTable({
     }, 350);
 
     return () => window.clearTimeout(timeoutId);
-  }, [onQueryChange, ownerFilter, nextStepDateFilter, nextStepFrom, nextStepTo, expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo, quickFilter, search, sortBy, sortDirection, statusFilter, temperatureFilter, viewMode]);
+  }, [onQueryChange, ownerFilter, sourceFilter, nextStepDateFilter, nextStepFrom, nextStepTo, expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo, quickFilter, search, sortBy, sortDirection, statusFilter, temperatureFilter, viewMode]);
 
   useEffect(() => {
     if (viewMode !== "kanban") return;
@@ -434,6 +439,7 @@ export const LeadTable = memo(function LeadTable({
         status: statusFilter,
         temperature: temperatureFilter,
         responsible: ownerFilter,
+        source: sourceFilter,
         nextStepDateFilter, nextStepFrom, nextStepTo,
         expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo,
         quickFilter,
@@ -441,12 +447,17 @@ export const LeadTable = memo(function LeadTable({
     }, 180);
 
     return () => window.clearTimeout(timeoutId);
-  }, [ownerFilter, nextStepDateFilter, nextStepFrom, nextStepTo, expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo, quickFilter, search, statusFilter, temperatureFilter, viewMode]);
+  }, [ownerFilter, sourceFilter, nextStepDateFilter, nextStepFrom, nextStepTo, expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo, quickFilter, search, statusFilter, temperatureFilter, viewMode]);
 
   const ownerOptions = useMemo(() => {
     if (serverOwnerOptions.length) return serverOwnerOptions.map((owner) => owner.name);
     return Array.from(new Set(leads.map((lead) => lead.responsible.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
   }, [leads, serverOwnerOptions]);
+
+  const sourceOptions = useMemo(() => {
+    if (serverSourceOptions.length) return serverSourceOptions.map((source) => source.name);
+    return Array.from(new Set(leads.map((lead) => lead.source.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  }, [leads, serverSourceOptions]);
 
   const serverMode = Boolean(onQueryChange);
   const quickCounts = useMemo(() => ({
@@ -481,6 +492,7 @@ export const LeadTable = memo(function LeadTable({
         if (statusFilter && lead.status !== statusFilter) return false;
         if (temperatureFilter && lead.temperature !== temperatureFilter) return false;
         if (ownerFilter && lead.responsible !== ownerFilter) return false;
+        if (sourceFilter && lead.source !== sourceFilter) return false;
         if (!matchesDatePreset(lead.nextContactAt, nextStepDateFilter, nextStepFrom, nextStepTo)) return false;
         if (!matchesDatePreset(lead.expectedCloseAt, expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo)) return false;
 
@@ -513,7 +525,7 @@ export const LeadTable = memo(function LeadTable({
         if (priorityDifference !== 0) return priorityDifference;
         return (b.updatedAt || b.createdAt || "").localeCompare(a.updatedAt || a.createdAt || "");
       });
-  }, [leads, ownerFilter, nextStepDateFilter, nextStepFrom, nextStepTo, expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo, quickFilter, search, serverMode, statusFilter, temperatureFilter]);
+  }, [leads, ownerFilter, sourceFilter, nextStepDateFilter, nextStepFrom, nextStepTo, expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo, quickFilter, search, serverMode, statusFilter, temperatureFilter]);
 
   const displayedLeads = useMemo(() => filteredLeads.slice(0, MAX_RENDERED_LEADS), [filteredLeads]);
 
@@ -528,6 +540,7 @@ export const LeadTable = memo(function LeadTable({
       status: statusFilter,
       temperature: temperatureFilter,
       responsible: ownerFilter,
+      source: sourceFilter,
       nextStepDateFilter, nextStepFrom, nextStepTo,
       expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo,
       quickFilter: getServerQuickFilter(quickFilter),
@@ -548,6 +561,7 @@ export const LeadTable = memo(function LeadTable({
         status: statusFilter,
         temperature: temperatureFilter,
         responsible: ownerFilter,
+        source: sourceFilter,
         nextStepDateFilter, nextStepFrom, nextStepTo,
         expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo,
         quickFilter: getServerQuickFilter(quickFilter),
@@ -640,6 +654,14 @@ export const LeadTable = memo(function LeadTable({
                 </select>
               </label>
             ) : null}
+
+            <label className="compactFilter">
+              <span>Origem</span>
+              <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
+                <option value="">Todas</option>
+                {sourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}
+              </select>
+            </label>
 
             <div className="compactFilter dateFilterGroup">
               <span>Próximo passo</span>
