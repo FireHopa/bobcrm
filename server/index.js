@@ -2957,8 +2957,8 @@ async function refreshLeadNextContactFromTasks(leadId, client = pool) {
   );
   const nextDueAt = String(row?.next_due_at || "");
   await execute(
-    "UPDATE leads SET next_contact_at = ?, updated_at = ? WHERE id = ?",
-    [nextDueAt, nowIso(), normalizedLeadId],
+    "UPDATE leads SET next_contact_at = ?, updated_at = ? WHERE id = ? AND COALESCE(next_contact_at, '') <> ?",
+    [nextDueAt, nowIso(), normalizedLeadId, nextDueAt],
     client,
   );
   await commercialProfileRuntime.refreshLead(normalizedLeadId, client);

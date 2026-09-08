@@ -3,7 +3,9 @@ import { createPortal } from "react-dom";
 import type { KanbanPipeline } from "../types/Kanban";
 import type { CRMUser, Lead, TaskPriority, TaskType } from "../types/Lead";
 import {
+  ApiRequestError,
   fetchKanbanPipelines,
+  fetchLeadByIdFromServer,
   handoffLeadToConsultant,
   type LeadHandoffResult,
 } from "../utils/api";
@@ -52,6 +54,18 @@ function formatTaskDate(value: string) {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+}
+
+function hasMeaningfulHandoffConflict(reference: Lead, current: Lead): boolean {
+  return String(reference.responsibleUserId || "") !== String(current.responsibleUserId || "")
+    || String(reference.responsible || "") !== String(current.responsible || "")
+    || String(reference.pipelineId || "") !== String(current.pipelineId || "")
+    || String(reference.pipelineStageId || "") !== String(current.pipelineStageId || "")
+    || Boolean(reference.isLost) !== Boolean(current.isLost);
+}
+
+function handoffConflictMessage() {
+  return "Este lead mudou de consultor, funil ou etapa enquanto o encaminhamento estava aberto. Feche e abra novamente para revisar os dados atuais antes de continuar.";
 }
 
 type LeadHandoffDialogProps = {
@@ -194,24 +208,50 @@ export function LeadHandoffDialog({ lead, assignableUsers, onClose, onCompleted 
       return;
     }
 
+    const buildPayload = (expectedUpdatedAt?: string) => ({
+      requestId,
+      consultantUserId,
+      pipelineId,
+      stageId,
+      expectedUpdatedAt,
+      task: {
+        title: taskTitle.trim(),
+        description: taskDescription.trim(),
+        dueAt: taskDueAt,
+        type: taskType,
+        priority: taskPriority,
+        responsibleUserId: consultantUserId,
+        leadId: lead.id,
+      },
+    });
+
     setIsSaving(true);
     try {
-      const result = await handoffLeadToConsultant(lead.id, {
-        requestId,
-        consultantUserId,
-        pipelineId,
-        stageId,
-        expectedUpdatedAt: lead.updatedAt,
-        task: {
-          title: taskTitle.trim(),
-          description: taskDescription.trim(),
-          dueAt: taskDueAt,
-          type: taskType,
-          priority: taskPriority,
-          responsibleUserId: consultantUserId,
-          leadId: lead.id,
-        },
-      });
+      // Atualiza a versão imediatamente antes de salvar. Alterações operacionais de tarefas
+      // podem mudar updatedAt sem representar uma disputa real de encaminhamento.
+      let freshLead = await fetchLeadByIdFromServer(lead.id);
+      if (hasMeaningfulHandoffConflict(lead, freshLead)) {
+        setError(handoffConflictMessage());
+        return;
+      }
+
+      let result: LeadHandoffResult;
+      try {
+        result = await handoffLeadToConsultant(lead.id, buildPayload(freshLead.updatedAt));
+      } catch (caughtError) {
+        if (!(caughtError instanceof ApiRequestError) || caughtError.code !== "STALE_WRITE_CONFLICT") throw caughtError;
+
+        // Há uma pequena janela entre o GET acima e o POST. Recarrega uma vez e só repete
+        // quando os campos relevantes do encaminhamento continuarem iguais.
+        const latestLead = await fetchLeadByIdFromServer(lead.id);
+        if (hasMeaningfulHandoffConflict(lead, latestLead)) {
+          setError(handoffConflictMessage());
+          return;
+        }
+        freshLead = latestLead;
+        result = await handoffLeadToConsultant(lead.id, buildPayload(freshLead.updatedAt));
+      }
+
       onCompleted(result);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Não foi possível encaminhar o lead.");

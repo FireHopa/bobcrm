@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 
 const MONTH_NAMES = [
   "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
@@ -139,7 +140,9 @@ export function BrDateInput({
   ariaLabel,
 }: BrDateInputProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
   const [isOpen, setIsOpen] = useState(false);
+  const [popoverStyle, setPopoverStyle] = useState<CSSProperties>({ visibility: "hidden" });
   const [text, setText] = useState(() => valueToDisplay(value, withTime));
   const [invalid, setInvalid] = useState(false);
   const initialDate = isoToDate(value) || new Date();
@@ -160,14 +163,64 @@ export function BrDateInput({
     }
   }, [value, withTime]);
 
+  const updatePopoverPosition = useCallback(() => {
+    const root = rootRef.current;
+    if (!root || typeof window === "undefined") return;
+
+    const rect = root.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const gutter = 8;
+    const width = Math.max(0, Math.min(320, viewportWidth - gutter * 2));
+    const left = Math.max(gutter, Math.min(rect.left, viewportWidth - width - gutter));
+    const estimatedHeight = popoverRef.current?.offsetHeight || (withTime ? 430 : 350);
+
+    let top = rect.bottom + gutter;
+    if (top + estimatedHeight > viewportHeight - gutter) {
+      top = Math.max(gutter, rect.top - estimatedHeight - gutter);
+    }
+
+    const maxHeight = Math.max(120, viewportHeight - top - gutter);
+    setPopoverStyle({
+      position: "fixed",
+      top,
+      left,
+      width,
+      maxHeight,
+      overflowY: "auto",
+      visibility: "visible",
+    });
+  }, [withTime]);
+
   useEffect(() => {
     if (!isOpen) return;
+
     const handleOutside = (event: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setIsOpen(false);
+      const target = event.target as Node;
+      const clickedInput = rootRef.current?.contains(target);
+      const clickedPopover = popoverRef.current?.contains(target);
+      if (!clickedInput && !clickedPopover) setIsOpen(false);
     };
+
+    const handleViewportChange = () => updatePopoverPosition();
+    const frame = window.requestAnimationFrame(updatePopoverPosition);
     document.addEventListener("mousedown", handleOutside);
-    return () => document.removeEventListener("mousedown", handleOutside);
-  }, [isOpen]);
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("mousedown", handleOutside);
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
+  }, [isOpen, updatePopoverPosition]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const frame = window.requestAnimationFrame(updatePopoverPosition);
+    return () => window.cancelAnimationFrame(frame);
+  }, [isOpen, viewMonth, viewYear, draftDate, withTime, updatePopoverPosition]);
 
   const days = useMemo(() => {
     const first = new Date(viewYear, viewMonth, 1);
@@ -194,6 +247,7 @@ export function BrDateInput({
     setViewMonth(selected.getMonth());
     setDraftDate(getDatePart(value));
     setDraftTime(getTimePart(value) || defaultTime());
+    setPopoverStyle({ visibility: "hidden" });
     setIsOpen(true);
   }
 
@@ -276,91 +330,95 @@ export function BrDateInput({
 
   const effectivePlaceholder = placeholder || (withTime ? "DD/MM/AAAA HH:mm" : "DD/MM/AAAA");
 
-  return (
-    <div ref={rootRef} className={`brDateInput ${className}`.trim()}>
-      <div className={`brDateInputControl ${invalid ? "isInvalid" : ""} ${disabled ? "isDisabled" : ""}`}>
-        <input
-          type="text"
-          inputMode="numeric"
-          autoComplete="off"
-          value={text}
-          placeholder={effectivePlaceholder}
-          aria-label={ariaLabel || effectivePlaceholder}
-          aria-invalid={invalid}
-          required={required}
-          disabled={disabled}
-          maxLength={withTime ? 16 : 10}
-          onChange={(event) => handleTextChange(event.target.value)}
-          onBlur={() => commitText()}
-          onKeyDown={handleInputKeyDown}
-        />
-        {text && !disabled ? (
-          <button className="brDateClearButton" type="button" onMouseDown={(event) => event.preventDefault()} onClick={clearDate} aria-label="Limpar data">×</button>
-        ) : null}
-        <button className="brDateCalendarButton" type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => isOpen ? setIsOpen(false) : openCalendar()} disabled={disabled} aria-label="Abrir calendário" aria-expanded={isOpen}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M7 3v3M17 3v3M4.5 9.5h15M6 5h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-          </svg>
-        </button>
+  const popover = isOpen && typeof document !== "undefined" ? createPortal(
+    <div ref={popoverRef} className="brDatePopover brDatePopoverPortal" style={popoverStyle} role="dialog" aria-label="Selecionar data">
+      <div className="brDateHeader">
+        <button type="button" onClick={() => moveMonth(-1)} aria-label="Mês anterior">‹</button>
+        <strong>{MONTH_NAMES[viewMonth]} {viewYear}</strong>
+        <button type="button" onClick={() => moveMonth(1)} aria-label="Próximo mês">›</button>
       </div>
 
-      {invalid ? <small className="brDateError">Use o formato {withTime ? "DD/MM/AAAA HH:mm" : "DD/MM/AAAA"}.</small> : null}
+      <div className="brDateWeekDays" aria-hidden="true">
+        {WEEK_DAYS.map((day) => <span key={day}>{day}</span>)}
+      </div>
 
-      {isOpen ? (
-        <div className="brDatePopover" role="dialog" aria-label="Selecionar data">
-          <div className="brDateHeader">
-            <button type="button" onClick={() => moveMonth(-1)} aria-label="Mês anterior">‹</button>
-            <strong>{MONTH_NAMES[viewMonth]} {viewYear}</strong>
-            <button type="button" onClick={() => moveMonth(1)} aria-label="Próximo mês">›</button>
-          </div>
+      <div className="brDateGrid">
+        {days.map(({ date, iso, inMonth }) => {
+          const blocked = isBeforeMinOrAfterMax(iso, min, max);
+          const isSelected = iso === selectedDate;
+          const isToday = iso === today;
+          return (
+            <button
+              key={iso}
+              type="button"
+              className={`${inMonth ? "" : "isOutside"} ${isSelected ? "isSelected" : ""} ${isToday ? "isToday" : ""}`.trim()}
+              disabled={blocked}
+              onClick={() => chooseDate(iso)}
+              aria-label={`${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()}`}
+              aria-pressed={isSelected}
+            >
+              {date.getDate()}
+            </button>
+          );
+        })}
+      </div>
 
-          <div className="brDateWeekDays" aria-hidden="true">
-            {WEEK_DAYS.map((day) => <span key={day}>{day}</span>)}
-          </div>
-
-          <div className="brDateGrid">
-            {days.map(({ date, iso, inMonth }) => {
-              const blocked = isBeforeMinOrAfterMax(iso, min, max);
-              const isSelected = iso === selectedDate;
-              const isToday = iso === today;
-              return (
-                <button
-                  key={iso}
-                  type="button"
-                  className={`${inMonth ? "" : "isOutside"} ${isSelected ? "isSelected" : ""} ${isToday ? "isToday" : ""}`.trim()}
-                  disabled={blocked}
-                  onClick={() => chooseDate(iso)}
-                  aria-label={`${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()}`}
-                  aria-pressed={isSelected}
-                >
-                  {date.getDate()}
-                </button>
-              );
-            })}
-          </div>
-
-          {withTime ? (
-            <div className="brDateTimeRow">
-              <label>
-                <span>Horário</span>
-                <input
-                  type="time"
-                  min={draftDate && draftDate === getDatePart(min || "") ? getTimePart(min || "") || undefined : undefined}
-                  max={draftDate && draftDate === getDatePart(max || "") ? getTimePart(max || "") || undefined : undefined}
-                  value={draftTime}
-                  onChange={(event) => { setDraftTime(event.target.value); setInvalid(false); }}
-                />
-              </label>
-              <button className="brDateApplyButton" type="button" disabled={!draftDate || !draftTime} onClick={applyDateTime}>Aplicar</button>
-            </div>
-          ) : null}
-
-          <div className="brDateFooter">
-            <button type="button" onClick={() => chooseDate(today)} disabled={isBeforeMinOrAfterMax(today, min, max)}>Hoje</button>
-            <button type="button" onClick={clearDate}>Limpar</button>
-          </div>
+      {withTime ? (
+        <div className="brDateTimeRow">
+          <label>
+            <span>Horário</span>
+            <input
+              type="time"
+              min={draftDate && draftDate === getDatePart(min || "") ? getTimePart(min || "") || undefined : undefined}
+              max={draftDate && draftDate === getDatePart(max || "") ? getTimePart(max || "") || undefined : undefined}
+              value={draftTime}
+              onChange={(event) => { setDraftTime(event.target.value); setInvalid(false); }}
+            />
+          </label>
+          <button className="brDateApplyButton" type="button" disabled={!draftDate || !draftTime} onClick={applyDateTime}>Aplicar</button>
         </div>
       ) : null}
-    </div>
+
+      <div className="brDateFooter">
+        <button type="button" onClick={() => chooseDate(today)} disabled={isBeforeMinOrAfterMax(today, min, max)}>Hoje</button>
+        <button type="button" onClick={clearDate}>Limpar</button>
+      </div>
+    </div>,
+    document.body,
+  ) : null;
+
+  return (
+    <>
+      <div ref={rootRef} className={`brDateInput ${className}`.trim()}>
+        <div className={`brDateInputControl ${invalid ? "isInvalid" : ""} ${disabled ? "isDisabled" : ""}`}>
+          <input
+            type="text"
+            inputMode="numeric"
+            autoComplete="off"
+            value={text}
+            placeholder={effectivePlaceholder}
+            aria-label={ariaLabel || effectivePlaceholder}
+            aria-invalid={invalid}
+            required={required}
+            disabled={disabled}
+            maxLength={withTime ? 16 : 10}
+            onChange={(event) => handleTextChange(event.target.value)}
+            onBlur={() => commitText()}
+            onKeyDown={handleInputKeyDown}
+          />
+          {text && !disabled ? (
+            <button className="brDateClearButton" type="button" onMouseDown={(event) => event.preventDefault()} onClick={clearDate} aria-label="Limpar data">×</button>
+          ) : null}
+          <button className="brDateCalendarButton" type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => isOpen ? setIsOpen(false) : openCalendar()} disabled={disabled} aria-label="Abrir calendário" aria-expanded={isOpen}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M7 3v3M17 3v3M4.5 9.5h15M6 5h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+
+        {invalid ? <small className="brDateError">Use o formato {withTime ? "DD/MM/AAAA HH:mm" : "DD/MM/AAAA"}.</small> : null}
+      </div>
+      {popover}
+    </>
   );
 }

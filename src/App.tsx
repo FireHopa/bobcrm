@@ -515,10 +515,17 @@ export default function App() {
     setDrawerMode("view");
   }, []);
 
-  const openLeadHandoff = useCallback((lead: Lead) => {
-    setHandoffLead(lead);
+  const openLeadHandoff = useCallback(async (lead: Lead) => {
     if (!assignableUsers.length) void refreshAssignableUsers();
-  }, [assignableUsers.length, refreshAssignableUsers]);
+
+    try {
+      const freshLead = await fetchLeadByIdFromServer(lead.id);
+      replaceLeadInState(freshLead);
+      setHandoffLead(freshLead);
+    } catch (caughtError) {
+      setApiError(caughtError instanceof Error ? caughtError.message : "Não foi possível atualizar o lead antes do encaminhamento.");
+    }
+  }, [assignableUsers.length, refreshAssignableUsers, replaceLeadInState]);
 
   const closeLeadHandoff = useCallback(() => {
     setHandoffLead(null);

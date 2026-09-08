@@ -12212,11 +12212,9 @@ tbody tr:hover {
 }
 
 .brDatePopover {
-  position: absolute;
-  z-index: 1400;
-  top: calc(100% + 8px);
-  left: 0;
-  width: min(320px, calc(100vw - 32px));
+  position: fixed;
+  z-index: 2147483647;
+  width: min(320px, calc(100vw - 16px));
   padding: 12px;
   border: 1px solid #dbe3ef;
   border-radius: 14px;
@@ -12351,7 +12349,6 @@ tbody tr:hover {
 .dateRangeFields .brDateInputControl > input[type="text"] { font-size: 12px; padding-left: 10px; }
 
 @media (max-width: 620px) {
-  .brDatePopover { left: auto; right: 0; }
   .brDateInputControl > input[type="text"] { font-size: 14px; }
 }
 
