@@ -4,6 +4,7 @@ import {
   assertTaskAssignmentAllowed,
   assertTaskPayload,
   buildTaskAccessSql,
+  buildCompletedTaskAccessSql,
   getTaskBucketWhere,
   normalizeTaskPriority,
   normalizeTaskType,
@@ -33,10 +34,17 @@ test("escopo de tarefas do consultor é a própria responsabilidade", () => {
   assert.deepEqual(buildTaskAccessSql({ id: "a1", role: "admin" }), { clause: "1 = 1", params: [] });
 });
 
+test("histórico concluído do consultor usa quem realmente concluiu a tarefa", () => {
+  const consultant = { id: "u1", role: "consultor_vendas" };
+  assert.deepEqual(buildCompletedTaskAccessSql(consultant), { clause: "t.completed_by = ?", params: ["u1"] });
+  assert.deepEqual(buildCompletedTaskAccessSql({ id: "a1", role: "admin" }), { clause: "1 = 1", params: [] });
+});
+
 test("filtros de tarefa distinguem atrasadas, hoje e próximas", () => {
   assert.match(getTaskBucketWhere("overdue"), /due_at/);
   assert.match(getTaskBucketWhere("today"), /= DATE_FORMAT/);
   assert.match(getTaskBucketWhere("upcoming"), /> DATE_FORMAT/);
+  assert.match(getTaskBucketWhere("completed"), /status = 'completed'/);
   assert.equal(normalizeTaskType("x"), "follow_up");
   assert.equal(normalizeTaskPriority("x"), "normal");
 });

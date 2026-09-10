@@ -125,6 +125,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
   const [externalOrigins, setExternalOrigins] = useState<ExternalLeadOrigin[]>([]);
   const [externalOriginsError, setExternalOriginsError] = useState("");
   const [notes, setNotes] = useState<LeadNote[]>([]);
+  const [expandedNoteIds, setExpandedNoteIds] = useState<Set<string>>(new Set());
   const [noteBody, setNoteBody] = useState("");
   const [noteError, setNoteError] = useState("");
   const [isSavingNote, setIsSavingNote] = useState(false);
@@ -172,6 +173,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
     setExternalOrigins([]);
     setExternalOriginsError("");
     setNotes([]);
+    setExpandedNoteIds(new Set());
     setNoteBody("");
     setNoteError("");
     setTasks([]);
@@ -349,9 +351,18 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
     if (Object.keys(errors).length) return;
 
     if (!canEditFull) {
+      if (![formState.name, formState.email, formState.phone].some((value) => value.trim())) {
+        setFormErrors((currentErrors) => ({ ...currentErrors, identity: "Informe ao menos nome, e-mail ou telefone." }));
+        return;
+      }
       onSaveLead({
         ...lead,
+        name: formState.name.trim(),
         email: formState.email.trim(),
+        phone: formState.phone.trim(),
+        company: formState.company.trim(),
+        website: normalizeWebsite(formState.website),
+        instagram: formState.instagram.trim(),
         temperature: formState.temperature,
         expectedCloseAt: formState.expectedCloseAt,
       });
@@ -514,6 +525,19 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
     if (canDeleteLead && lead) onDeleteLead(lead.id);
   }
 
+  function toggleNoteExpansion(noteId: string) {
+    setExpandedNoteIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      if (nextIds.has(noteId)) nextIds.delete(noteId);
+      else nextIds.add(noteId);
+      return nextIds;
+    });
+  }
+
+  function isLongNote(body: string) {
+    return body.length > 240 || body.split("\n").length > 4;
+  }
+
   const notesSection = (
     <section className="drawerSection">
       <h3>Notas da negociação</h3>
@@ -535,14 +559,24 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
         </div>
       ) : null}
       {noteError ? <p className="formError" role="alert">{noteError}</p> : null}
-      {lead.commercialNotes ? <InfoText label="Observação legada" value={lead.commercialNotes} /> : null}
-      <div className="auditTimeline">
-        {notes.length ? notes.map((note) => (
-          <article className="auditItem" key={note.id}>
-            <strong>{note.body}</strong>
-            <span>{note.createdByName || "Usuário"} • {note.createdAt ? new Date(note.createdAt).toLocaleString("pt-BR") : ""}</span>
-          </article>
-        )) : <p className="mutedText">Nenhuma nota registrada ainda.</p>}
+      {lead.commercialNotes ? (
+        <article className="drawerNoteCard drawerNoteLegacy">
+          <div className="drawerNoteMeta"><strong>Observação legada</strong></div>
+          <p className={`drawerNoteBody ${!isLongNote(lead.commercialNotes) || expandedNoteIds.has("__legacy__") ? "drawerNoteBodyExpanded" : ""}`}>{lead.commercialNotes}</p>
+          {isLongNote(lead.commercialNotes) ? <button className="drawerNoteToggle" type="button" onClick={() => toggleNoteExpansion("__legacy__")} aria-expanded={expandedNoteIds.has("__legacy__")}>{expandedNoteIds.has("__legacy__") ? "Recolher" : "Ver nota completa"}</button> : null}
+        </article>
+      ) : null}
+      <div className="drawerNotesTimeline">
+        {notes.length ? notes.map((note) => {
+          const expanded = expandedNoteIds.has(note.id);
+          return (
+            <article className="drawerNoteCard" key={note.id}>
+              <div className="drawerNoteMeta"><strong>{note.createdByName || "Usuário"}</strong><span>{note.createdAt ? new Date(note.createdAt).toLocaleString("pt-BR") : ""}</span></div>
+              <p className={`drawerNoteBody ${!isLongNote(note.body) || expanded ? "drawerNoteBodyExpanded" : ""}`}>{note.body}</p>
+              {isLongNote(note.body) ? <button className="drawerNoteToggle" type="button" onClick={() => toggleNoteExpansion(note.id)} aria-expanded={expanded}>{expanded ? "Recolher" : "Ver nota completa"}</button> : null}
+            </article>
+          );
+        }) : <p className="mutedText">Nenhuma nota registrada ainda.</p>}
       </div>
     </section>
   );
@@ -714,10 +748,15 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
               </>
             ) : (
               <section className="drawerSection">
-                <h3>Campos permitidos ao consultor</h3>
-                <p className="mutedText">Você pode atualizar e-mail, termômetro, data prevista de fechamento e mover o lead entre as etapas do funil atual.</p>
+                <h3>Dados principais</h3>
+                <p className="mutedText">Você pode corrigir os dados principais do lead e atualizar termômetro, fechamento previsto e etapa dentro do funil atual.</p>
                 <div className="drawerFormGrid">
-                  <label className="field"><span>E-mail</span><input type="email" value={formState.email} onChange={(event) => updateField("email", event.target.value)} aria-invalid={Boolean(formErrors.email)} aria-describedby={formErrors.email ? "drawer-email-error" : undefined} />{formErrors.email ? <small id="drawer-email-error" className="fieldError">{formErrors.email}</small> : null}</label>
+                  <label className="field"><span>Nome</span><input type="text" value={formState.name} onChange={(event) => updateField("name", event.target.value)} aria-invalid={Boolean(formErrors.identity)} aria-describedby={formErrors.identity ? "drawer-identity-error" : undefined} /></label>
+                  <label className="field"><span>E-mail</span><input type="email" value={formState.email} onChange={(event) => updateField("email", event.target.value)} aria-invalid={Boolean(formErrors.email || formErrors.identity)} aria-describedby={formErrors.email ? "drawer-email-error" : formErrors.identity ? "drawer-identity-error" : undefined} />{formErrors.email ? <small id="drawer-email-error" className="fieldError">{formErrors.email}</small> : null}</label>
+                  <label className="field"><span>Telefone</span><input type="tel" value={formState.phone} onChange={(event) => updateField("phone", formatPhone(event.target.value))} aria-invalid={Boolean(formErrors.identity)} aria-describedby={formErrors.identity ? "drawer-identity-error" : undefined} /></label>
+                  <label className="field"><span>Empresa</span><input type="text" value={formState.company} onChange={(event) => updateField("company", event.target.value)} /></label>
+                  <label className="field"><span>Website</span><input type="text" value={formState.website} onChange={(event) => updateField("website", event.target.value)} /></label>
+                  <label className="field"><span>Instagram</span><input type="text" value={formState.instagram} onChange={(event) => updateField("instagram", event.target.value)} placeholder="@empresa ou instagram.com/empresa" /></label>
                   <label className="field"><span>Temperatura</span><select value={formState.temperature} onChange={(event) => updateField("temperature", event.target.value as LeadTemperature)}>{leadTemperatureOptions.map((temperature) => <option key={temperature || "empty"} value={temperature}>{temperature || "Selecione"}</option>)}</select></label>
                   <label className="field"><span>Fechamento previsto <small className="dateFormatHint">Dia/Mês/Ano · Hora</small></span><BrDateInput withTime value={toDateTimeLocalInput(formState.expectedCloseAt)} onChange={(value) => updateField("expectedCloseAt", fromDateTimeLocalInput(value))} ariaLabel="Fechamento previsto" /></label>
                   {canMoveLeadStage && lead.pipelineId ? (
@@ -731,6 +770,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
                     </label>
                   ) : null}
                 </div>
+                {formErrors.identity ? <p id="drawer-identity-error" className="fieldError" role="alert">{formErrors.identity}</p> : null}
                 {stageError ? <p className="fieldError" role="alert">{stageError}</p> : null}
               </section>
             )}

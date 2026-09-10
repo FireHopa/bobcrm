@@ -257,6 +257,57 @@ export function buildNewLeadFollowUpTaskInsert(leads = [], actor = {}, at = new 
   };
 }
 
+export function buildNewLeadExpectedCloseTaskInsert(leads = [], actor = {}, at = new Date().toISOString()) {
+  const eligible = leads.filter((lead) => {
+    const dueAt = String(lead?.expectedCloseAt || "").trim();
+    const responsibleUserId = String(lead?.responsibleUserId || "").trim();
+    const closed = Boolean(lead?.isLost || lead?.deletedAt || lead?.status === "Perdido" || lead?.status === "Fechado");
+    return dueAt && responsibleUserId && !closed;
+  });
+  if (!eligible.length) return { sql: "", params: [], count: 0 };
+
+  const columns = [
+    "id", "type", "title", "description", "responsible_user_id", "responsible_name",
+    "created_by", "created_by_name", "lead_id", "due_at", "priority", "status",
+    "source", "source_key", "created_at", "updated_at",
+  ];
+  const rowSql = `(${columns.map(() => "?").join(", ")})`;
+  const params = [];
+
+  for (const lead of eligible) {
+    const leadId = String(lead.id || "");
+    const responsibleUserId = String(lead.responsibleUserId || "").trim();
+    const responsibleName = String(lead.responsible || "").trim();
+    params.push(
+      randomUUID(),
+      "follow_up",
+      `Fechamento previsto • ${lead.name || lead.company || lead.phone || "lead"}`.slice(0, 180),
+      "Criada automaticamente a partir da data prevista de fechamento do lead.",
+      responsibleUserId,
+      responsibleName,
+      actor?.id || "",
+      actor?.name || actor?.email || "Sistema",
+      leadId,
+      String(lead.expectedCloseAt || "").trim(),
+      "normal",
+      "pending",
+      "lead_expected_close",
+      `lead-expected-close:${leadId}`,
+      at,
+      at,
+    );
+  }
+
+  return {
+    sql: `INSERT INTO tasks (${columns.join(", ")}) VALUES ${eligible.map(() => rowSql).join(", ")}
+      ON DUPLICATE KEY UPDATE
+        title = VALUES(title), responsible_user_id = VALUES(responsible_user_id), responsible_name = VALUES(responsible_name),
+        due_at = VALUES(due_at), priority = VALUES(priority), status = 'pending', completed_at = '', completed_by = '', result = '', updated_at = VALUES(updated_at)`,
+    params,
+    count: eligible.length,
+  };
+}
+
 export async function persistImportLeadBatch({
   leads,
   client,

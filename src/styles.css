@@ -11146,6 +11146,75 @@ tbody tr:hover {
   justify-self: start;
 }
 
+.drawerNotesTimeline {
+  display: grid;
+  gap: 10px;
+}
+
+.drawerNoteCard {
+  display: grid;
+  gap: 8px;
+  padding: 13px 14px;
+  border: 1px solid #e4e8f0;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.drawerNoteLegacy {
+  margin-bottom: 10px;
+  background: #f8fafc;
+}
+
+.drawerNoteMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #667085;
+  font-size: 12px;
+}
+
+.drawerNoteMeta strong {
+  color: #344054;
+  font-size: 13px;
+}
+
+.drawerNoteBody {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: #1f2937;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  max-height: 6.2em;
+}
+
+.drawerNoteBodyExpanded {
+  display: block;
+  overflow: visible;
+  max-height: none;
+  -webkit-line-clamp: unset;
+}
+
+.drawerNoteToggle {
+  justify-self: start;
+  border: 0;
+  padding: 2px 0;
+  background: transparent;
+  color: #0026ff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.drawerNoteToggle:hover {
+  text-decoration: underline;
+}
+
 .serviceStatusChip:not(button) {
   display: inline-flex;
   align-items: center;
@@ -11242,6 +11311,17 @@ tbody tr:hover {
 .taskCardV42 span,
 .taskCardV42 small {
   color: #667085;
+}
+
+.taskCardCompletedV42 {
+  background: #f8fafc;
+}
+
+.taskCardV42 .taskResultV42 {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.45;
 }
 
 .taskCardActionsV42 {
@@ -12743,3 +12823,49 @@ tbody tr:hover {
     justify-content: flex-end;
   }
 }
+
+/* ActiveCampaign · importação manual de notas */
+.activeCampaignPanel { display: grid; gap: 18px; }
+.activeCampaignNotice { display: grid; gap: 5px; padding: 14px 16px; border: 1px solid var(--border-color, #dbe3ee); border-radius: 12px; background: rgba(37, 99, 235, .05); }
+.activeCampaignNotice strong { font-size: 14px; }
+.activeCampaignNotice span, .activeCampaignSecurityNote, .activeCampaignFootnote { color: var(--text-secondary, #667085); font-size: 13px; line-height: 1.5; }
+.activeCampaignForm { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.activeCampaignForm label { display: grid; gap: 7px; }
+.activeCampaignForm label span { font-size: 13px; font-weight: 700; }
+.activeCampaignForm label small { color: var(--text-secondary, #667085); }
+.activeCampaignForm input { width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid var(--border-color, #d0d5dd); border-radius: 10px; background: var(--surface, #fff); color: inherit; }
+.activeCampaignSecurityNote, .activeCampaignForm .settingsActions { grid-column: 1 / -1; }
+.activeCampaignSecurityNote { padding: 10px 12px; border-radius: 10px; background: rgba(148, 163, 184, .1); }
+.activeCampaignResults { display: grid; gap: 14px; padding-top: 4px; }
+.activeCampaignResultGrid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.activeCampaignResultGrid article { display: grid; gap: 5px; min-height: 84px; padding: 13px; border: 1px solid var(--border-color, #e4e7ec); border-radius: 12px; background: var(--surface, #fff); }
+.activeCampaignResultGrid span { color: var(--text-secondary, #667085); font-size: 12px; }
+.activeCampaignResultGrid strong { font-size: 21px; }
+@media (max-width: 900px) { .activeCampaignForm { grid-template-columns: 1fr; } .activeCampaignForm .settingsActions, .activeCampaignSecurityNote { grid-column: auto; } .activeCampaignResultGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .activeCampaignResultGrid { grid-template-columns: 1fr; } }
+
+/* ActiveCampaign · acompanhamento em tempo real */
+.activeCampaignRestoring { padding: 10px 12px; border-radius: 10px; background: rgba(148, 163, 184, .08); color: var(--text-secondary, #667085); font-size: 13px; }
+.activeCampaignProgressCard { display: grid; gap: 16px; padding: 18px; border: 1px solid var(--border-color, #dbe3ee); border-radius: 14px; background: var(--surface, #fff); box-shadow: 0 8px 24px rgba(15, 23, 42, .05); }
+.activeCampaignProgressHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.activeCampaignProgressHeader h4 { margin: 4px 0 0; font-size: 16px; line-height: 1.4; }
+.activeCampaignProgressEyebrow { color: var(--text-secondary, #667085); font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+.activeCampaignProgressPercent { font-size: 28px; line-height: 1; white-space: nowrap; }
+.activeCampaignProgressTrack { position: relative; height: 12px; overflow: hidden; border-radius: 999px; background: rgba(148, 163, 184, .22); }
+.activeCampaignProgressTrack > span { display: block; height: 100%; border-radius: inherit; background: #2563eb; transition: width .35s ease; }
+.activeCampaignStageList { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+.activeCampaignStage { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 9px 10px; border: 1px solid var(--border-color, #e4e7ec); border-radius: 10px; color: var(--text-secondary, #667085); font-size: 11px; }
+.activeCampaignStage > span { display: grid; place-items: center; flex: 0 0 22px; width: 22px; height: 22px; border-radius: 50%; background: rgba(148, 163, 184, .16); font-size: 11px; font-weight: 800; }
+.activeCampaignStage strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activeCampaignStage-active { border-color: rgba(37, 99, 235, .45); background: rgba(37, 99, 235, .06); color: inherit; }
+.activeCampaignStage-active > span { background: #2563eb; color: #fff; }
+.activeCampaignStage-done { border-color: rgba(22, 163, 74, .3); background: rgba(22, 163, 74, .05); color: inherit; }
+.activeCampaignStage-done > span { background: #16a34a; color: #fff; }
+.activeCampaignLiveGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
+.activeCampaignLiveGrid article { display: grid; gap: 4px; padding: 11px 12px; border: 1px solid var(--border-color, #e4e7ec); border-radius: 10px; background: rgba(148, 163, 184, .035); }
+.activeCampaignLiveGrid span { color: var(--text-secondary, #667085); font-size: 11px; }
+.activeCampaignLiveGrid strong { font-size: 18px; }
+.activeCampaignProgressFooter { display: flex; align-items: center; justify-content: space-between; gap: 14px; color: var(--text-secondary, #667085); font-size: 12px; }
+.activeCampaignProgressFooter strong { color: inherit; font-size: 12px; }
+@media (max-width: 1050px) { .activeCampaignStageList { grid-template-columns: repeat(3, minmax(0, 1fr)); } .activeCampaignLiveGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .activeCampaignProgressHeader, .activeCampaignProgressFooter { align-items: flex-start; flex-direction: column; } .activeCampaignStageList, .activeCampaignLiveGrid { grid-template-columns: 1fr; } .activeCampaignProgressPercent { font-size: 24px; } }

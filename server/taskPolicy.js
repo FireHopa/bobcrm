@@ -98,6 +98,13 @@ export function buildTaskAccessSql(user, alias = "t") {
   };
 }
 
+export function buildCompletedTaskAccessSql(user, alias = "t") {
+  if (canManageAllTasks(user)) return { clause: "1 = 1", params: [] };
+  const userId = String(user?.id || "").trim();
+  if (!userId) return { clause: "1 = 0", params: [] };
+  return { clause: `${alias}.completed_by = ?`, params: [userId] };
+}
+
 export function getTaskBucketWhere(bucket, alias = "t", options = {}) {
   const prefix = alias ? `${alias}.` : "";
   const normalized = String(bucket || "today").trim().toLowerCase();

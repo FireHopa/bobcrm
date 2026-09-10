@@ -9,6 +9,7 @@ import {
   buildImportDuplicateLookup,
   buildLeadBatchUpsert,
   buildNewLeadFollowUpTaskInsert,
+  buildNewLeadExpectedCloseTaskInsert,
   createImportDuplicateIndex,
   findImportDuplicateLead,
   resolveImportDbBatchSize,
@@ -84,6 +85,20 @@ test("follow-ups de leads novos são gerados em INSERT único", () => {
   assert.match(batch.sql, /INSERT INTO tasks/);
   assert.match(batch.sql, /ON DUPLICATE KEY UPDATE/);
   assert.ok(batch.params.includes("lead-next-contact:1"));
+});
+
+test("fechamentos previstos de leads novos geram tarefas automáticas em INSERT único", () => {
+  const batch = buildNewLeadExpectedCloseTaskInsert([
+    lead({ id: "1", expectedCloseAt: "2026-09-18T15:00:00", responsibleUserId: "u1", responsible: "Ana" }),
+    lead({ id: "2", expectedCloseAt: "2026-09-19T10:00:00", responsibleUserId: "" }),
+    lead({ id: "3", expectedCloseAt: "2026-09-20T10:00:00", responsibleUserId: "u2", status: "Fechado" }),
+  ], { id: "admin", name: "Admin" }, "2026-09-08T15:00:00.000Z");
+
+  assert.equal(batch.count, 1);
+  assert.match(batch.sql, /INSERT INTO tasks/);
+  assert.ok(batch.params.includes("lead-expected-close:1"));
+  assert.ok(batch.params.includes("lead_expected_close"));
+  assert.ok(batch.params.includes("Fechamento previsto • Empresa Teste"));
 });
 
 test("destino escolhido na importação define funil, etapa e status do lead", () => {

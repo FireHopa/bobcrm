@@ -157,3 +157,17 @@ CREATE TABLE IF NOT EXISTS mutation_receipts (
 );
 CREATE INDEX IF NOT EXISTS idx_mutation_receipts_actor_created ON mutation_receipts(actor_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_mutation_receipts_status_updated ON mutation_receipts(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS integration_note_imports (
+  provider TEXT NOT NULL,
+  external_note_id TEXT NOT NULL,
+  external_contact_id TEXT NOT NULL DEFAULT '',
+  note_id TEXT NOT NULL,
+  lead_id TEXT NOT NULL,
+  external_updated_at TEXT NOT NULL DEFAULT '',
+  content_hash TEXT NOT NULL DEFAULT '',
+  imported_at TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (provider, external_note_id)
+);
+CREATE INDEX IF NOT EXISTS idx_integration_note_imports_lead ON integration_note_imports(lead_id, imported_at);
+CREATE INDEX IF NOT EXISTS idx_integration_note_imports_note ON integration_note_imports(note_id);

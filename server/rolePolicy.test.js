@@ -31,14 +31,17 @@ test("pré-venda pode criar, atribuir e mover entre funis sem administrar estrut
   assert.equal(permissions.has("assign_tasks"), true);
 });
 
-test("consultor só altera os três campos comerciais autorizados", () => {
+test("consultor altera dados principais e campos comerciais autorizados", () => {
   const user = { role: "consultor_vendas" };
   const permissions = getPermissionsForRole("consultor_vendas");
   assert.equal(permissions.has("manage_own_tasks"), true);
   assert.equal(permissions.has("assign_tasks"), false);
-  assert.doesNotThrow(() => assertLeadFieldUpdateAllowed(user, ["email", "temperature", "expectedCloseAt"]));
+  assert.doesNotThrow(() => assertLeadFieldUpdateAllowed(user, [
+    "name", "email", "phone", "company", "website", "instagram", "temperature", "expectedCloseAt",
+  ]));
   assert.throws(() => assertLeadFieldUpdateAllowed(user, ["responsibleUserId"]), /só podem alterar/i);
   assert.throws(() => assertLeadFieldUpdateAllowed(user, ["status"]), /só podem alterar/i);
+  assert.throws(() => assertLeadFieldUpdateAllowed(user, ["source"]), /só podem alterar/i);
 });
 
 test("consultor só movimenta etapas dentro do funil atual", () => {

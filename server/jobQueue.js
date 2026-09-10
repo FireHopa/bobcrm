@@ -16,6 +16,7 @@ export const JOB_TYPES = Object.freeze({
   REBUILD_SEARCH_INDEX: "rebuild_search_index",
   ARCHIVE_COLD_LEADS: "archive_cold_leads",
   EXPORT_ARCHIVED_LEADS_CSV: "export_archived_leads_csv",
+  IMPORT_ACTIVE_CAMPAIGN_NOTES: "import_activecampaign_notes",
 });
 
 function nowIso(now = new Date()) {
@@ -174,12 +175,101 @@ export async function heartbeatJob({ execute, jobId, lockToken, now = new Date()
   );
 }
 
-export async function updateJobProgress({ execute, jobId, lockToken, current = 0, total = 0, message = "", now = new Date() }) {
+export async function requestJobCancellation({ execute, queryRows, jobId, requestedBy = "", now = new Date() }) {
+  const rows = await queryRows("SELECT * FROM async_jobs WHERE id = ? LIMIT 1", [jobId]);
+  if (!rows[0]) return null;
+
+  const current = rowToJob(rows[0]);
+  if ([JOB_STATUSES.COMPLETED, JOB_STATUSES.FAILED, JOB_STATUSES.CANCELED].includes(current.status)) {
+    return current;
+  }
+
+  const at = nowIso(now);
+  const result = {
+    ...(current.result || {}),
+    cancellationRequested: true,
+    cancellationRequestedAt: at,
+    cancellationRequestedBy: String(requestedBy || ""),
+  };
+
+  if (current.status === JOB_STATUSES.QUEUED) {
+    await execute(
+      `UPDATE async_jobs
+       SET status = 'canceled', result_json = ?, progress_message = 'Cancelado pelo usuário',
+           updated_at = ?, heartbeat_at = ?, locked_by = '', locked_at = '', dedupe_key = NULL,
+           error_code = 'JOB_CANCELED_BY_USER', error_message = 'Importação cancelada pelo usuário.'
+       WHERE id = ? AND status = 'queued'`,
+      [JSON.stringify(result), at, at, jobId],
+    );
+  } else if (current.status === JOB_STATUSES.RUNNING) {
+    await execute(
+      `UPDATE async_jobs
+       SET result_json = ?, progress_message = 'Cancelamento solicitado. Finalizando a etapa atual...',
+           error_code = 'JOB_CANCEL_REQUESTED', error_message = '', updated_at = ?
+       WHERE id = ? AND status = 'running'`,
+      [JSON.stringify(result), at, jobId],
+    );
+  }
+
+  const updated = await queryRows("SELECT * FROM async_jobs WHERE id = ? LIMIT 1", [jobId]);
+  return updated[0] ? rowToJob(updated[0]) : current;
+}
+
+export async function isJobCancellationRequested({ queryRows, jobId, lockToken = "" }) {
+  const rows = await queryRows(
+    "SELECT status, result_json, locked_by, error_code FROM async_jobs WHERE id = ? LIMIT 1",
+    [jobId],
+  );
+  const row = rows[0];
+  if (!row) return true;
+  if (String(row.status || "") === JOB_STATUSES.CANCELED) return true;
+  if (String(row.status || "") !== JOB_STATUSES.RUNNING) return true;
+  if (lockToken && String(row.locked_by || "") !== String(lockToken)) return true;
+  if (String(row.error_code || "") === "JOB_CANCEL_REQUESTED") return true;
+  const result = parseJson(row.result_json, {});
+  return result?.cancellationRequested === true;
+}
+
+export async function finalizeCanceledJob({ execute, queryRows, jobId, lockToken, message = "Importação cancelada pelo usuário.", now = new Date() }) {
+  const rows = await queryRows("SELECT result_json FROM async_jobs WHERE id = ? LIMIT 1", [jobId]);
+  const existingResult = parseJson(rows[0]?.result_json, {});
+  const at = nowIso(now);
+  const result = {
+    ...(existingResult || {}),
+    cancellationRequested: true,
+    canceledAt: at,
+  };
+
+  await execute(
+    `UPDATE async_jobs
+     SET status = 'canceled', result_json = ?, progress_message = 'Cancelado pelo usuário',
+         updated_at = ?, heartbeat_at = ?, locked_by = '', locked_at = '', dedupe_key = NULL,
+         error_code = 'JOB_CANCELED_BY_USER', error_message = ?
+     WHERE id = ? AND status = 'running' AND locked_by = ?`,
+    [JSON.stringify(result), at, at, String(message || "Importação cancelada pelo usuário.").slice(0, 1000), jobId, lockToken],
+  );
+}
+
+export async function updateJobProgress({ execute, jobId, lockToken, current = 0, total = 0, message = "", data, now = new Date() }) {
+  const progressCurrent = Math.max(0, Number(current || 0));
+  const progressTotal = Math.max(0, Number(total || 0));
+  const progressMessage = String(message || "").slice(0, 255);
+  const at = nowIso(now);
+
+  if (data === undefined) {
+    return execute(
+      `UPDATE async_jobs
+       SET progress_current = ?, progress_total = ?, progress_message = ?, heartbeat_at = ?, updated_at = ?
+       WHERE id = ? AND status = 'running' AND locked_by = ?`,
+      [progressCurrent, progressTotal, progressMessage, at, at, jobId, lockToken],
+    );
+  }
+
   return execute(
     `UPDATE async_jobs
-     SET progress_current = ?, progress_total = ?, progress_message = ?, heartbeat_at = ?, updated_at = ?
+     SET progress_current = ?, progress_total = ?, progress_message = ?, result_json = ?, heartbeat_at = ?, updated_at = ?
      WHERE id = ? AND status = 'running' AND locked_by = ?`,
-    [Math.max(0, Number(current || 0)), Math.max(0, Number(total || 0)), String(message || "").slice(0, 255), nowIso(now), nowIso(now), jobId, lockToken],
+    [progressCurrent, progressTotal, progressMessage, JSON.stringify({ progress: data || {} }), at, at, jobId, lockToken],
   );
 }
 
@@ -301,6 +391,7 @@ export function createJobWorker({
   claim,
   complete,
   fail,
+  cancel,
   heartbeat,
   concurrency = 2,
   pollIntervalMs = 750,
@@ -343,10 +434,14 @@ export function createJobWorker({
         const outcome = await handler(job);
         await complete(job, outcome || {});
       } catch (error) {
-        await fail(job, error, {
-          retry: shouldRetry(error, job),
-          retryDelayMs: retryDelay(job.attempts),
-        }).catch(onError);
+        if (error?.code === "JOB_CANCELED" && cancel) {
+          await cancel(job, error).catch(onError);
+        } else {
+          await fail(job, error, {
+            retry: shouldRetry(error, job),
+            retryDelayMs: retryDelay(job.attempts),
+          }).catch(onError);
+        }
       } finally {
         clearInterval(heartbeatTimer);
       }

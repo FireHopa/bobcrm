@@ -38,6 +38,7 @@ import {
 } from "../utils/api";
 import { useConfirmationDialog } from "./ConfirmationDialog";
 import { IntegrationDashboard } from "./IntegrationDashboard";
+import { ActiveCampaignNotesImport } from "./ActiveCampaignNotesImport";
 import { HandoffActivityDashboard } from "./HandoffActivityDashboard";
 
 type SettingsCenterProps = {
@@ -60,7 +61,7 @@ type UserFormState = {
   leadAccessScope: CRMUser["leadAccessScope"];
 };
 
-type AdminTab = "summary" | "users" | "backups" | "archive" | "trash" | "duplicates" | "handoffs" | "audit" | "integrations" | "system";
+type AdminTab = "summary" | "users" | "backups" | "archive" | "trash" | "duplicates" | "handoffs" | "audit" | "integrations" | "activecampaign" | "system";
 type AdminLoadModule = "users" | "teams" | "overview" | "trash" | "backups" | "audit";
 
 const adminLoadModuleLabels: Record<AdminLoadModule, string> = {
@@ -465,6 +466,7 @@ export function SettingsCenter({
     ...(canManageUsers ? [{ id: "handoffs" as AdminTab, label: "Encaminhamentos", count: 0 }] : []),
     ...(canAudit ? [{ id: "audit" as AdminTab, label: "Auditoria", count: auditEntries.length }] : []),
     ...(canAudit ? [{ id: "integrations" as AdminTab, label: "Integrações", count: 0 }] : []),
+    ...(canAudit ? [{ id: "activecampaign" as AdminTab, label: "ActiveCampaign", count: 0 }] : []),
     { id: "system" as AdminTab, label: "Sistema", count: 0 },
   ];
 
@@ -911,6 +913,10 @@ export function SettingsCenter({
 
       {activeAdminTab === "integrations" && canAudit ? (
         <IntegrationDashboard onViewLead={onViewLead} />
+      ) : null}
+
+      {activeAdminTab === "activecampaign" && canAudit ? (
+        <ActiveCampaignNotesImport />
       ) : null}
 
       {activeAdminTab === "system" ? (

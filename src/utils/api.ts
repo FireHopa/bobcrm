@@ -1501,6 +1501,93 @@ export async function downloadDatabaseBackup(): Promise<BackupEntry> {
   return backup;
 }
 
+export type ActiveCampaignConnectionResult = {
+  ok: boolean;
+  contacts: number;
+  baseUrl: string;
+};
+
+export type ActiveCampaignImportSummary = {
+  notesFetched: number;
+  contactNotes: number;
+  processedNotes: number;
+  ignoredNonContact: number;
+  ignoredByDate: number;
+  contactsReferenced: number;
+  contactsFound: number;
+  contactsMatchedByEmail: number;
+  contactsMatchedByPhone: number;
+  contactsWithoutLead: number;
+  ambiguousContacts: number;
+  imported: number;
+  updated: number;
+  duplicates: number;
+  truncated: number;
+  emptyNotes: number;
+  startedAt: string;
+  completedAt: string;
+};
+
+export type ActiveCampaignImportProgress = {
+  stage?: "preparing" | "fetch_notes" | "filter_notes" | "fetch_contacts" | "match_leads" | "import_notes" | "finalizing" | "completed";
+  stageLabel?: string;
+  stageCurrent?: number;
+  stageTotal?: number;
+  currentPage?: number;
+  scannedContacts?: number;
+  lastUpdatedAt?: string;
+  stats?: {
+    notesFetched?: number;
+    contactNotes?: number;
+    processedNotes?: number;
+    imported?: number;
+    updated?: number;
+    duplicates?: number;
+    contactsWithoutLead?: number;
+    ambiguousContacts?: number;
+    errors?: number;
+  };
+};
+
+export async function testActiveCampaignConnectionOnServer(payload: { baseUrl: string; apiToken: string }): Promise<ActiveCampaignConnectionResult> {
+  return requestApi<ActiveCampaignConnectionResult>("/api/admin/integrations/activecampaign/test", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    timeoutMs: 30000,
+  });
+}
+
+export async function startActiveCampaignNotesImportOnServer(payload: { baseUrl: string; apiToken: string; fromDate?: string }): Promise<AsyncJob> {
+  return requestApi<AsyncJob>("/api/admin/integrations/activecampaign/import-notes", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    timeoutMs: 30000,
+  });
+}
+
+export async function getAsyncJobOnServer(jobId: string): Promise<AsyncJob> {
+  return requestApi<AsyncJob>(`/api/jobs/${encodeURIComponent(jobId)}`, { timeoutMs: DEFAULT_API_TIMEOUT_MS });
+}
+
+export async function getLatestActiveCampaignImportJobOnServer(): Promise<AsyncJob | null> {
+  return requestApi<AsyncJob | null>("/api/admin/integrations/activecampaign/latest-job", { timeoutMs: DEFAULT_API_TIMEOUT_MS });
+}
+
+export async function cancelActiveCampaignImportOnServer(jobId: string): Promise<AsyncJob> {
+  return requestApi<AsyncJob>(`/api/admin/integrations/activecampaign/jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: "POST",
+    timeoutMs: 30000,
+  });
+}
+
+export async function importActiveCampaignNotesOnServer(payload: { baseUrl: string; apiToken: string; fromDate?: string }): Promise<ActiveCampaignImportSummary> {
+  const queued = await startActiveCampaignNotesImportOnServer(payload);
+  const completed = await waitForJob(queued, { timeoutMs: 60 * 60 * 1000, pollIntervalMs: 1200 });
+  const summary = completed.result?.summary as ActiveCampaignImportSummary | undefined;
+  if (!summary) throw new Error("A importação terminou sem retornar o resumo esperado.");
+  return summary;
+}
+
 export type IntegrationHealthStatus = "healthy" | "attention" | "critical";
 
 export type IntegrationDashboardEvent = {

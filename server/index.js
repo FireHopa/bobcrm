@@ -17,6 +17,7 @@ import { createProcessHeartbeatRuntime, readProcessHeartbeat } from "./processHe
 import { createZapeBidirectionalSyncRuntime } from "./zapeBidirectionalSync.js";
 import { ensureWhatsappAttribution, getWhatsappAccountConversionReport, recordWhatsappActivity, resolveWhatsappReportRange, whatsappConversionCsv } from "./whatsappAttribution.js";
 import { getAssignmentCandidatesForTenant, matchAssignmentUsers, nextRoundRobinUser, parseAssignmentCandidates, parseTenantAssignmentMap } from "./zapeAssignment.js";
+import { importActiveCampaignNotes, openActiveCampaignCredentials, sealActiveCampaignCredentials, testActiveCampaignConnection } from "./activeCampaignImport.js";
 import { description as leadScopeMigrationDescription, up as runLeadScopeMigration, version as leadScopeMigrationVersion } from "./migrations/20260706_02_lead_scope_teams.js";
 import { description as commercialRolesMigrationDescription, up as runCommercialRolesMigration, version as commercialRolesMigrationVersion } from "./migrations/20260706_03_commercial_roles_notes.js";
 import { description as tasksTodayMigrationDescription, up as runTasksTodayMigration, version as tasksTodayMigrationVersion } from "./migrations/20260706_04_tasks_today.js";
@@ -57,6 +58,7 @@ import { description as taskDueMinutePrecisionMigrationDescription, up as runTas
 import { description as sdrOriginAttributionMigrationDescription, up as runSdrOriginAttributionMigration, version as sdrOriginAttributionMigrationVersion } from "./migrations/20260827_23_sdr_origin_attribution.js";
 import { description as runtimeProcessHeartbeatMigrationDescription, up as runRuntimeProcessHeartbeatMigration, version as runtimeProcessHeartbeatMigrationVersion } from "./migrations/20260827_24_runtime_process_heartbeat.js";
 import { description as leadHandoffAuditMigrationDescription, up as runLeadHandoffAuditMigration, version as leadHandoffAuditMigrationVersion } from "./migrations/20260827_25_lead_handoff_audit.js";
+import { description as activeCampaignNoteImportMigrationDescription, up as runActiveCampaignNoteImportMigration, version as activeCampaignNoteImportMigrationVersion } from "./migrations/20260908_26_activecampaign_note_import.js";
 import {
   createEncryptedMysqlBackup,
   removeBackupArtifact,
@@ -87,6 +89,7 @@ import {
   assertTaskAssignmentAllowed,
   assertTaskPayload,
   buildTaskAccessSql,
+  buildCompletedTaskAccessSql,
   canManageAllTasks,
   getTaskBucketWhere,
   normalizeTaskPriority,
@@ -171,9 +174,12 @@ import {
   deleteExpiredJob,
   enqueueJob,
   failJob,
+  finalizeCanceledJob,
   heartbeatJob,
+  isJobCancellationRequested,
   listExpiredJobs,
   recoverStaleJobs,
+  requestJobCancellation,
   rowToJob,
   updateJobProgress,
 } from "./jobQueue.js";
@@ -221,6 +227,7 @@ import {
   buildImportDuplicateLookup,
   buildLeadBatchUpsert,
   buildNewLeadFollowUpTaskInsert,
+  buildNewLeadExpectedCloseTaskInsert,
   createImportDuplicateIndex,
   findImportDuplicateLead,
   getImportPrimaryKey,
@@ -294,6 +301,7 @@ const SEARCH_INDEX_REBUILD_BATCH_SIZE = readBoundedEnvironmentInteger("SEARCH_IN
 const IMPORT_DB_BATCH_SIZE = readBoundedEnvironmentInteger("IMPORT_DB_BATCH_SIZE", 500, 100, 1000);
 const SEARCH_INDEX_REBUILD_ON_START = process.env.SEARCH_INDEX_REBUILD_ON_START === "1";
 const ZAPE_INTEGRATION_KEY = String(process.env.ZAPE_INTEGRATION_KEY || "").trim();
+const INTEGRATION_CREDENTIALS_SECRET = String(process.env.INTEGRATION_CREDENTIALS_SECRET || ZAPE_INTEGRATION_KEY || "").trim();
 const ZAPE_MONITOR_URL = String(process.env.ZAPE_MONITOR_URL || "").trim();
 const ZAPE_MONITOR_KEY = String(process.env.ZAPE_MONITOR_KEY || "").trim();
 const ZAPE_MONITOR_TIMEOUT_MS = readBoundedEnvironmentInteger("ZAPE_MONITOR_TIMEOUT_MS", 10000, 1000, 60000);
@@ -680,6 +688,8 @@ async function runSchemaMigrations() {
     () => runRuntimeProcessHeartbeatMigration({ execute }));
   await runVersionedMigration(leadHandoffAuditMigrationVersion, leadHandoffAuditMigrationDescription,
     () => runLeadHandoffAuditMigration({ execute }));
+  await runVersionedMigration(activeCampaignNoteImportMigrationVersion, activeCampaignNoteImportMigrationDescription,
+    () => runActiveCampaignNoteImportMigration({ execute }));
   try {
     await addIndexIfMissing("leads", "ft_leads_search_text", "FULLTEXT INDEX ft_leads_search_text (search_text)");
     leadSearchFullTextEnabled = true;
@@ -2951,7 +2961,7 @@ async function refreshLeadNextContactFromTasks(leadId, client = pool) {
   const normalizedLeadId = String(leadId || "").trim();
   if (!normalizedLeadId) return "";
   const row = await statementFirstRow(
-    "SELECT MIN(due_at) AS next_due_at FROM tasks WHERE lead_id = ? AND status = 'pending' AND TRIM(COALESCE(due_at, '')) != ''",
+    "SELECT MIN(due_at) AS next_due_at FROM tasks WHERE lead_id = ? AND status = 'pending' AND TRIM(COALESCE(due_at, '')) != '' AND COALESCE(source, '') != 'lead_expected_close'",
     [normalizedLeadId],
     client,
   );
@@ -3306,6 +3316,68 @@ async function syncLeadNextContactTask(lead, actor, client = pool) {
   await refreshLeadNextContactFromTasks(leadId, client);
 }
 
+async function syncLeadExpectedCloseTask(lead, actor, client = pool, options = {}) {
+  const leadId = String(lead?.id || "").trim();
+  if (!leadId) return null;
+
+  const sourceKey = `lead-expected-close:${leadId}`;
+  const dueAt = String(lead?.expectedCloseAt || "").trim();
+  const responsibleUserId = String(lead?.responsibleUserId || "").trim();
+  const responsibleName = String(lead?.responsible || "").trim();
+  const isClosed = Boolean(lead?.isLost || lead?.status === "Perdido" || lead?.status === "Fechado" || lead?.deletedAt);
+  const existing = await statementFirstRow("SELECT * FROM tasks WHERE source_key = ? LIMIT 1 FOR UPDATE", [sourceKey], client);
+
+  if (!dueAt || !responsibleUserId || isClosed) {
+    if (existing?.status === "pending") {
+      await execute(
+        "UPDATE tasks SET status = 'canceled', source_key = NULL, result = CASE WHEN TRIM(COALESCE(result, '')) = '' THEN ? ELSE result END, updated_at = ? WHERE id = ?",
+        [!dueAt ? "Tarefa cancelada porque a data prevista de fechamento foi removida." : !responsibleUserId ? "Tarefa cancelada porque o lead está sem consultor responsável." : "Tarefa cancelada porque o lead foi encerrado.", nowIso(), existing.id],
+        client,
+      );
+    }
+    return null;
+  }
+
+  const title = `Fechamento previsto • ${lead.name || lead.company || lead.phone || "lead"}`.slice(0, 180);
+  const at = nowIso();
+
+  if (existing) {
+    await execute(
+      `UPDATE tasks
+       SET title = ?, description = ?, responsible_user_id = ?, responsible_name = ?, due_at = ?, priority = 'normal',
+           status = 'pending', completed_at = '', completed_by = '', result = '', source = 'lead_expected_close', updated_at = ?
+       WHERE id = ?`,
+      [title, "Criada automaticamente a partir da data prevista de fechamento do lead.", responsibleUserId, responsibleName, dueAt, at, existing.id],
+      client,
+    );
+    return getTaskById(existing.id, client);
+  }
+
+  if (!options.forceRecreate) {
+    const historical = await statementFirstRow(
+      `SELECT id FROM tasks
+       WHERE lead_id = ? AND source = 'lead_expected_close' AND due_at = ? AND status IN ('completed', 'canceled')
+       ORDER BY updated_at DESC LIMIT 1`,
+      [leadId, dueAt],
+      client,
+    );
+    if (historical) return getTaskById(historical.id, client);
+  }
+
+  await execute(
+    `INSERT INTO tasks (
+      id, type, title, description, responsible_user_id, responsible_name,
+      created_by, created_by_name, lead_id, due_at, priority, status,
+      source, source_key, created_at, updated_at
+    ) VALUES (?, 'follow_up', ?, ?, ?, ?, ?, ?, ?, ?, 'normal', 'pending', 'lead_expected_close', ?, ?, ?)`,
+    [randomUUID(), title, "Criada automaticamente a partir da data prevista de fechamento do lead.", responsibleUserId, responsibleName, actor?.id || "", actor?.name || actor?.email || "Sistema", leadId, dueAt, sourceKey, at, at],
+    client,
+  );
+
+  const created = await statementFirstRow("SELECT id FROM tasks WHERE source_key = ? LIMIT 1", [sourceKey], client);
+  return created ? getTaskById(created.id, client) : null;
+}
+
 function assertAdminTaskFilterAllowed(currentUser, hasAdminFilter) {
   if (!hasAdminFilter) return;
   if (normalizeUserRole(currentUser?.role) !== USER_ROLES.ADMIN) {
@@ -3369,8 +3441,8 @@ function buildAdminTaskDateFilter(requestUrl, alias = "t", useDateColumns = fals
   throw error;
 }
 
-function buildTaskAccessWithAdminResponsibleFilter(currentUser, requestUrl, alias = "t") {
-  const base = buildTaskAccessSql(currentUser, alias);
+function buildTaskAccessWithAdminResponsibleFilter(currentUser, requestUrl, alias = "t", baseAccessSql = null) {
+  const base = baseAccessSql || buildTaskAccessSql(currentUser, alias);
   const responsibleUserId = String(requestUrl?.searchParams?.get("responsibleUserId") || "").trim();
   if (!responsibleUserId) return base;
   assertAdminTaskFilterAllowed(currentUser, true);
@@ -3384,7 +3456,9 @@ async function listTasksForUser(currentUser, requestUrl, client = pool) {
   const bucket = String(requestUrl.searchParams.get("bucket") || "today");
   const limit = parseBoundedInteger(requestUrl.searchParams.get("limit"), 50, 1, 200);
   const useDateColumns = dateColumnRuntime.isReady();
-  const accessSql = buildTaskAccessWithAdminResponsibleFilter(currentUser, requestUrl, "t");
+  const normalizedBucket = bucket.trim().toLowerCase();
+  const baseAccessSql = normalizedBucket === "completed" ? buildCompletedTaskAccessSql(currentUser, "t") : null;
+  const accessSql = buildTaskAccessWithAdminResponsibleFilter(currentUser, requestUrl, "t", baseAccessSql);
   const dateMode = String(requestUrl.searchParams.get("dateMode") || "").trim();
   assertAdminTaskFilterAllowed(currentUser, Boolean(dateMode));
   const bucketWhere = getTaskBucketWhere(dateMode ? "all" : bucket, "t", { useDateColumns });
@@ -3404,14 +3478,17 @@ async function listTasksForUser(currentUser, requestUrl, client = pool) {
     where.push("t.lead_id = ?");
     params.push(leadId);
   }
+  const taskOrder = normalizedBucket === "completed"
+    ? "COALESCE(NULLIF(t.completed_at, ''), t.updated_at) DESC"
+    : `CASE t.status WHEN 'pending' THEN 1 ELSE 2 END,
+              CASE t.priority WHEN 'urgente' THEN 1 WHEN 'alta' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END,
+              ${taskDueOrder} ASC, ${taskCreatedOrder} ASC`;
   const rows = await queryRows(
     `SELECT t.*, l.name AS lead_name, l.company AS lead_company, l.phone AS lead_phone
      FROM tasks t
      LEFT JOIN leads l ON l.id = t.lead_id
      WHERE ${where.join(" AND ")}
-     ORDER BY CASE t.status WHEN 'pending' THEN 1 ELSE 2 END,
-              CASE t.priority WHEN 'urgente' THEN 1 WHEN 'alta' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END,
-              ${taskDueOrder} ASC, ${taskCreatedOrder} ASC
+     ORDER BY ${taskOrder}
      LIMIT ?`,
     [...params, limit],
     client,
@@ -4330,13 +4407,17 @@ async function performImportLeadsJob(job) {
         invalidateLeadSummaryCache: () => invalidateLeadSummaryCache(accessContext),
       });
 
-      const newFollowUps = buildNewLeadFollowUpTaskInsert(batchResult.newLeads, currentUser, nowIso());
+      const taskBatchAt = nowIso();
+      const newFollowUps = buildNewLeadFollowUpTaskInsert(batchResult.newLeads, currentUser, taskBatchAt);
       if (newFollowUps.sql) await execute(newFollowUps.sql, newFollowUps.params, client);
+      const newExpectedCloseTasks = buildNewLeadExpectedCloseTaskInsert(batchResult.newLeads, currentUser, taskBatchAt);
+      if (newExpectedCloseTasks.sql) await execute(newExpectedCloseTasks.sql, newExpectedCloseTasks.params, client);
 
       // Leads já existentes podem possuir tarefas manuais/legadas. Neles mantemos
       // a reconciliação completa para preservar exatamente as regras atuais.
       for (const savedLead of batchResult.existingLeads) {
         if (savedLead?.nextContactAt) await syncLeadNextContactTask(savedLead, currentUser, client);
+        await syncLeadExpectedCloseTask(savedLead, currentUser, client);
         await reconcileLeadTasksForLifecycle(savedLead, currentUser, client);
       }
 
@@ -4512,6 +4593,36 @@ async function performBackupJob(job) {
   return { result: { backup: rowToBackup(backup) }, expiresAt: job.expiresAt };
 }
 
+async function performActiveCampaignNotesImportJob(job) {
+  const actor = await getActiveJobActor(job);
+  requirePermission(actor, "read_audit");
+  requirePermission(actor, "import_leads");
+  const fromDate = String(job.payload?.fromDate || "").trim();
+  try {
+    const credentials = openActiveCampaignCredentials(job.payload?.credentials, INTEGRATION_CREDENTIALS_SECRET);
+    const summary = await importActiveCampaignNotes({
+      credentials,
+      fromDate,
+      queryRows,
+      execute,
+      withTransaction,
+      updateProgress: (current, total, message, data) => updateJobProgress({ execute, jobId: job.id, lockToken: job.lockedBy, current, total, message, data }),
+      shouldCancel: () => isJobCancellationRequested({ queryRows, jobId: job.id, lockToken: job.lockedBy }),
+    });
+    await recordAudit({
+      entityType: "integration",
+      entityId: `activecampaign:${job.id}`,
+      action: "activecampaign_notes_imported",
+      actor,
+      summary: `Importou ${summary.imported} nota(s) da ActiveCampaign e atualizou ${summary.updated}.`,
+      changes: { ...summary, apiToken: undefined },
+    });
+    return { result: { summary }, expiresAt: job.expiresAt };
+  } finally {
+    await execute("UPDATE async_jobs SET payload_json = ? WHERE id = ? AND locked_by = ?", [JSON.stringify({ fromDate, credentials: "redacted" }), job.id, job.lockedBy]).catch(() => undefined);
+  }
+}
+
 async function performSearchIndexRebuildJob(job) {
   let processed = 0;
   while (!isShuttingDown) {
@@ -4568,6 +4679,7 @@ async function startPersistentJobWorker() {
     [JOB_TYPES.REBUILD_SEARCH_INDEX]: (job) => runHeavyJobSerially(job, () => performSearchIndexRebuildJob(job)),
     [JOB_TYPES.ARCHIVE_COLD_LEADS]: (job) => runHeavyJobSerially(job, () => hotColdRuntime.performArchiveJob(job)),
     [JOB_TYPES.EXPORT_ARCHIVED_LEADS_CSV]: (job) => runHeavyJobSerially(job, () => hotColdRuntime.performArchiveCsvExportJob(job)),
+    [JOB_TYPES.IMPORT_ACTIVE_CAMPAIGN_NOTES]: (job) => runHeavyJobSerially(job, () => performActiveCampaignNotesImportJob(job)),
   };
 
   jobWorker = createJobWorker({
@@ -4583,6 +4695,18 @@ async function startPersistentJobWorker() {
     }),
     heartbeat: (job) => heartbeatJob({ execute, jobId: job.id, lockToken: job.lockedBy }),
     complete: async (job, outcome) => {
+      if (job.type === JOB_TYPES.IMPORT_ACTIVE_CAMPAIGN_NOTES
+        && await isJobCancellationRequested({ queryRows, jobId: job.id, lockToken: job.lockedBy })) {
+        await finalizeCanceledJob({
+          execute,
+          queryRows,
+          jobId: job.id,
+          lockToken: job.lockedBy,
+          message: "Importação cancelada pelo usuário.",
+        });
+        await removeJobArtifact({ storageRoot: jobArtifactSettings.storageRoot, storageKey: job.payloadStorageKey }).catch(() => undefined);
+        return;
+      }
       await completeJob({
         execute,
         jobId: job.id,
@@ -4593,7 +4717,29 @@ async function startPersistentJobWorker() {
       });
       await removeJobArtifact({ storageRoot: jobArtifactSettings.storageRoot, storageKey: job.payloadStorageKey }).catch(() => undefined);
     },
+    cancel: async (job, error) => {
+      await finalizeCanceledJob({
+        execute,
+        queryRows,
+        jobId: job.id,
+        lockToken: job.lockedBy,
+        message: error?.message || "Importação cancelada pelo usuário.",
+      });
+      await removeJobArtifact({ storageRoot: jobArtifactSettings.storageRoot, storageKey: job.payloadStorageKey }).catch(() => undefined);
+    },
     fail: async (job, error, retryOptions) => {
+      if (job.type === JOB_TYPES.IMPORT_ACTIVE_CAMPAIGN_NOTES
+        && await isJobCancellationRequested({ queryRows, jobId: job.id, lockToken: job.lockedBy })) {
+        await finalizeCanceledJob({
+          execute,
+          queryRows,
+          jobId: job.id,
+          lockToken: job.lockedBy,
+          message: "Importação cancelada pelo usuário.",
+        });
+        await removeJobArtifact({ storageRoot: jobArtifactSettings.storageRoot, storageKey: job.payloadStorageKey }).catch(() => undefined);
+        return;
+      }
       const decision = await failJob({ execute, job, error, ...retryOptions });
       if (!decision.canRetry) {
         await removeJobArtifact({ storageRoot: jobArtifactSettings.storageRoot, storageKey: job.payloadStorageKey }).catch(() => undefined);
@@ -4848,6 +4994,87 @@ async function handleApi(request, response, requestUrl) {
     providedToken: request.headers["x-csrf-token"],
     expectedHash: authContext.csrfTokenHash,
   });
+
+  if (pathname === "/api/admin/integrations/activecampaign/latest-job" && method === "GET") {
+    requirePermission(currentUser, "read_audit");
+    requirePermission(currentUser, "import_leads");
+    const rows = await queryRows(
+      `SELECT * FROM async_jobs
+       WHERE type = ? AND created_by = ?
+       ORDER BY created_at DESC LIMIT 1`,
+      [JOB_TYPES.IMPORT_ACTIVE_CAMPAIGN_NOTES, currentUser.id],
+    );
+    sendJson(response, 200, rows[0] ? publicJob(rows[0]) : null);
+    return;
+  }
+
+  const activeCampaignCancelJobMatch = pathname.match(/^\/api\/admin\/integrations\/activecampaign\/jobs\/([^/]+)\/cancel$/);
+  if (activeCampaignCancelJobMatch && method === "POST") {
+    requirePermission(currentUser, "read_audit");
+    requirePermission(currentUser, "import_leads");
+    const jobId = decodeURIComponent(activeCampaignCancelJobMatch[1]);
+    const jobRow = await getJobRow(jobId);
+    if (!jobRow) {
+      const error = new Error("Importação não encontrada.");
+      error.statusCode = 404;
+      throw error;
+    }
+    assertJobAccess(jobRow, currentUser);
+    const currentJob = rowToJob(jobRow);
+    if (currentJob.type !== JOB_TYPES.IMPORT_ACTIVE_CAMPAIGN_NOTES) {
+      const error = new Error("Este processamento não é uma importação da ActiveCampaign.");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const canceled = await requestJobCancellation({
+      execute,
+      queryRows,
+      jobId,
+      requestedBy: currentUser.id,
+    });
+
+    const fromDate = String(currentJob.payload?.fromDate || "").trim();
+    await execute(
+      "UPDATE async_jobs SET payload_json = ? WHERE id = ?",
+      [JSON.stringify({ fromDate, credentials: "redacted" }), jobId],
+    ).catch(() => undefined);
+
+    const refreshed = await getJobRow(jobId);
+    sendJson(response, 200, publicJob(refreshed || canceled));
+    return;
+  }
+
+  if (pathname === "/api/admin/integrations/activecampaign/test" && method === "POST") {
+    requirePermission(currentUser, "read_audit");
+    requirePermission(currentUser, "import_leads");
+    const body = await readRequestBody(request);
+    const result = await testActiveCampaignConnection({ baseUrl: body.baseUrl, apiToken: body.apiToken });
+    sendJson(response, 200, result);
+    return;
+  }
+
+  if (pathname === "/api/admin/integrations/activecampaign/import-notes" && method === "POST") {
+    requirePermission(currentUser, "read_audit");
+    requirePermission(currentUser, "import_leads");
+    const body = await readRequestBody(request);
+    const fromDate = String(body.fromDate || "").trim();
+    if (fromDate && !/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) {
+      const error = new Error("A data inicial da importação é inválida.");
+      error.statusCode = 400;
+      throw error;
+    }
+    const credentials = sealActiveCampaignCredentials({ baseUrl: body.baseUrl, apiToken: body.apiToken }, INTEGRATION_CREDENTIALS_SECRET);
+    const queued = await enqueuePersistentJob({
+      type: JOB_TYPES.IMPORT_ACTIVE_CAMPAIGN_NOTES,
+      payload: { credentials, fromDate },
+      actor: currentUser,
+      dedupeKey: `activecampaign-notes:${currentUser.id}`,
+      maxAttempts: 1,
+    });
+    sendJson(response, 202, publicJob(queued.job));
+    return;
+  }
 
   if (pathname === "/api/auth/change-password" && method === "POST") {
     await assertPasswordChangeRateLimit(request, currentUser.id);
@@ -6082,6 +6309,9 @@ async function handleApi(request, response, requestUrl) {
       const changes = before ? diffLeads(before, result.lead) : result.lead;
       await recordAudit({ entityType: "lead", entityId: result.lead.id, action: before ? "lead_updated" : result.action === "merged" ? "lead_merged_on_create" : "lead_created", actor: currentUser, summary: before ? `Atualizou lead: ${result.lead.name}` : `Criou lead: ${result.lead.name}`, changes }, client);
       await syncLeadNextContactTask(result.lead, currentUser, client);
+      await syncLeadExpectedCloseTask(result.lead, currentUser, client, {
+        forceRecreate: (!before && result.action !== "merged") || changedFields.includes("expectedCloseAt"),
+      });
       await reconcileLeadTasksForLifecycle(result.lead, currentUser, client);
       await completeMutationReceipt({ execute, client, receipt, response: result.lead, nowIso });
       return result.lead;
@@ -6282,6 +6512,7 @@ async function handleApi(request, response, requestUrl) {
       // Consolida next_contact_at + perfil comercial uma única vez ao final do handoff.
       await refreshLeadNextContactFromTasks(leadId, client);
       const savedLead = await getLeadById(leadId, {}, client);
+      await syncLeadExpectedCloseTask(savedLead, currentUser, client, { forceRecreate: true });
       await execute(
         `INSERT INTO lead_handoffs (
           id, lead_id, lead_name, lead_company,
@@ -6537,6 +6768,7 @@ async function handleApi(request, response, requestUrl) {
       const changes = before ? diffLeads(before, result) : result;
       await recordAudit({ entityType: "lead", entityId: leadId, action: before ? "lead_updated" : "lead_created", actor: currentUser, summary: before ? `Atualizou lead: ${result.name}` : `Criou lead: ${result.name}`, changes }, client);
       await syncLeadNextContactTask(result, currentUser, client);
+      await syncLeadExpectedCloseTask(result, currentUser, client, { forceRecreate: changedFields.includes("expectedCloseAt") });
       await reconcileLeadTasksForLifecycle(result, currentUser, client);
       await completeMutationReceipt({ execute, client, receipt, response: result, nowIso });
       return result;

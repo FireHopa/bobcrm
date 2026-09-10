@@ -51,7 +51,9 @@ function getTaskTone(priority: TaskPriority) {
 
 export const DailyOperation = memo(function DailyOperation({ currentUser, onViewLead, onDataChanged }: DailyOperationProps) {
   const [dashboard, setDashboard] = useState<TodayDashboard | null>(null);
-  const [activeBucket, setActiveBucket] = useState<"overdue" | "today" | "upcoming">("today");
+  const [activeBucket, setActiveBucket] = useState<"overdue" | "today" | "upcoming" | "completed">("today");
+  const [completedTasks, setCompletedTasks] = useState<CRMTask[]>([]);
+  const [completedError, setCompletedError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -76,10 +78,17 @@ export const DailyOperation = memo(function DailyOperation({ currentUser, onView
   async function refreshDashboard() {
     setIsLoading(true);
     setError("");
+    setCompletedError("");
     try {
-      setDashboard(await fetchTodayDashboardFromServer({
-        responsibleUserId: isAdmin && adminResponsibleUserId ? adminResponsibleUserId : undefined,
-      }));
+      const responsibleUserId = isAdmin && adminResponsibleUserId ? adminResponsibleUserId : undefined;
+      const nextDashboard = await fetchTodayDashboardFromServer({ responsibleUserId });
+      setDashboard(nextDashboard);
+      try {
+        setCompletedTasks(await fetchTasksFromServer({ bucket: "completed", limit: 200, responsibleUserId }));
+      } catch (caughtCompletedError) {
+        setCompletedTasks([]);
+        setCompletedError(caughtCompletedError instanceof Error ? caughtCompletedError.message : "Não foi possível carregar o histórico de tarefas concluídas.");
+      }
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Não foi possível carregar a rotina de hoje.");
     } finally {
@@ -138,7 +147,11 @@ export const DailyOperation = memo(function DailyOperation({ currentUser, onView
     void refreshAdminFilteredTasks();
   }, [adminResponsibleUserId, adminDateMode, adminDateFrom, adminDateTo, currentUser?.id]);
 
-  const visibleTasks = hasCustomDateFilter ? filteredTasks : dashboard?.tasks[activeBucket] || [];
+  const visibleTasks = hasCustomDateFilter
+    ? filteredTasks
+    : activeBucket === "completed"
+      ? completedTasks
+      : dashboard?.tasks[activeBucket] || [];
   const nextAction = useMemo(() => {
     if (hasCustomDateFilter) return customFilterReady ? filteredTasks[0] || null : null;
     return dashboard?.tasks.overdue[0] || dashboard?.tasks.today[0] || dashboard?.tasks.upcoming[0] || null;
@@ -260,13 +273,24 @@ export const DailyOperation = memo(function DailyOperation({ currentUser, onView
               <button type="button" className={activeBucket === "overdue" ? "active" : ""} onClick={() => setActiveBucket("overdue")}>Atrasadas ({dashboard?.taskSummary.overdue || 0})</button>
               <button type="button" className={activeBucket === "today" ? "active" : ""} onClick={() => setActiveBucket("today")}>Hoje ({dashboard?.taskSummary.today || 0})</button>
               <button type="button" className={activeBucket === "upcoming" ? "active" : ""} onClick={() => setActiveBucket("upcoming")}>Próximas ({dashboard?.taskSummary.upcoming || 0})</button>
+              <button type="button" className={activeBucket === "completed" ? "active" : ""} onClick={() => setActiveBucket("completed")}>Concluídas</button>
             </div>
           ) : null}
           <div className="taskQueueV42">
+            {!hasCustomDateFilter && activeBucket === "completed" && completedError ? <p className="fieldError" role="alert">{completedError}</p> : null}
             {isFiltering ? <div className="operationEmptyCompact"><strong>Carregando tarefas filtradas...</strong></div> : visibleTasks.length ? visibleTasks.map((task) => (
-              <article className="taskCardV42" key={task.id}>
-                <div><strong>{task.title}</strong><span>{taskTypeLabels[task.type]} • {task.responsibleName || "Sem responsável"}</span><small>{task.leadName || task.leadCompany || task.leadPhone || "Sem lead"} • {formatTaskDate(task.dueAt)}</small></div>
-                <div className="taskCardActionsV42"><span className={`badge ${getTaskTone(task.priority)}`}>{priorityLabels[task.priority]}</span>{task.leadId ? <button className="secondaryButton" type="button" onClick={() => onViewLead(task.leadId)}>Abrir lead</button> : null}<button className="primaryButton" type="button" onClick={() => setTaskToComplete(task)} disabled={isSaving}>Concluir</button></div>
+              <article className={`taskCardV42 ${task.status === "completed" ? "taskCardCompletedV42" : ""}`} key={task.id}>
+                <div>
+                  <strong>{task.title}</strong>
+                  <span>{taskTypeLabels[task.type]} • {task.responsibleName || "Sem responsável"}</span>
+                  <small>{task.leadName || task.leadCompany || task.leadPhone || "Sem lead"} • {task.status === "completed" && task.completedAt ? `Concluída em ${formatTaskDate(task.completedAt)}` : formatTaskDate(task.dueAt)}</small>
+                  {task.status === "completed" && task.result ? <small className="taskResultV42">Resultado: {task.result}</small> : null}
+                </div>
+                <div className="taskCardActionsV42">
+                  <span className={`badge ${task.status === "completed" ? "badgeGreen" : getTaskTone(task.priority)}`}>{task.status === "completed" ? "Concluída" : priorityLabels[task.priority]}</span>
+                  {task.leadId ? <button className="secondaryButton" type="button" onClick={() => onViewLead(task.leadId)}>Abrir lead</button> : null}
+                  {task.status === "pending" ? <button className="primaryButton" type="button" onClick={() => setTaskToComplete(task)} disabled={isSaving}>Concluir</button> : null}
+                </div>
               </article>
             )) : <div className="operationEmptyCompact"><strong>{hasCustomDateFilter && !customFilterReady ? "Defina o período para carregar a fila." : "Nenhuma tarefa nesta fila."}</strong></div>}
           </div>

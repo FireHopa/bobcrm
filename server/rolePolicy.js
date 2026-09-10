@@ -63,7 +63,12 @@ export const PERMISSIONS_BY_ROLE = Object.freeze({
 });
 
 export const CONSULTANT_EDITABLE_LEAD_FIELDS = Object.freeze(new Set([
+  "name",
   "email",
+  "phone",
+  "company",
+  "website",
+  "instagram",
   "temperature",
   "expectedCloseAt",
 ]));
@@ -109,7 +114,7 @@ export function assertLeadFieldUpdateAllowed(user, changedFields = []) {
 
   const forbiddenFields = changedFields.filter((field) => !CONSULTANT_EDITABLE_LEAD_FIELDS.has(field));
   if (forbiddenFields.length) {
-    const error = new Error(`Consultores de vendas só podem alterar e-mail, termômetro e data prevista de fechamento. Campos bloqueados: ${forbiddenFields.join(", ")}.`);
+    const error = new Error(`Consultores de vendas só podem alterar os dados principais do lead, termômetro e data prevista de fechamento. Campos bloqueados: ${forbiddenFields.join(", ")}.`);
     error.statusCode = 403;
     throw error;
   }
