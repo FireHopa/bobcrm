@@ -1700,3 +1700,176 @@ export async function downloadWhatsappAccountConversionCsv(filters: { period?: s
   const params = new URLSearchParams(); Object.entries(filters).forEach(([key,value]) => { if (value) params.set(key,String(value)); });
   await downloadFile(`/api/admin/integrations/zape/conversion.csv?${params.toString()}`, `conversao-whatsapp-${new Date().toISOString().slice(0,10)}.csv`);
 }
+
+export type WhatsappConnectionStatus = {
+  enabled: boolean;
+  status: "disconnected" | "initializing" | "qr" | "authenticated" | "ready" | "reconnecting" | "auth_failure" | "error" | string;
+  connected: boolean;
+  qrCodeDataUrl: string;
+  phone: string;
+  displayName: string;
+  lastError: string;
+  lastQrAt: string;
+  lastReadyAt: string;
+  lastDisconnectAt: string;
+};
+
+export type WhatsappManagedAccount = {
+  userId: string;
+  userName: string;
+  userEmail: string;
+  role: string;
+  teamId: string;
+  enabled: boolean;
+  status: string;
+  connected: boolean;
+  phone: string;
+  displayName: string;
+  lastReadyAt: string;
+  lastDisconnectAt: string;
+  lastError: string;
+};
+
+export type WhatsappMessage = {
+  id: string;
+  chatId: string;
+  fromMe: boolean;
+  body: string;
+  type: string;
+  hasMedia: boolean;
+  mediaKind: "" | "image" | "audio" | "video" | "document" | "sticker" | "media";
+  timestamp: number;
+  createdAt: string;
+  ack: number;
+};
+
+export type WhatsappChat = {
+  id: string;
+  name: string;
+  isGroup: boolean;
+  unreadCount: number;
+  timestamp: number;
+  updatedAt: string;
+  lastMessage: WhatsappMessage | null;
+};
+
+export type WhatsappMedia = {
+  mimetype: string;
+  data: string;
+  filename: string;
+  filesize: number;
+};
+
+export type WhatsappLeadRouting = {
+  pipelineId: string;
+  stageId: string;
+  pipelineName?: string;
+  stageName?: string;
+  usesDefault?: boolean;
+  invalid?: boolean;
+};
+
+function whatsappAccountQuery(accountUserId = "") {
+  const params = new URLSearchParams();
+  if (accountUserId.trim()) params.set("accountUserId", accountUserId.trim());
+  return params;
+}
+
+export function fetchWhatsappAccounts(): Promise<WhatsappManagedAccount[]> {
+  return requestApi<WhatsappManagedAccount[]>("/api/whatsapp/accounts", { timeoutMs: 15000 });
+}
+
+export function fetchWhatsappStatus(accountUserId = ""): Promise<WhatsappConnectionStatus> {
+  const params = whatsappAccountQuery(accountUserId);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return requestApi<WhatsappConnectionStatus>(`/api/whatsapp/status${suffix}`, { timeoutMs: 15000 });
+}
+
+export function connectWhatsapp(accountUserId = ""): Promise<WhatsappConnectionStatus> {
+  return requestApi<WhatsappConnectionStatus>("/api/whatsapp/connect", {
+    method: "POST",
+    body: JSON.stringify(accountUserId ? { accountUserId } : {}),
+    timeoutMs: 30000,
+  });
+}
+
+export function reconnectWhatsapp(accountUserId = ""): Promise<WhatsappConnectionStatus> {
+  return requestApi<WhatsappConnectionStatus>("/api/whatsapp/reconnect", {
+    method: "POST",
+    body: JSON.stringify(accountUserId ? { accountUserId } : {}),
+    timeoutMs: 30000,
+  });
+}
+
+export function disconnectWhatsapp(accountUserId = ""): Promise<WhatsappConnectionStatus> {
+  return requestApi<WhatsappConnectionStatus>("/api/whatsapp/disconnect", {
+    method: "POST",
+    body: JSON.stringify(accountUserId ? { accountUserId } : {}),
+    timeoutMs: 30000,
+  });
+}
+
+export function fetchWhatsappLeadRouting(accountUserId = ""): Promise<WhatsappLeadRouting> {
+  const params = whatsappAccountQuery(accountUserId);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return requestApi<WhatsappLeadRouting>(`/api/whatsapp/lead-routing${suffix}`, { timeoutMs: 15000 });
+}
+
+export function updateWhatsappLeadRouting(payload: { pipelineId: string; stageId: string; accountUserId?: string }): Promise<WhatsappLeadRouting> {
+  return requestApi<WhatsappLeadRouting>("/api/whatsapp/lead-routing", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+    timeoutMs: 15000,
+  });
+}
+
+export function fetchWhatsappChats(search = "", accountUserId = ""): Promise<WhatsappChat[]> {
+  const params = whatsappAccountQuery(accountUserId);
+  params.set("limit", "150");
+  if (search.trim()) params.set("search", search.trim());
+  return requestApi<WhatsappChat[]>(`/api/whatsapp/chats?${params.toString()}`, { timeoutMs: 30000 });
+}
+
+export function fetchWhatsappMessages(chatId: string, limit = 100, accountUserId = ""): Promise<WhatsappMessage[]> {
+  const params = whatsappAccountQuery(accountUserId);
+  params.set("limit", String(Math.max(1, Math.min(limit, 150))));
+  return requestApi<WhatsappMessage[]>(`/api/whatsapp/chats/${encodeURIComponent(chatId)}/messages?${params.toString()}`, { timeoutMs: 30000 });
+}
+
+export function fetchWhatsappMedia(messageId: string, accountUserId = ""): Promise<WhatsappMedia> {
+  const params = whatsappAccountQuery(accountUserId);
+  params.set("messageId", messageId);
+  return requestApi<WhatsappMedia>(`/api/whatsapp/media?${params.toString()}`, { timeoutMs: 60000 });
+}
+
+export function sendWhatsappText(chatId: string, text: string, accountUserId = ""): Promise<WhatsappMessage> {
+  return requestApi<WhatsappMessage>("/api/whatsapp/messages", {
+    method: "POST",
+    body: JSON.stringify({ chatId, kind: "text", text, ...(accountUserId ? { accountUserId } : {}) }),
+    timeoutMs: 60000,
+  });
+}
+
+export function sendWhatsappImage(payload: { chatId: string; data: string; mimetype: string; filename: string; caption?: string; accountUserId?: string }): Promise<WhatsappMessage> {
+  return requestApi<WhatsappMessage>("/api/whatsapp/messages", {
+    method: "POST",
+    body: JSON.stringify({ ...payload, kind: "image" }),
+    timeoutMs: 120000,
+  });
+}
+
+export function sendWhatsappAudio(payload: { chatId: string; data: string; mimetype: string; filename?: string; accountUserId?: string }): Promise<WhatsappMessage> {
+  return requestApi<WhatsappMessage>("/api/whatsapp/messages", {
+    method: "POST",
+    body: JSON.stringify({ ...payload, kind: "audio" }),
+    timeoutMs: 120000,
+  });
+}
+
+export function sendWhatsappDocument(payload: { chatId: string; data: string; mimetype: string; filename: string; accountUserId?: string }): Promise<WhatsappMessage> {
+  return requestApi<WhatsappMessage>("/api/whatsapp/messages", {
+    method: "POST",
+    body: JSON.stringify({ ...payload, kind: "document" }),
+    timeoutMs: 120000,
+  });
+}

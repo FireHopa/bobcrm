@@ -38,6 +38,8 @@ export const PERMISSIONS_BY_ROLE = Object.freeze({
     "read_audit",
     "manage_users",
     "manage_pipelines",
+    "use_whatsapp",
+    "access_all_whatsapp",
   ]),
   [USER_ROLES.PRE_SALES]: new Set([
     "read_leads",
@@ -53,6 +55,7 @@ export const PERMISSIONS_BY_ROLE = Object.freeze({
     "assign_tasks",
   ]),
   [USER_ROLES.SALES_CONSULTANT]: new Set([
+    "use_whatsapp",
     "read_leads",
     "edit_lead_sales_fields",
     "move_lead_stage",

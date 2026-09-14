@@ -15,6 +15,7 @@ import { buildIntegrationEventsCsv, getIntegrationDashboardOverview, getIntegrat
 import { createIntegrationHealthCollector, updateIntegrationIncident } from "./integrationObservability.js";
 import { createProcessHeartbeatRuntime, readProcessHeartbeat } from "./processHeartbeat.js";
 import { createZapeBidirectionalSyncRuntime } from "./zapeBidirectionalSync.js";
+import { createWhatsappRuntime, normalizeWhatsappPhone } from "./whatsappRuntime.js";
 import { ensureWhatsappAttribution, getWhatsappAccountConversionReport, recordWhatsappActivity, resolveWhatsappReportRange, whatsappConversionCsv } from "./whatsappAttribution.js";
 import { getAssignmentCandidatesForTenant, matchAssignmentUsers, nextRoundRobinUser, parseAssignmentCandidates, parseTenantAssignmentMap } from "./zapeAssignment.js";
 import { importActiveCampaignNotes, openActiveCampaignCredentials, sealActiveCampaignCredentials, testActiveCampaignConnection } from "./activeCampaignImport.js";
@@ -59,6 +60,8 @@ import { description as sdrOriginAttributionMigrationDescription, up as runSdrOr
 import { description as runtimeProcessHeartbeatMigrationDescription, up as runRuntimeProcessHeartbeatMigration, version as runtimeProcessHeartbeatMigrationVersion } from "./migrations/20260827_24_runtime_process_heartbeat.js";
 import { description as leadHandoffAuditMigrationDescription, up as runLeadHandoffAuditMigration, version as leadHandoffAuditMigrationVersion } from "./migrations/20260827_25_lead_handoff_audit.js";
 import { description as activeCampaignNoteImportMigrationDescription, up as runActiveCampaignNoteImportMigration, version as activeCampaignNoteImportMigrationVersion } from "./migrations/20260908_26_activecampaign_note_import.js";
+import { description as whatsappWebjsMigrationDescription, up as runWhatsappWebjsMigration, version as whatsappWebjsMigrationVersion } from "./migrations/20260910_27_whatsapp_webjs_crm.js";
+import { description as whatsappLeadRoutingMigrationDescription, up as runWhatsappLeadRoutingMigration, version as whatsappLeadRoutingMigrationVersion } from "./migrations/20260911_28_whatsapp_lead_routing.js";
 import {
   createEncryptedMysqlBackup,
   removeBackupArtifact,
@@ -315,6 +318,21 @@ const ZAPE_WHATSAPP_ASSIGNMENT_TENANT_MAP = parseTenantAssignmentMap(process.env
 const ZAPE_WHATSAPP_REACTIVATION_MOVE_EXISTING = process.env.ZAPE_WHATSAPP_REACTIVATION_MOVE_EXISTING === "1";
 const ZAPE_WHATSAPP_REACTIVATION_PIPELINE_ID = String(process.env.ZAPE_WHATSAPP_REACTIVATION_PIPELINE_ID || "").trim();
 const ZAPE_WHATSAPP_REACTIVATION_STAGE_ID = String(process.env.ZAPE_WHATSAPP_REACTIVATION_STAGE_ID || "").trim();
+const WHATSAPP_RUNTIME_ENABLED = process.env.WHATSAPP_RUNTIME_ENABLED !== "0";
+const WHATSAPP_SESSION_DIR_SETTING = String(process.env.WHATSAPP_SESSION_DIR || "").trim();
+const WHATSAPP_SESSION_DIR = WHATSAPP_SESSION_DIR_SETTING
+  ? (path.isAbsolute(WHATSAPP_SESSION_DIR_SETTING)
+      ? path.normalize(WHATSAPP_SESSION_DIR_SETTING)
+      : path.resolve(projectRoot, WHATSAPP_SESSION_DIR_SETTING))
+  : path.join(projectRoot, "server", "data", "whatsapp-sessions");
+const WHATSAPP_HEADLESS = process.env.WHATSAPP_HEADLESS !== "0";
+const WHATSAPP_CHROME_EXECUTABLE = String(process.env.WHATSAPP_CHROME_EXECUTABLE || "").trim();
+const WHATSAPP_CHROME_NO_SANDBOX = process.env.WHATSAPP_CHROME_NO_SANDBOX === "1";
+const WHATSAPP_PUPPETEER_ARGS = [
+  "--disable-dev-shm-usage",
+  ...(WHATSAPP_CHROME_NO_SANDBOX ? ["--no-sandbox", "--disable-setuid-sandbox"] : []),
+];
+const WHATSAPP_RECONNECT_DELAY_MS = readBoundedEnvironmentInteger("WHATSAPP_RECONNECT_DELAY_MS", 10000, 2000, 300000);
 const INTEGRATION_MAX_BODY_BYTES = readBoundedEnvironmentInteger("INTEGRATION_MAX_BODY_BYTES", 512 * 1024, 16 * 1024, 2 * 1024 * 1024);
 const MYSQL_CONNECT_TIMEOUT_MS = readBoundedEnvironmentInteger("MYSQL_CONNECT_TIMEOUT_MS", 10000, 1000, 60000);
 const MYSQL_RETRY_ATTEMPTS = readBoundedEnvironmentInteger("MYSQL_RETRY_ATTEMPTS", 4, 1, 10);
@@ -392,6 +410,7 @@ let datetimeColumnsReadinessTimer = null;
 let integrationHealthCollector = null;
 let processHeartbeatRuntime = null;
 let zapeBidirectionalSyncRuntime = null;
+let whatsappRuntime = null;
 let operationalRuntime = null;
 let databaseReady = false;
 let isShuttingDown = false;
@@ -690,6 +709,10 @@ async function runSchemaMigrations() {
     () => runLeadHandoffAuditMigration({ execute }));
   await runVersionedMigration(activeCampaignNoteImportMigrationVersion, activeCampaignNoteImportMigrationDescription,
     () => runActiveCampaignNoteImportMigration({ execute }));
+  await runVersionedMigration(whatsappWebjsMigrationVersion, whatsappWebjsMigrationDescription,
+    () => runWhatsappWebjsMigration({ execute }));
+  await runVersionedMigration(whatsappLeadRoutingMigrationVersion, whatsappLeadRoutingMigrationDescription,
+    () => runWhatsappLeadRoutingMigration({ addColumnIfMissing }));
   try {
     await addIndexIfMissing("leads", "ft_leads_search_text", "FULLTEXT INDEX ft_leads_search_text (search_text)");
     leadSearchFullTextEnabled = true;
@@ -2123,6 +2146,283 @@ async function saveLeadWithDuplicateProtection(lead, client = pool, accessContex
   return { lead: await saveLead(normalizedLead, client), action: "created_or_updated", duplicatedLeadId: "" };
 }
 
+async function validateWhatsappLeadRoutingSelection(pipelineId, stageId, client = pool) {
+  const normalizedPipelineId = String(pipelineId || "").trim().slice(0, 64);
+  const normalizedStageId = String(stageId || "").trim().slice(0, 64);
+  if (!normalizedPipelineId && !normalizedStageId) {
+    return { pipelineId: "", stageId: "", pipelineName: "", stageName: "", usesDefault: true };
+  }
+  if (!normalizedPipelineId || !normalizedStageId) {
+    const error = new Error("Selecione o funil e a etapa de destino juntos.");
+    error.statusCode = 422;
+    throw error;
+  }
+  const stage = await statementFirstRow(
+    `SELECT s.id, s.pipeline_id, s.name, s.stage_type, s.status_key, p.name AS pipeline_name
+     FROM kanban_stages s
+     INNER JOIN kanban_pipelines p ON p.id = s.pipeline_id
+     WHERE s.id = ? AND s.pipeline_id = ? AND s.is_archived = 0 AND p.is_archived = 0
+     LIMIT 1`,
+    [normalizedStageId, normalizedPipelineId],
+    client,
+  );
+  if (!stage) {
+    const error = new Error("O funil ou a etapa escolhidos não existem mais.");
+    error.statusCode = 422;
+    throw error;
+  }
+  return {
+    pipelineId: stage.pipeline_id,
+    stageId: stage.id,
+    pipelineName: stage.pipeline_name || "",
+    stageName: stage.name || "",
+    usesDefault: false,
+  };
+}
+
+async function resolveWhatsappInboundLeadTarget(userId, client = pool) {
+  const account = await statementFirstRow(
+    "SELECT lead_pipeline_id, lead_pipeline_stage_id FROM whatsapp_accounts WHERE user_id = ? LIMIT 1",
+    [String(userId)],
+    client,
+  );
+  const configuredPipelineId = String(account?.lead_pipeline_id || "").trim();
+  const configuredStageId = String(account?.lead_pipeline_stage_id || "").trim();
+  if (configuredPipelineId && configuredStageId) {
+    const stage = await statementFirstRow(
+      `SELECT s.id, s.pipeline_id, s.name, s.stage_type, s.status_key, p.name AS pipeline_name
+       FROM kanban_stages s
+       INNER JOIN kanban_pipelines p ON p.id = s.pipeline_id
+       WHERE s.id = ? AND s.pipeline_id = ? AND s.is_archived = 0 AND p.is_archived = 0
+       LIMIT 1`,
+      [configuredStageId, configuredPipelineId],
+      client,
+    );
+    if (stage) {
+      return { pipelineId: stage.pipeline_id, stageId: stage.id, stage, configured: true };
+    }
+  }
+
+  const cache = defaultKanbanCache || await loadDefaultKanbanCache(client);
+  if (!cache?.pipelineId || !cache?.fallbackStageId) return null;
+  const fallbackStageId = cache.stagesByStatus?.["Novo lead"] || cache.fallbackStageId;
+  const stage = await getKanbanStageById(fallbackStageId, client);
+  if (!stage) return null;
+  return { pipelineId: stage.pipeline_id, stageId: stage.id, stage, configured: false };
+}
+
+async function repairWhatsappLidLeadPhone(candidate = {}) {
+  const userId = String(candidate.userId || "").trim();
+  const chatId = String(candidate.chatId || "").trim().slice(0, 191);
+  const phoneKey = normalizeWhatsappPhone(candidate.phone);
+  if (!userId || !chatId.toLowerCase().endsWith("@lid") || !phoneKey) return { outcome: "ignored" };
+  const lidDigits = normalizeWhatsappPhone(chatId.split("@")[0]);
+  if (!lidDigits || phoneKey === lidDigits) return { outcome: "ignored" };
+
+  const result = await withTransaction(async (client) => {
+    const event = await statementFirstRow(
+      `SELECT lead_id FROM whatsapp_inbound_events
+       WHERE user_id = ? AND chat_id = ? AND lead_id != ''
+       ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+      [userId, chatId],
+      client,
+    );
+    if (!event?.lead_id) return { outcome: "no_previous_lead" };
+
+    const leadRow = await statementFirstRow(
+      "SELECT * FROM leads WHERE id = ? AND deleted_at = '' LIMIT 1 FOR UPDATE",
+      [event.lead_id],
+      client,
+    );
+    if (!leadRow || String(leadRow.source || "").trim().toLowerCase() !== "whatsapp") {
+      return { outcome: "not_repairable" };
+    }
+
+    const currentPhoneKey = normalizeWhatsappPhone(leadRow.phone);
+    if (currentPhoneKey === phoneKey) return { outcome: "already_correct", leadId: leadRow.id };
+    if (currentPhoneKey !== lidDigits) return { outcome: "not_lid_phone", leadId: leadRow.id };
+
+    const variants = phoneKeyVariants(phoneKey);
+    if (variants.length) {
+      const placeholders = variants.map(() => "?").join(", ");
+      const duplicate = await statementFirstRow(
+        `SELECT id FROM leads
+         WHERE id != ? AND deleted_at = '' AND phone_key IN (${placeholders})
+         ORDER BY updated_at DESC LIMIT 1 FOR UPDATE`,
+        [leadRow.id, ...variants],
+        client,
+      );
+      if (duplicate) {
+        return { outcome: "conflict", leadId: leadRow.id, duplicateLeadId: duplicate.id };
+      }
+    }
+
+    const repairedLead = await saveLead({ ...rowToLead(leadRow), phone: `+${phoneKey}` }, client);
+    const at = nowIso();
+    await execute(
+      "UPDATE whatsapp_inbound_events SET phone_key = ?, updated_at = ? WHERE user_id = ? AND chat_id = ? AND lead_id = ?",
+      [phoneKey, at, userId, chatId, repairedLead.id],
+      client,
+    );
+
+    const actorRow = await statementFirstRow("SELECT * FROM users WHERE id = ? LIMIT 1", [userId], client);
+    if (actorRow) {
+      await recordAudit({
+        entityType: "lead",
+        entityId: repairedLead.id,
+        action: "lead_phone_repaired_from_whatsapp_lid",
+        actor: rowToUser(actorRow),
+        summary: `Telefone real recuperado do WhatsApp para ${repairedLead.name}`,
+        changes: { from: `+${lidDigits}`, to: repairedLead.phone, whatsappLid: chatId },
+      }, client);
+    }
+    return { outcome: "repaired", leadId: repairedLead.id, phone: repairedLead.phone };
+  });
+
+  if (result.outcome === "repaired") {
+    invalidateLeadSummaryCache();
+    filterOptionsCache.clear();
+    console.log("WhatsApp LID convertido para telefone real no lead.", {
+      userId,
+      chatId,
+      leadId: result.leadId,
+      phone: result.phone,
+    });
+  }
+  return result;
+}
+
+async function processWhatsappInboundLeadCandidate(candidate = {}) {
+  const userId = String(candidate.userId || "").trim();
+  const messageId = String(candidate.messageId || "").trim().slice(0, 191);
+  const chatId = String(candidate.chatId || "").trim().slice(0, 191);
+  const phoneKey = normalizeWhatsappPhone(candidate.phone);
+  if (!userId || !messageId || !phoneKey) return { outcome: "ignored" };
+
+  const result = await withTransaction(async (client, transactionContext) => {
+    const actorRow = await statementFirstRow(
+      "SELECT * FROM users WHERE id = ? AND is_active = 1 LIMIT 1 FOR UPDATE",
+      [userId],
+      client,
+    );
+    if (!actorRow || normalizeUserRole(actorRow.role) !== USER_ROLES.SALES_CONSULTANT) {
+      return { outcome: "consultant_unavailable" };
+    }
+    const actor = rowToUser(actorRow);
+    if (!hasPermission(actor, "use_whatsapp")) {
+      return { outcome: "permission_denied" };
+    }
+
+    const existingEvent = await statementFirstRow(
+      "SELECT message_id, outcome, lead_id FROM whatsapp_inbound_events WHERE message_id = ? LIMIT 1 FOR UPDATE",
+      [messageId],
+      client,
+    );
+    if (existingEvent) {
+      return { outcome: existingEvent.outcome || "already_processed", leadId: existingEvent.lead_id || "" };
+    }
+
+    const at = nowIso();
+    await execute(
+      `INSERT INTO whatsapp_inbound_events (
+        message_id, user_id, chat_id, phone_key, lead_id, outcome, message_type,
+        received_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, '', 'processing', ?, ?, ?, ?)`,
+      [
+        messageId,
+        userId,
+        chatId,
+        phoneKey,
+        String(candidate.messageType || "").slice(0, 40),
+        String(candidate.receivedAt || at).slice(0, 40),
+        at,
+        at,
+      ],
+      client,
+    );
+
+    const phoneVariants = phoneKeyVariants(phoneKey);
+    if (phoneVariants.length) {
+      const placeholders = phoneVariants.map(() => "?").join(", ");
+      const existingLeadRow = await statementFirstRow(
+        `SELECT * FROM leads
+         WHERE phone_key IN (${placeholders})
+         ORDER BY CASE WHEN deleted_at = '' THEN 0 ELSE 1 END ASC, updated_at DESC
+         LIMIT 1 FOR UPDATE`,
+        phoneVariants,
+        client,
+      );
+      if (existingLeadRow) {
+        await execute(
+          "UPDATE whatsapp_inbound_events SET lead_id = ?, outcome = 'existing', updated_at = ? WHERE message_id = ?",
+          [existingLeadRow.id, at, messageId],
+          client,
+        );
+        return { outcome: "existing", leadId: existingLeadRow.id, responsibleUserId: existingLeadRow.responsible_user_id || "", createdLead: false };
+      }
+    }
+
+    const leadTarget = await resolveWhatsappInboundLeadTarget(userId, client);
+    const stageStatus = leadTarget?.stage
+      ? getStageStatusUpdate(leadTarget.stage, "Novo lead")
+      : { status: "Novo lead", isLost: 0 };
+    const displayName = String(candidate.displayName || "").trim().slice(0, 255);
+    const leadInput = normalizeLead({
+      id: randomUUID(),
+      name: displayName || `WhatsApp +${phoneKey}`,
+      phone: `+${phoneKey}`,
+      source: "WhatsApp",
+      status: stageStatus.status,
+      isLost: Boolean(stageStatus.isLost),
+      responsibleUserId: actor.id,
+      responsible: actor.name || actor.email || "",
+      pipelineId: leadTarget?.pipelineId || "",
+      pipelineStageId: leadTarget?.stageId || "",
+      pipelineEnteredAt: at,
+      createdAt: at,
+      updatedAt: at,
+    });
+    const assignedLeadInput = enforceLeadAssignmentForUser(leadInput, actor, [actor]);
+    const saved = await saveLeadWithDuplicateProtection(assignedLeadInput, client, null, transactionContext);
+    const createdLead = saved.action !== "merged";
+    const outcome = createdLead ? "created" : "existing_race";
+
+    await execute(
+      "UPDATE whatsapp_inbound_events SET lead_id = ?, outcome = ?, updated_at = ? WHERE message_id = ?",
+      [saved.lead.id, outcome, at, messageId],
+      client,
+    );
+
+    if (createdLead) {
+      await recordAudit({
+        entityType: "lead",
+        entityId: saved.lead.id,
+        action: "lead_created_from_whatsapp",
+        actor,
+        summary: `Lead criado automaticamente pelo WhatsApp: ${saved.lead.name}`,
+        changes: {
+          source: "WhatsApp",
+          phone: saved.lead.phone,
+          responsibleUserId: saved.lead.responsibleUserId,
+          pipelineId: saved.lead.pipelineId,
+          pipelineStageId: saved.lead.pipelineStageId,
+          whatsappMessageId: messageId,
+        },
+      }, client);
+    }
+    return { outcome, leadId: saved.lead.id, createdLead, responsibleUserId: saved.lead.responsibleUserId || actor.id };
+  });
+
+  if (result.createdLead) {
+    invalidateLeadSummaryCache();
+    filterOptionsCache.clear();
+    void hotColdRuntime.adjustStats({ activeDelta: 1 })
+      .then(() => hotColdRuntime.queueAutoArchive({ id: "system", name: "Sistema" }))
+      .catch(() => undefined);
+  }
+  return result;
+}
+
 
 function hashPassword(password) {
   const salt = randomBytes(16).toString("hex");
@@ -2186,6 +2486,44 @@ function requirePermission(user, permission) {
     error.statusCode = 403;
     throw error;
   }
+}
+
+async function resolveWhatsappAccountUserIdForRequest(currentUser, requestedUserId) {
+  const requested = String(requestedUserId || "").trim();
+  const canAccessAll = hasPermission(currentUser, "access_all_whatsapp");
+
+  if (!canAccessAll) {
+    if (requested && requested !== String(currentUser.id)) {
+      const error = new Error("Você não tem permissão para acessar o WhatsApp de outro usuário.");
+      error.statusCode = 403;
+      throw error;
+    }
+    return String(currentUser.id);
+  }
+
+  if (!requested) {
+    const error = new Error("Selecione a sessão de WhatsApp de um consultor.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const rows = await queryRows(
+    `SELECT wa.user_id
+     FROM whatsapp_accounts wa
+     INNER JOIN users u ON u.id = wa.user_id
+     WHERE wa.user_id = ?
+       AND wa.enabled = 1
+       AND u.is_active = 1
+       AND u.role IN ('consultor_vendas', 'vendedor')
+     LIMIT 1`,
+    [requested],
+  );
+  if (!rows[0]) {
+    const error = new Error("A sessão de WhatsApp selecionada não está disponível.");
+    error.statusCode = 404;
+    throw error;
+  }
+  return requested;
 }
 
 function getBearerToken(request) {
@@ -4995,6 +5333,109 @@ async function handleApi(request, response, requestUrl) {
     expectedHash: authContext.csrfTokenHash,
   });
 
+  if (pathname.startsWith("/api/whatsapp")) {
+    requirePermission(currentUser, "use_whatsapp");
+    if (!whatsappRuntime || !WHATSAPP_RUNTIME_ENABLED) {
+      const error = new Error("O módulo WhatsApp está desativado neste servidor.");
+      error.statusCode = 503;
+      error.code = "WHATSAPP_RUNTIME_DISABLED";
+      throw error;
+    }
+  }
+
+  if (pathname === "/api/whatsapp/accounts" && method === "GET") {
+    requirePermission(currentUser, "access_all_whatsapp");
+    sendJson(response, 200, await whatsappRuntime.listAccounts());
+    return;
+  }
+
+  if (pathname === "/api/whatsapp/status" && method === "GET") {
+    const accountUserId = await resolveWhatsappAccountUserIdForRequest(currentUser, requestUrl.searchParams.get("accountUserId"));
+    sendJson(response, 200, await whatsappRuntime.getStatus(accountUserId));
+    return;
+  }
+
+  if (pathname === "/api/whatsapp/lead-routing" && method === "GET") {
+    const accountUserId = await resolveWhatsappAccountUserIdForRequest(currentUser, requestUrl.searchParams.get("accountUserId"));
+    const routing = await whatsappRuntime.getLeadRouting(accountUserId);
+    if (!routing.pipelineId && !routing.stageId) {
+      sendJson(response, 200, { ...routing, pipelineName: "", stageName: "", usesDefault: true });
+      return;
+    }
+    try {
+      sendJson(response, 200, await validateWhatsappLeadRoutingSelection(routing.pipelineId, routing.stageId));
+    } catch {
+      sendJson(response, 200, { ...routing, pipelineName: "", stageName: "", usesDefault: false, invalid: true });
+    }
+    return;
+  }
+
+  if (pathname === "/api/whatsapp/lead-routing" && method === "PUT") {
+    const body = await readRequestBody(request);
+    const accountUserId = await resolveWhatsappAccountUserIdForRequest(currentUser, body.accountUserId);
+    const routing = await validateWhatsappLeadRoutingSelection(body.pipelineId, body.stageId);
+    await whatsappRuntime.setLeadRouting(accountUserId, routing);
+    sendJson(response, 200, routing);
+    return;
+  }
+
+  if (pathname === "/api/whatsapp/connect" && method === "POST") {
+    const body = await readRequestBody(request);
+    const accountUserId = await resolveWhatsappAccountUserIdForRequest(currentUser, body.accountUserId);
+    sendJson(response, 202, await whatsappRuntime.connect(accountUserId));
+    return;
+  }
+
+  if (pathname === "/api/whatsapp/reconnect" && method === "POST") {
+    const body = await readRequestBody(request);
+    const accountUserId = await resolveWhatsappAccountUserIdForRequest(currentUser, body.accountUserId);
+    sendJson(response, 202, await whatsappRuntime.reconnect(accountUserId));
+    return;
+  }
+
+  if (pathname === "/api/whatsapp/disconnect" && method === "POST") {
+    const body = await readRequestBody(request);
+    const accountUserId = await resolveWhatsappAccountUserIdForRequest(currentUser, body.accountUserId);
+    sendJson(response, 200, await whatsappRuntime.disconnect(accountUserId));
+    return;
+  }
+
+  if (pathname === "/api/whatsapp/chats" && method === "GET") {
+    const accountUserId = await resolveWhatsappAccountUserIdForRequest(currentUser, requestUrl.searchParams.get("accountUserId"));
+    const limit = parseBoundedInteger(requestUrl.searchParams.get("limit"), 100, 1, 250);
+    const search = String(requestUrl.searchParams.get("search") || "").slice(0, 200);
+    sendJson(response, 200, await whatsappRuntime.getChats(accountUserId, { limit, search }));
+    return;
+  }
+
+  const whatsappChatMessagesMatch = pathname.match(/^\/api\/whatsapp\/chats\/([^/]+)\/messages$/);
+  if (whatsappChatMessagesMatch && method === "GET") {
+    const accountUserId = await resolveWhatsappAccountUserIdForRequest(currentUser, requestUrl.searchParams.get("accountUserId"));
+    const chatId = decodeURIComponent(whatsappChatMessagesMatch[1]);
+    const limit = parseBoundedInteger(requestUrl.searchParams.get("limit"), 80, 1, 150);
+    sendJson(response, 200, await whatsappRuntime.getMessages(accountUserId, chatId, { limit }));
+    return;
+  }
+
+  if (pathname === "/api/whatsapp/media" && method === "GET") {
+    const accountUserId = await resolveWhatsappAccountUserIdForRequest(currentUser, requestUrl.searchParams.get("accountUserId"));
+    const messageId = String(requestUrl.searchParams.get("messageId") || "").trim();
+    if (!messageId) {
+      const error = new Error("Informe a mensagem cuja mídia deve ser carregada.");
+      error.statusCode = 400;
+      throw error;
+    }
+    sendJson(response, 200, await whatsappRuntime.getMedia(accountUserId, messageId));
+    return;
+  }
+
+  if (pathname === "/api/whatsapp/messages" && method === "POST") {
+    const body = await readRequestBody(request);
+    const accountUserId = await resolveWhatsappAccountUserIdForRequest(currentUser, body.accountUserId);
+    sendJson(response, 201, await whatsappRuntime.sendMessage(accountUserId, body));
+    return;
+  }
+
   if (pathname === "/api/admin/integrations/activecampaign/latest-job" && method === "GET") {
     requirePermission(currentUser, "read_audit");
     requirePermission(currentUser, "import_leads");
@@ -6254,6 +6695,11 @@ async function handleApi(request, response, requestUrl) {
     const userId = decodeURIComponent(userMatch[1]);
     const body = await readRequestBody(request);
     const user = await withTransaction((client) => updateUser(userId, body, currentUser, client));
+    if (!user.isActive || normalizeUserRole(user.role) !== USER_ROLES.SALES_CONSULTANT) {
+      await whatsappRuntime?.disableUser?.(userId).catch((error) => {
+        console.warn("Nao foi possivel encerrar imediatamente a sessao WhatsApp do usuario alterado.", { userId, code: error?.code || "WHATSAPP_USER_DISABLE_FAILED" });
+      });
+    }
     invalidateDirectoryCaches();
     sendJson(response, 200, user);
     return;
@@ -6278,6 +6724,9 @@ async function handleApi(request, response, requestUrl) {
       await assertConsultantOperationallyClear(userRow, userRow.role, false, client);
       await execute("UPDATE users SET is_active = 0, updated_at = ? WHERE id = ?", [nowIso(), userId], client);
       await recordAudit({ entityType: "user", entityId: userId, action: "user_deactivated", actor: currentUser, summary: "Usuário desativado" }, client);
+    });
+    await whatsappRuntime?.disableUser?.(userId).catch((error) => {
+      console.warn("Nao foi possivel encerrar imediatamente a sessao WhatsApp do usuario desativado.", { userId, code: error?.code || "WHATSAPP_USER_DISABLE_FAILED" });
     });
     invalidateDirectoryCaches();
     sendJson(response, 200, { ok: true });
@@ -6927,6 +7376,7 @@ async function gracefulShutdown(signal) {
   integrationHealthCollector?.stop();
   processHeartbeatRuntime?.stop();
   await zapeBidirectionalSyncRuntime?.stop?.();
+  await whatsappRuntime?.stop?.();
   performanceMonitor.stop();
   shutdownController.abort();
 
@@ -6975,6 +7425,26 @@ async function startRuntime() {
   operationalRuntime.start({ runMaintenanceHere: PROCESS_CAPABILITIES.runsJobWorker });
 
   if (PROCESS_CAPABILITIES.runsHttpServer) {
+    whatsappRuntime = createWhatsappRuntime({
+      queryRows,
+      execute,
+      nowIso,
+      onInboundLeadCandidate: processWhatsappInboundLeadCandidate,
+      onResolvedLidIdentity: repairWhatsappLidLeadPhone,
+      sessionRoot: WHATSAPP_SESSION_DIR,
+      enabled: WHATSAPP_RUNTIME_ENABLED,
+      reconnectDelayMs: WHATSAPP_RECONNECT_DELAY_MS,
+      headless: WHATSAPP_HEADLESS,
+      executablePath: WHATSAPP_CHROME_EXECUTABLE,
+      puppeteerArgs: WHATSAPP_PUPPETEER_ARGS,
+    });
+    await whatsappRuntime.start().catch((error) => {
+      console.warn("Runtime do WhatsApp iniciou com restrições; novas tentativas ocorrerão por sessão.", {
+        code: error?.code || "WHATSAPP_RUNTIME_START_FAILED",
+        message: sanitizeServerLogMessage(error?.message),
+      });
+    });
+
     securityCleanupTimer = setInterval(() => {
       cleanupSecurityState().catch((error) => console.warn("Não foi possível limpar sessões ou rate limits expirados:", error.message));
     }, RATE_LIMIT_CLEANUP_INTERVAL_MS);
@@ -7061,6 +7531,7 @@ async function startRuntime() {
   }
   if (PROCESS_CAPABILITIES.runsHttpServer) {
     console.log(`Proxy confiável: ${TRUST_PROXY_POLICY.enabled ? "configurado" : "desativado"}`);
+    console.log(`WhatsApp web.js: ${WHATSAPP_RUNTIME_ENABLED ? `ativo; sessões em ${WHATSAPP_SESSION_DIR}` : "desativado"}`);
   }
 }
 

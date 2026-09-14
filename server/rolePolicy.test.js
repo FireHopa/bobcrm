@@ -31,9 +31,16 @@ test("pré-venda pode criar, atribuir e mover entre funis sem administrar estrut
   assert.equal(permissions.has("assign_tasks"), true);
 });
 
+test("administrador pode usar o WhatsApp e acessar todas as sessões da equipe", () => {
+  const permissions = getPermissionsForRole("admin");
+  assert.equal(permissions.has("use_whatsapp"), true);
+  assert.equal(permissions.has("access_all_whatsapp"), true);
+});
+
 test("consultor altera dados principais e campos comerciais autorizados", () => {
   const user = { role: "consultor_vendas" };
   const permissions = getPermissionsForRole("consultor_vendas");
+  assert.equal(permissions.has("use_whatsapp"), true);
   assert.equal(permissions.has("manage_own_tasks"), true);
   assert.equal(permissions.has("assign_tasks"), false);
   assert.doesNotThrow(() => assertLeadFieldUpdateAllowed(user, [

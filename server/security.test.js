@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildSecurityHeaders,
   evaluateCorsOrigin,
   parseBoundedInteger,
   sanitizeDownloadFileName,
@@ -59,4 +60,12 @@ test("evaluateCorsOrigin permite mesma origem e bloqueia origem desconhecida", (
 
 test("sanitizeDownloadFileName impede quebra de cabeçalho", () => {
   assert.equal(sanitizeDownloadFileName("arquivo\r\nmalicioso.json"), "arquivomalicioso.json");
+});
+
+
+test("buildSecurityHeaders libera microfone e mídia somente para o próprio CRM", () => {
+  const headers = buildSecurityHeaders({ isHttps: true });
+  assert.match(headers["Permissions-Policy"], /microphone=\(self\)/);
+  assert.match(headers["Content-Security-Policy"], /media-src 'self' data: blob:/);
+  assert.equal(headers["Strict-Transport-Security"], "max-age=31536000; includeSubDomains");
 });

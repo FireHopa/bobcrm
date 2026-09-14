@@ -1,0 +1,10 @@
+{
+  "name": "bobcrm-whatsapp-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Backend-only runtime dependencies for whatsapp-web.js integration",
+  "dependencies": {
+    "qrcode": "1.5.4",
+    "whatsapp-web.js": "1.34.7"
+  }
+}

@@ -16,6 +16,14 @@ CRM comercial em React 19, TypeScript, Vite, Node.js e MySQL via `mysql2`.
 npm ci
 ```
 
+Para habilitar o modulo WhatsApp integrado, instale tambem o runtime backend-only:
+
+```bash
+npm run install:whatsapp-runtime
+```
+
+Veja `WHATSAPP_INTEGRATION.md` para configuracao de sessoes, Chrome/Chromium, seguranca e homologacao.
+
 2. Copie o exemplo de ambiente e preencha com valores próprios:
 
 ```bash

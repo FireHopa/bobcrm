@@ -36,7 +36,7 @@ import { type ImportDeduplicationReport } from "./utils/commercial";
 import { isPastDate, isToday } from "./utils/formatters";
 import { clearLegacyStoredLeads, getLegacyStoredLeads } from "./utils/storage";
 
-type ActiveTab = "operation" | "leads" | "opportunity-map" | "new-lead" | "import" | "handoffs" | "settings";
+type ActiveTab = "operation" | "leads" | "opportunity-map" | "whatsapp" | "new-lead" | "import" | "handoffs" | "settings";
 type DrawerMode = "view" | "edit";
 type ServerStatus = "loading" | "online" | "offline";
 
@@ -49,6 +49,7 @@ const LeadForm = lazy(() => import("./components/LeadForm").then((module) => ({ 
 const ServiceOpportunityMap = lazy(() => import("./components/ServiceOpportunityMap").then((module) => ({ default: module.ServiceOpportunityMap })));
 const HandoffActivityDashboard = lazy(() => import("./components/HandoffActivityDashboard").then((module) => ({ default: module.HandoffActivityDashboard })));
 const SettingsCenter = lazy(() => import("./components/SettingsCenter").then((module) => ({ default: module.SettingsCenter })));
+const WhatsappWorkspace = lazy(() => import("./components/WhatsappWorkspace").then((module) => ({ default: module.WhatsappWorkspace })));
 
 function WorkspaceModuleLoading() {
   return (
@@ -638,6 +639,7 @@ export default function App() {
     { id: "operation" as ActiveTab, label: "Hoje" },
     { id: "leads" as ActiveTab, label: "Leads" },
     { id: "opportunity-map" as ActiveTab, label: "Oportunidades" },
+    ...(hasPermission(currentUser, "use_whatsapp") ? [{ id: "whatsapp" as ActiveTab, label: "WhatsApp" }] : []),
     ...(hasPermission(currentUser, "create_leads") ? [{ id: "new-lead" as ActiveTab, label: "Novo lead" }] : []),
     ...(hasPermission(currentUser, "import_leads") ? [{ id: "import" as ActiveTab, label: "Importar" }] : []),
     ...(currentUser?.role === "pre_venda" ? [{ id: "handoffs" as ActiveTab, label: "Encaminhamentos" }] : []),
@@ -673,6 +675,17 @@ export default function App() {
         { label: "Alta prioridade", value: highPriorityCount },
         { label: "Ativos", value: activeLeadsCount },
         { label: "Sem responsável", value: withoutOwnerCount },
+      ],
+    },
+    whatsapp: {
+      title: "WhatsApp",
+      description: currentUser?.role === "admin"
+        ? "Acesse e atenda os WhatsApps conectados pela equipe comercial em uma única área administrativa."
+        : "Atenda conversas no seu número e transforme novos contatos em leads automaticamente.",
+      stats: [
+        { label: "Sessão", value: currentUser?.role === "admin" ? "Equipe" : "Individual" },
+        { label: "Leads", value: "Automático" },
+        { label: "Canal", value: "WhatsApp Web" },
       ],
     },
     "new-lead": {
@@ -898,6 +911,10 @@ export default function App() {
               onEditLead={handleEditLead}
             />
           </section>
+        ) : null}
+
+        {!isLoading && activeTab === "whatsapp" && currentUser && hasPermission(currentUser, "use_whatsapp") ? (
+          <WhatsappWorkspace currentUser={currentUser} />
         ) : null}
   
         {!isLoading && activeTab === "new-lead" && hasPermission(currentUser, "create_leads") ? (

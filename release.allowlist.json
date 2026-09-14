@@ -17,7 +17,9 @@
     "server/.env.example",
     "server/schema.mysql.sql",
     "server/schema.sql",
-    "playwright.config.ts"
+    "playwright.config.ts",
+    "WHATSAPP_INTEGRATION.md",
+    "server/whatsapp-runtime/package.json"
   ],
   "directories": {
     "src": [

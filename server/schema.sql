@@ -171,3 +171,37 @@ CREATE TABLE IF NOT EXISTS integration_note_imports (
 );
 CREATE INDEX IF NOT EXISTS idx_integration_note_imports_lead ON integration_note_imports(lead_id, imported_at);
 CREATE INDEX IF NOT EXISTS idx_integration_note_imports_note ON integration_note_imports(note_id);
+
+CREATE TABLE IF NOT EXISTS whatsapp_accounts (
+  user_id TEXT PRIMARY KEY,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'disconnected',
+  phone TEXT NOT NULL DEFAULT '',
+  display_name TEXT NOT NULL DEFAULT '',
+  last_error TEXT NOT NULL DEFAULT '',
+  last_qr_at TEXT NOT NULL DEFAULT '',
+  last_ready_at TEXT NOT NULL DEFAULT '',
+  last_disconnect_at TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT '',
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_whatsapp_accounts_enabled ON whatsapp_accounts(enabled, status);
+CREATE INDEX IF NOT EXISTS idx_whatsapp_accounts_updated ON whatsapp_accounts(updated_at);
+
+CREATE TABLE IF NOT EXISTS whatsapp_inbound_events (
+  message_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  chat_id TEXT NOT NULL DEFAULT '',
+  phone_key TEXT NOT NULL DEFAULT '',
+  lead_id TEXT NOT NULL DEFAULT '',
+  outcome TEXT NOT NULL DEFAULT 'processing',
+  message_type TEXT NOT NULL DEFAULT '',
+  received_at TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT '',
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_whatsapp_inbound_user_created ON whatsapp_inbound_events(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_whatsapp_inbound_phone ON whatsapp_inbound_events(phone_key, created_at);
+CREATE INDEX IF NOT EXISTS idx_whatsapp_inbound_lead ON whatsapp_inbound_events(lead_id, created_at);
