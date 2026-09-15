@@ -1,6 +1,6 @@
 import { normalizeCustomFields } from "../constants/customFields";
 import { normalizeServiceStatusMap, getServiceInterestsFromStatusMap } from "../constants/services";
-import type { AuditEntry, BackupEntry, CRMTask, CRMTeam, CRMUser, ExternalLeadOrigin, Lead, LeadAccessScope, LeadNote, TaskPriority, TaskType, TodayDashboard } from "../types/Lead";
+import type { AuditEntry, BackupEntry, CRMTask, CRMTeam, CRMUser, ExternalLeadOrigin, Lead, LeadAccessScope, LeadNote, LeadTemperature, TaskPriority, TaskType, TodayDashboard } from "../types/Lead";
 import type { KanbanBoardData, KanbanBoardFilters, KanbanLeadSearchResult, KanbanPipeline, KanbanStage } from "../types/Kanban";
 
 export type ServerHealth = {
@@ -992,6 +992,17 @@ export async function updateLeadOnServer(lead: Lead): Promise<Lead> {
   return normalizeLeadFromApi(savedLead);
 }
 
+export async function updateLeadTemperatureOnServer(leadId: string, temperature: LeadTemperature): Promise<Lead> {
+  const payload = { leadId, temperature };
+  const key = mutationKey("lead:temperature", payload);
+  const savedLead = await requestApi<Partial<Lead>>(`/api/leads/${encodeURIComponent(leadId)}/temperature`, {
+    method: "PATCH",
+    body: JSON.stringify({ temperature, requestId: stableMutationId(key) }),
+  });
+  finishMutation(key);
+  return normalizeLeadFromApi(savedLead);
+}
+
 export async function deleteLeadFromServer(leadId: string): Promise<void> {
   await requestApi<{ ok: boolean }>(`/api/leads/${encodeURIComponent(leadId)}`, {
     method: "DELETE",
@@ -1415,6 +1426,154 @@ export async function fetchLeadAuditFromServer(leadId: string): Promise<AuditEnt
 
 export async function fetchRecentAuditFromServer(): Promise<AuditEntry[]> {
   return requestApi<AuditEntry[]>("/api/audit");
+}
+
+export type CommercialAuditSummary = {
+  leadCreated: number;
+  tasksCreated: number;
+  tasksCompleted: number;
+  movements: number;
+  contractsClosed: number;
+  noInterest: number;
+};
+
+export type CommercialAuditActivity = {
+  id: string;
+  sourceAuditId: string;
+  eventType: string;
+  eventLabel: string;
+  occurredAt: string;
+  actorId: string;
+  actorName: string;
+  leadId: string;
+  leadName: string;
+  leadCompany: string;
+  source: string;
+  responsibleUserId: string;
+  responsibleName: string;
+  taskId: string;
+  taskTitle: string;
+  taskSource: string;
+  result: string;
+  pipelineId: string;
+  pipelineName: string;
+  stageId: string;
+  stageName: string;
+  fromPipelineId: string;
+  fromPipelineName: string;
+  fromStageId: string;
+  fromStageName: string;
+  toPipelineId: string;
+  toPipelineName: string;
+  toStageId: string;
+  toStageName: string;
+  outcomeReason: string;
+  summary: string;
+  details: string;
+};
+
+export type CommercialAuditCollaborator = CommercialAuditSummary & {
+  actorId: string;
+  actorName: string;
+  handoffs: number;
+  total: number;
+};
+
+export type CommercialAuditStageAnalytics = {
+  pipelineId: string;
+  pipelineName: string;
+  stageId: string;
+  stageName: string;
+  movements: number;
+  uniqueLeads: number;
+};
+
+export type CommercialAuditTransitionAnalytics = {
+  fromPipelineId: string;
+  fromPipelineName: string;
+  fromStageId: string;
+  fromStageName: string;
+  toPipelineId: string;
+  toPipelineName: string;
+  toStageId: string;
+  toStageName: string;
+  movements: number;
+  uniqueLeads: number;
+};
+
+export type CommercialAuditPipelineAnalytics = {
+  pipelineId: string;
+  pipelineName: string;
+  movements: number;
+  uniqueLeads: number;
+};
+
+export type CommercialAuditDailyAnalytics = {
+  date: string;
+  leadCreated: number;
+  movements: number;
+  contractsClosed: number;
+  noInterest: number;
+};
+
+export type CommercialAuditAnalytics = {
+  byStage: CommercialAuditStageAnalytics[];
+  transitions: CommercialAuditTransitionAnalytics[];
+  byPipeline: CommercialAuditPipelineAnalytics[];
+  daily: CommercialAuditDailyAnalytics[];
+};
+
+export type CommercialAuditFilterData = {
+  eventTypes: Array<{ id: string; label: string }>;
+  users: Array<{ id: string; name: string; role: string; isActive: boolean }>;
+  sources: Array<{ name: string; total: number }>;
+  pipelines: Array<{
+    id: string;
+    name: string;
+    isArchived: boolean;
+    stages: Array<{ id: string; name: string; stageType: string; isArchived: boolean }>;
+  }>;
+};
+
+export type CommercialAuditDashboard = {
+  generatedAt: string;
+  summary: CommercialAuditSummary;
+  analytics: CommercialAuditAnalytics;
+  activities: CommercialAuditActivity[];
+  collaborators: CommercialAuditCollaborator[];
+  pagination: { total: number; limit: number; offset: number; hasMore: boolean; sourceTruncated: boolean };
+  filters: CommercialAuditFilterData;
+};
+
+export type CommercialAuditQuery = {
+  from?: string;
+  to?: string;
+  eventType?: string;
+  actorId?: string;
+  responsibleUserId?: string;
+  source?: string;
+  pipelineId?: string;
+  stageId?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export async function fetchCommercialAuditFromServer(params: CommercialAuditQuery = {}): Promise<CommercialAuditDashboard> {
+  const search = new URLSearchParams();
+  if (params.from) search.set("from", params.from);
+  if (params.to) search.set("to", params.to);
+  if (params.eventType) search.set("eventType", params.eventType);
+  if (params.actorId) search.set("actorId", params.actorId);
+  if (params.responsibleUserId) search.set("responsibleUserId", params.responsibleUserId);
+  if (params.source) search.set("source", params.source);
+  if (params.pipelineId) search.set("pipelineId", params.pipelineId);
+  if (params.stageId) search.set("stageId", params.stageId);
+  if (params.search) search.set("search", params.search);
+  if (params.limit) search.set("limit", String(params.limit));
+  if (params.offset) search.set("offset", String(params.offset));
+  const suffix = search.toString();
+  return requestApi<CommercialAuditDashboard>(`/api/commercial-audit${suffix ? `?${suffix}` : ""}`);
 }
 
 export async function fetchTeamsFromServer(): Promise<CRMTeam[]> {

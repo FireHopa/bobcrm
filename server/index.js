@@ -216,6 +216,7 @@ import {
   parseJsonValue,
   rowToLead,
 } from "./domains/leads/leadMapper.js";
+import { normalizeLeadTemperature } from "./domains/leads/leadTemperature.js";
 import {
   LEAD_DUPLICATE_FIELDS,
   LEAD_KANBAN_SELECT,
@@ -241,6 +242,7 @@ import { LEAD_SEARCH_MODES, buildLeadSearchPlan, chooseLeadSearchPlan } from "./
 import { buildLeadSearchIndexBatchUpdate } from "./domains/leads/leadSearchIndex.js";
 import { buildKanbanBoardMetadataSql, buildKanbanInitialCardsSql, buildKanbanPipelinesSql, buildKanbanStagePageSql } from "./kanbanBoardSql.js";
 import { createKanbanWriteService } from "./kanbanWriteService.js";
+import { getCommercialAuditDashboard } from "./commercialAudit.js";
 import { COMMERCIAL_PROFILE_VERSION } from "./domains/leads/leadCommercialProfile.js";
 import { createCommercialProfileRuntime } from "./domains/leads/commercialProfileRuntime.js";
 import { createDateColumnRuntime, sqlDateColumn } from "./dateColumns.js";
@@ -2646,6 +2648,32 @@ async function recordAudit({ entityType = "lead", entityId = "", action, actor =
   );
 }
 
+async function recordAuditBatch(entries = [], client = pool) {
+  const normalized = (Array.isArray(entries) ? entries : []).filter((entry) => entry?.action);
+  if (!normalized.length) return;
+  const batchSize = 250;
+  for (let start = 0; start < normalized.length; start += batchSize) {
+    const batch = normalized.slice(start, start + batchSize);
+    const values = batch.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+    const params = batch.flatMap((entry) => [
+      entry.id || randomUUID(),
+      entry.entityType || "lead",
+      entry.entityId || "",
+      entry.action,
+      entry.actor?.id || "system",
+      entry.actor?.name || entry.actor?.email || "Sistema",
+      JSON.stringify(entry.changes || {}),
+      entry.summary || "",
+      entry.createdAt || nowIso(),
+    ]);
+    await execute(
+      `INSERT INTO audit_log (id, entity_type, entity_id, action, actor_id, actor_name, changes_json, summary, created_at) VALUES ${values}`,
+      params,
+      client,
+    );
+  }
+}
+
 async function recordAuditOnce({ id, entityType = "lead", entityId = "", action, actor = null, changes = {}, summary = "" }, client = pool) {
   const auditId = String(id || "").trim();
   if (!auditId) return recordAudit({ entityType, entityId, action, actor, changes, summary }, client);
@@ -3642,15 +3670,30 @@ async function syncLeadNextContactTask(lead, actor, client = pool) {
   }
 
   const at = nowIso();
+  const taskId = randomUUID();
   await execute(
     `INSERT INTO tasks (
       id, type, title, description, responsible_user_id, responsible_name,
       created_by, created_by_name, lead_id, due_at, priority, status,
       source, source_key, created_at, updated_at
     ) VALUES (?, 'follow_up', ?, 'Sincronizada com o campo próximo contato do lead.', ?, ?, ?, ?, ?, ?, 'normal', 'pending', 'lead_next_contact', ?, ?, ?)`,
-    [randomUUID(), title, responsibleUserId, responsibleName, actor?.id || "", actor?.name || actor?.email || "Sistema", leadId, dueAt, sourceKey, at, at],
+    [taskId, title, responsibleUserId, responsibleName, actor?.id || "", actor?.name || actor?.email || "Sistema", leadId, dueAt, sourceKey, at, at],
     client,
   );
+  await recordAuditBatch([
+    {
+      entityType: "task", entityId: taskId, action: "task_created", actor,
+      summary: `Criou tarefa automática: ${title}`,
+      changes: { leadId, responsibleUserId, responsibleName, dueAt, priority: "normal", taskSource: "lead_next_contact", automatic: true },
+      createdAt: at,
+    },
+    {
+      entityType: "lead", entityId: leadId, action: "lead_task_created", actor,
+      summary: `Criou tarefa automática: ${title}`,
+      changes: { taskId, dueAt, taskSource: "lead_next_contact", automatic: true },
+      createdAt: at,
+    },
+  ], client);
   await refreshLeadNextContactFromTasks(leadId, client);
 }
 
@@ -3702,18 +3745,32 @@ async function syncLeadExpectedCloseTask(lead, actor, client = pool, options = {
     if (historical) return getTaskById(historical.id, client);
   }
 
+  const taskId = randomUUID();
   await execute(
     `INSERT INTO tasks (
       id, type, title, description, responsible_user_id, responsible_name,
       created_by, created_by_name, lead_id, due_at, priority, status,
       source, source_key, created_at, updated_at
     ) VALUES (?, 'follow_up', ?, ?, ?, ?, ?, ?, ?, ?, 'normal', 'pending', 'lead_expected_close', ?, ?, ?)`,
-    [randomUUID(), title, "Criada automaticamente a partir da data prevista de fechamento do lead.", responsibleUserId, responsibleName, actor?.id || "", actor?.name || actor?.email || "Sistema", leadId, dueAt, sourceKey, at, at],
+    [taskId, title, "Criada automaticamente a partir da data prevista de fechamento do lead.", responsibleUserId, responsibleName, actor?.id || "", actor?.name || actor?.email || "Sistema", leadId, dueAt, sourceKey, at, at],
     client,
   );
+  await recordAuditBatch([
+    {
+      entityType: "task", entityId: taskId, action: "task_created", actor,
+      summary: `Criou tarefa automática: ${title}`,
+      changes: { leadId, responsibleUserId, responsibleName, dueAt, priority: "normal", taskSource: "lead_expected_close", automatic: true },
+      createdAt: at,
+    },
+    {
+      entityType: "lead", entityId: leadId, action: "lead_task_created", actor,
+      summary: `Criou tarefa automática: ${title}`,
+      changes: { taskId, dueAt, taskSource: "lead_expected_close", automatic: true },
+      createdAt: at,
+    },
+  ], client);
 
-  const created = await statementFirstRow("SELECT id FROM tasks WHERE source_key = ? LIMIT 1", [sourceKey], client);
-  return created ? getTaskById(created.id, client) : null;
+  return getTaskById(taskId, client);
 }
 
 function assertAdminTaskFilterAllowed(currentUser, hasAdminFilter) {
@@ -4750,6 +4807,62 @@ async function performImportLeadsJob(job) {
       if (newFollowUps.sql) await execute(newFollowUps.sql, newFollowUps.params, client);
       const newExpectedCloseTasks = buildNewLeadExpectedCloseTaskInsert(batchResult.newLeads, currentUser, taskBatchAt);
       if (newExpectedCloseTasks.sql) await execute(newExpectedCloseTasks.sql, newExpectedCloseTasks.params, client);
+
+      if (batchResult.newLeads.length) {
+        await recordAuditBatch(batchResult.newLeads.map((lead) => ({
+          entityType: "lead",
+          entityId: lead.id,
+          action: "lead_created",
+          actor: currentUser,
+          summary: `Lead importado: ${lead.name || lead.company || lead.phone || lead.id}`,
+          changes: {
+            creationChannel: "import",
+            source: lead.source || "",
+            responsibleUserId: lead.responsibleUserId || "",
+            responsibleName: lead.responsible || "",
+            pipelineId: lead.pipelineId || "",
+            pipelineStageId: lead.pipelineStageId || "",
+          },
+          createdAt: taskBatchAt,
+        })), client);
+
+        const newLeadIds = batchResult.newLeads.map((lead) => String(lead.id || "")).filter(Boolean);
+        const placeholders = newLeadIds.map(() => "?").join(", ");
+        const importedTasks = newLeadIds.length ? await queryRows(
+          `SELECT id, lead_id, title, responsible_user_id, responsible_name, due_at, priority, source, created_at
+           FROM tasks WHERE lead_id IN (${placeholders}) AND created_at = ?`,
+          [...newLeadIds, taskBatchAt],
+          client,
+        ) : [];
+        await recordAuditBatch(importedTasks.flatMap((task) => [
+          {
+            entityType: "task",
+            entityId: task.id,
+            action: "task_created",
+            actor: currentUser,
+            summary: `Criou tarefa automática na importação: ${task.title}`,
+            changes: {
+              leadId: task.lead_id,
+              responsibleUserId: task.responsible_user_id,
+              responsibleName: task.responsible_name,
+              dueAt: task.due_at,
+              priority: task.priority,
+              taskSource: task.source,
+              automatic: true,
+            },
+            createdAt: task.created_at || taskBatchAt,
+          },
+          {
+            entityType: "lead",
+            entityId: task.lead_id,
+            action: "lead_task_created",
+            actor: currentUser,
+            summary: `Criou tarefa automática na importação: ${task.title}`,
+            changes: { taskId: task.id, dueAt: task.due_at, taskSource: task.source, automatic: true },
+            createdAt: task.created_at || taskBatchAt,
+          },
+        ]), client);
+      }
 
       // Leads já existentes podem possuir tarefas manuais/legadas. Neles mantemos
       // a reconciliação completa para preservar exatamente as regras atuais.
@@ -6309,6 +6422,7 @@ async function handleApi(request, response, requestUrl) {
       const lead = await getLeadById(leadId, {}, client);
       assertResourceFresh(body.expectedUpdatedAt, lead?.updatedAt, "lead");
       const stage = await getKanbanStageById(stageId, client, { forUpdate: true });
+      const sourceStage = lead?.pipelineStageId ? await getKanbanStageById(lead.pipelineStageId, client, { includeArchived: true }) : null;
       if (!lead) {
         const error = new Error("Lead não encontrado.");
         error.statusCode = 404;
@@ -6341,10 +6455,25 @@ async function handleApi(request, response, requestUrl) {
       await recordAudit({
         entityType: "lead",
         entityId: leadId,
-        action: "kanban_card_moved",
+        action: stageChanged ? "kanban_card_moved" : "kanban_card_reordered",
         actor: currentUser,
-        summary: `Moveu ${result?.name || leadId} para ${stage.name}`,
-        changes: { fromPipelineId: lead.pipelineId, fromStageId: lead.pipelineStageId, toPipelineId: pipelineId, toStageId: stageId },
+        summary: stageChanged ? `Moveu ${result?.name || leadId} para ${stage.name}` : `Reordenou ${result?.name || leadId} em ${stage.name}`,
+        changes: {
+          fromPipelineId: lead.pipelineId || "",
+          fromPipelineName: sourceStage?.pipeline_name || "",
+          fromStageId: lead.pipelineStageId || "",
+          fromStageName: sourceStage?.name || "",
+          fromStageType: sourceStage?.stage_type || "",
+          toPipelineId: pipelineId,
+          toPipelineName: stage.pipeline_name || "",
+          toStageId: stageId,
+          toStageName: stage.name || "",
+          toStageType: stage.stage_type || "",
+          status: { from: lead.status || "", to: result?.status || statusUpdate.status || "" },
+          responsibleUserId: result?.responsibleUserId || lead.responsibleUserId || "",
+          responsibleName: result?.responsible || lead.responsible || "",
+          source: result?.source || lead.source || "",
+        },
       }, client);
       await completeMutationReceipt({ execute, client, receipt, response: result, nowIso });
       return result;
@@ -6625,6 +6754,12 @@ async function handleApi(request, response, requestUrl) {
     }
 
     await sendFileDownload(response, filePath, backup.file_name, backupContentType(backup));
+    return;
+  }
+
+  if (pathname === "/api/commercial-audit" && method === "GET") {
+    requirePermission(currentUser, "read_audit");
+    sendJson(response, 200, await getCommercialAuditDashboard({ queryRows, requestUrl }));
     return;
   }
 
@@ -7175,6 +7310,43 @@ async function handleApi(request, response, requestUrl) {
   }
 
   const leadMatch = pathname.match(/^\/api\/leads\/([^/]+)$/);
+  const leadTemperatureMatch = pathname.match(/^\/api\/leads\/([^/]+)\/temperature$/);
+
+  if (leadTemperatureMatch && method === "PATCH") {
+    requireAnyPermission(currentUser, ["edit_leads_full", "edit_lead_sales_fields"]);
+    const leadId = decodeURIComponent(leadTemperatureMatch[1]);
+    const body = await readRequestBody(request);
+    const temperature = normalizeLeadTemperature(body.temperature);
+
+    const savedLead = await withTransaction(async (client) => {
+      await assertLeadAccess(currentUser, leadId, { forUpdate: true }, client);
+      const before = await getLeadById(leadId, {}, client);
+      if (!before) {
+        const error = new Error("Lead não encontrado.");
+        error.statusCode = 404;
+        throw error;
+      }
+
+      assertLeadFieldUpdateAllowed(currentUser, ["temperature"]);
+      if (before.temperature === temperature) return before;
+
+      const result = await saveLead({ ...before, temperature }, client);
+      await recordAudit({
+        entityType: "lead",
+        entityId: leadId,
+        action: "lead_updated",
+        actor: currentUser,
+        summary: `Alterou temperatura do lead: ${result.name}`,
+        changes: { temperature: { from: before.temperature || "", to: temperature } },
+      }, client);
+      return result;
+    });
+
+    invalidateLeadSummaryCache(currentUser);
+    sendJson(response, 200, savedLead);
+    return;
+  }
+
   if (leadMatch && method === "GET") {
     requirePermission(currentUser, "read_leads");
     const leadId = decodeURIComponent(leadMatch[1]);

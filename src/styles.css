@@ -13743,3 +13743,543 @@ tbody tr:hover {
     padding-inline: 13px;
   }
 }
+
+/* Auditoria comercial administrativa */
+.commercialAuditWorkspace {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.commercialAuditHeader {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.commercialAuditHeader h3,
+.commercialAuditPanel h4 {
+  margin: 4px 0 6px;
+  color: #0f172a;
+}
+
+.commercialAuditHeader p,
+.commercialAuditPanel p {
+  margin: 0;
+  color: #64748b;
+}
+
+.commercialAuditViewToggle {
+  display: inline-flex;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.commercialAuditViewToggle button {
+  min-height: 36px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #64748b;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.commercialAuditViewToggle button.active {
+  background: #fff;
+  color: #0f172a;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .12);
+}
+
+.commercialAuditFilters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  gap: 10px;
+  align-items: end;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: var(--shadow-card);
+}
+
+.commercialAuditFilters label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.commercialAuditFilters label > span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.commercialAuditFilters input,
+.commercialAuditFilters select {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid #d7e0e9;
+  border-radius: 10px;
+  background: #fff;
+  color: #1e293b;
+  font-weight: 650;
+}
+
+.commercialAuditFilters select:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+  background: #f8fafc;
+}
+
+.commercialAuditSearch {
+  grid-column: span 2;
+}
+
+.commercialAuditSearch > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.commercialAuditClear {
+  min-height: 40px;
+}
+
+.commercialAuditMetrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.commercialAuditMetrics button {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: #fff;
+  text-align: left;
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+  transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+
+.commercialAuditMetrics button:hover {
+  transform: translateY(-1px);
+  border-color: #cbd5e1;
+}
+
+.commercialAuditMetrics button.active {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, .1), var(--shadow-card);
+}
+
+.commercialAuditMetrics span,
+.commercialAuditMetrics small {
+  color: #64748b;
+}
+
+.commercialAuditMetrics span {
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.commercialAuditMetrics strong {
+  color: #0f172a;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.commercialAuditMetrics small {
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.commercialAuditPanel {
+  min-width: 0;
+  padding: 16px;
+}
+
+.commercialAuditTableWrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+
+.commercialAuditTable {
+  width: 100%;
+  min-width: 1180px;
+  border-collapse: collapse;
+}
+
+.commercialAuditCollaboratorTable {
+  min-width: 920px;
+}
+
+.commercialAuditTable th,
+.commercialAuditTable td {
+  padding: 11px 12px;
+  border-bottom: 1px solid #edf2f7;
+  vertical-align: top;
+  text-align: left;
+}
+
+.commercialAuditTable th {
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .035em;
+  white-space: nowrap;
+}
+
+.commercialAuditTable td {
+  color: #334155;
+  font-size: 12px;
+}
+
+.commercialAuditTable tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.commercialAuditTable tbody tr:hover td {
+  background: #fbfdff;
+}
+
+.commercialAuditTable td strong,
+.commercialAuditTable td small {
+  display: block;
+}
+
+.commercialAuditTable td strong {
+  color: #0f172a;
+}
+
+.commercialAuditTable td small {
+  margin-top: 3px;
+  color: #64748b;
+  line-height: 1.35;
+}
+
+.commercialAuditWhen {
+  white-space: nowrap;
+}
+
+.commercialAuditRoute {
+  min-width: 190px;
+  line-height: 1.45;
+}
+
+.commercialAuditEvent {
+  display: inline-flex;
+  align-items: center;
+  min-height: 25px;
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.commercialAuditEventNeutral { background: #f8fafc; border-color: #e2e8f0; color: #475569; }
+.commercialAuditEventInfo { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+.commercialAuditEventComplete { background: #f0fdf4; border-color: #bbf7d0; color: #15803d; }
+.commercialAuditEventSuccess { background: #ecfdf5; border-color: #a7f3d0; color: #047857; }
+.commercialAuditEventDanger { background: #fff7ed; border-color: #fed7aa; color: #c2410c; }
+
+.commercialAuditPagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.commercialAuditPagination span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+/* Graficos da auditoria comercial */
+.commercialAuditAnalyticsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  min-width: 0;
+}
+
+.commercialAuditChartCard {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-height: 280px;
+}
+
+.commercialAuditChartCardWide {
+  grid-column: 1 / -1;
+}
+
+.commercialAuditBarList {
+  display: grid;
+  gap: 10px;
+}
+
+.commercialAuditBarListCompact {
+  gap: 9px;
+}
+
+.commercialAuditBarRow {
+  display: grid;
+  grid-template-columns: minmax(150px, 230px) minmax(100px, 1fr) 72px;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 4px 0;
+}
+
+.commercialAuditBarRowButton {
+  width: 100%;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background .15s ease, transform .15s ease;
+}
+
+.commercialAuditBarRowButton:hover {
+  padding-inline: 8px;
+  margin-inline: -8px;
+  background: #f8fafc;
+  transform: translateX(2px);
+}
+
+.commercialAuditBarLabel,
+.commercialAuditBarValue,
+.commercialAuditTransitionRoute span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.commercialAuditBarLabel strong,
+.commercialAuditTransitionRoute strong {
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commercialAuditBarLabel small,
+.commercialAuditBarValue small,
+.commercialAuditTransitionRoute small {
+  overflow: hidden;
+  color: #64748b;
+  font-size: 10px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commercialAuditBarTrack {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 11px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eef2f7;
+}
+
+.commercialAuditBarFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb, #60a5fa);
+  transition: width .25s ease;
+}
+
+.commercialAuditBarFillSecondary {
+  background: linear-gradient(90deg, #0f766e, #2dd4bf);
+}
+
+.commercialAuditBarFillTransition {
+  background: linear-gradient(90deg, #7c3aed, #a78bfa);
+}
+
+.commercialAuditBarValue {
+  justify-items: end;
+  text-align: right;
+}
+
+.commercialAuditBarValue strong {
+  color: #0f172a;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.commercialAuditTransitionRow {
+  display: grid;
+  gap: 7px;
+  padding: 8px 0;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.commercialAuditTransitionRow:last-child {
+  border-bottom: 0;
+}
+
+.commercialAuditTransitionRoute {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.commercialAuditTransitionRoute b {
+  color: #94a3b8;
+  text-align: center;
+}
+
+.commercialAuditTransitionRoute > span:last-child {
+  text-align: right;
+}
+
+.commercialAuditTransitionMeasure {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px;
+  align-items: center;
+  gap: 12px;
+}
+
+.commercialAuditDailyLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.commercialAuditDailyLegend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.commercialAuditDailyLegend span::before {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  content: "";
+}
+
+.dailyLegendLead::before,
+.dailyBarLead { background: #2563eb; }
+.dailyLegendMovement::before,
+.dailyBarMovement { background: #7c3aed; }
+.dailyLegendWon::before,
+.dailyBarWon { background: #059669; }
+.dailyLegendLost::before,
+.dailyBarLost { background: #ea580c; }
+
+.commercialAuditDailyScroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 2px 2px;
+}
+
+.commercialAuditDailyChart {
+  display: grid;
+  grid-auto-columns: minmax(34px, 1fr);
+  grid-auto-flow: column;
+  align-items: end;
+  gap: 6px;
+  height: 230px;
+  padding: 12px 4px 0;
+  border-bottom: 1px solid #cbd5e1;
+  background: repeating-linear-gradient(to top, transparent 0, transparent 49px, #f1f5f9 50px);
+}
+
+.commercialAuditDailyColumn {
+  display: grid;
+  grid-template-rows: 185px 22px;
+  align-items: end;
+  gap: 6px;
+  height: 100%;
+}
+
+.commercialAuditDailyBars {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  height: 100%;
+}
+
+.dailyBar {
+  display: block;
+  width: 6px;
+  min-height: 0;
+  border-radius: 3px 3px 1px 1px;
+  opacity: .9;
+  transition: height .25s ease, opacity .15s ease;
+}
+
+.dailyBar:hover {
+  opacity: 1;
+}
+
+.commercialAuditDailyColumn > small {
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 700;
+  text-align: center;
+  white-space: nowrap;
+}
+
+@media (max-width: 1180px) {
+  .commercialAuditMetrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .commercialAuditFilters { grid-template-columns: repeat(3, minmax(150px, 1fr)); }
+  .commercialAuditAnalyticsGrid { grid-template-columns: 1fr; }
+  .commercialAuditChartCardWide { grid-column: auto; }
+}
+
+@media (max-width: 760px) {
+  .commercialAuditHeader { align-items: stretch; flex-direction: column; }
+  .commercialAuditViewToggle { width: 100%; }
+  .commercialAuditViewToggle button { flex: 1; }
+  .commercialAuditFilters { grid-template-columns: 1fr 1fr; }
+  .commercialAuditSearch { grid-column: 1 / -1; }
+  .commercialAuditMetrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .commercialAuditPagination { justify-content: space-between; }
+  .commercialAuditBarRow { grid-template-columns: minmax(110px, 180px) minmax(80px, 1fr) 64px; gap: 8px; }
+}
+
+@media (max-width: 520px) {
+  .commercialAuditFilters { grid-template-columns: 1fr; }
+  .commercialAuditSearch { grid-column: auto; }
+  .commercialAuditMetrics { grid-template-columns: 1fr; }
+  .commercialAuditBarRow { grid-template-columns: 1fr 58px; }
+  .commercialAuditBarRow .commercialAuditBarTrack { grid-column: 1 / -1; grid-row: 2; }
+  .commercialAuditTransitionRoute { grid-template-columns: 1fr; gap: 4px; }
+  .commercialAuditTransitionRoute b { transform: rotate(90deg); }
+  .commercialAuditTransitionRoute > span:last-child { text-align: left; }
+}

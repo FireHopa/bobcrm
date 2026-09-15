@@ -72,6 +72,7 @@ export const leadTemperatureOptions: LeadTemperature[] = ["", "Frio", "Morno", "
 
 export const leadLostReasonOptions: LostReason[] = [
   "",
+  "Sem interesse",
   "Preço",
   "Sem resposta",
   "Sem orçamento",

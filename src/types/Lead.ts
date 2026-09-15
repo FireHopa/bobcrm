@@ -24,6 +24,7 @@ export type LeadTemperature = "" | "Frio" | "Morno" | "Quente";
 
 export type LostReason =
   | ""
+  | "Sem interesse"
   | "Preço"
   | "Sem resposta"
   | "Sem orçamento"

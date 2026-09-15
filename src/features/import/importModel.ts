@@ -105,6 +105,7 @@ export const temperatureOptions: LeadTemperature[] = ["", "Frio", "Morno", "Quen
 
 export const lostReasonOptions: LostReason[] = [
   "",
+  "Sem interesse",
   "Preço",
   "Sem resposta",
   "Sem orçamento",

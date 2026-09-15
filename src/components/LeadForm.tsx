@@ -46,6 +46,7 @@ const temperatureOptions: LeadTemperature[] = ["", "Frio", "Morno", "Quente"];
 
 const lostReasonOptions: LostReason[] = [
   "",
+  "Sem interesse",
   "Preço",
   "Sem resposta",
   "Sem orçamento",

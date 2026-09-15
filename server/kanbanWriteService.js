@@ -142,6 +142,53 @@ export function createKanbanWriteService({
     const savedRows = await queryRows(`SELECT * FROM leads WHERE id IN (${idPlaceholders}) AND deleted_at = ''`, leadIds, client);
     const savedById = new Map(savedRows.map((row) => [String(row.id), rowToLead(row)]));
     const results = leadIds.map((leadId) => savedById.get(leadId)).filter(Boolean);
+
+    const sourceStageIds = Array.from(new Set(
+      leadIds
+        .map((leadId) => String(sourceById.get(leadId)?.pipelineStageId || ""))
+        .filter(Boolean),
+    ));
+    const sourceStages = new Map();
+    for (const sourceStageId of sourceStageIds) {
+      const sourceStage = await getKanbanStageById(sourceStageId, client, { includeArchived: true });
+      if (sourceStage) sourceStages.set(sourceStageId, sourceStage);
+    }
+
+    for (const item of updates) {
+      const sourceLead = sourceById.get(item.id);
+      const savedLead = savedById.get(item.id);
+      if (!sourceLead || !savedLead) continue;
+      const sourcePipelineId = String(sourceLead.pipelineId || "");
+      const sourceStageId = String(sourceLead.pipelineStageId || "");
+      if (sourcePipelineId === String(pipelineId) && sourceStageId === String(stageId)) continue;
+
+      const sourceStage = sourceStages.get(sourceStageId) || null;
+      await recordAudit({
+        entityType: "lead",
+        entityId: item.id,
+        action: "kanban_card_moved",
+        actor: currentUser,
+        summary: `Moveu ${sourceLead.name || sourceLead.company || "lead"} para ${stage.name}`,
+        changes: {
+          fromPipelineId: sourcePipelineId,
+          fromPipelineName: String(sourceStage?.pipeline_name || ""),
+          fromStageId: sourceStageId,
+          fromStageName: String(sourceStage?.name || ""),
+          fromStageType: String(sourceStage?.stage_type || ""),
+          toPipelineId: String(pipelineId),
+          toPipelineName: String(stage.pipeline_name || ""),
+          toStageId: String(stageId),
+          toStageName: String(stage.name || ""),
+          toStageType: String(stage.stage_type || ""),
+          status: { from: sourceLead.status || "", to: savedLead.status || "" },
+          responsibleUserId: savedLead.responsibleUserId || sourceLead.responsibleUserId || "",
+          responsibleName: savedLead.responsible || sourceLead.responsible || "",
+          source: savedLead.source || sourceLead.source || "",
+          bulk: true,
+        },
+      }, client);
+    }
+
     await recordAudit({
       entityType: "pipeline", entityId: pipelineId, action: "kanban_cards_bulk_assigned", actor: currentUser,
       summary: `Moveu ${results.length} card(s) para ${stage.name}`,

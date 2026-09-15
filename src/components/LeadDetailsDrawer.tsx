@@ -39,6 +39,7 @@ import {
   fetchTasksFromServer,
   hasPermission,
   moveKanbanCard,
+  updateLeadTemperatureOnServer,
   type HandoffEntry,
 } from "../utils/api";
 import { formatCurrencyBRL, formatDate, formatPhone, normalizeWebsite } from "../utils/formatters";
@@ -143,6 +144,9 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
   const [isMovingStage, setIsMovingStage] = useState(false);
   const [stageError, setStageError] = useState("");
   const preserveFormAfterStageMoveRef = useRef<{ leadId: string; formState: LeadDrawerFormState } | null>(null);
+  const preserveFormAfterTemperatureUpdateRef = useRef<{ leadId: string; formState: LeadDrawerFormState } | null>(null);
+  const [isSavingTemperature, setIsSavingTemperature] = useState(false);
+  const [temperatureError, setTemperatureError] = useState("");
   const drawerRef = useRef<HTMLElement | null>(null);
 
   const canEditFull = hasPermission(currentUser, "edit_leads_full");
@@ -160,11 +164,16 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
   const isEditing = mode === "edit" && canEditLead;
 
   useEffect(() => {
-    const preservedForm = lead && preserveFormAfterStageMoveRef.current?.leadId === lead.id
-      ? preserveFormAfterStageMoveRef.current.formState
-      : null;
+    const preservedForm = lead && preserveFormAfterTemperatureUpdateRef.current?.leadId === lead.id
+      ? preserveFormAfterTemperatureUpdateRef.current.formState
+      : lead && preserveFormAfterStageMoveRef.current?.leadId === lead.id
+        ? preserveFormAfterStageMoveRef.current.formState
+        : null;
     setFormState(preservedForm || (lead ? createLeadDrawerFormState(lead) : null));
-    if (preservedForm) preserveFormAfterStageMoveRef.current = null;
+    if (preservedForm) {
+      preserveFormAfterStageMoveRef.current = null;
+      preserveFormAfterTemperatureUpdateRef.current = null;
+    }
     setFormErrors({});
     setAuditEntries([]);
     setAuditError("");
@@ -188,6 +197,8 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
     setSelectedStageId(lead?.pipelineStageId || "");
     setIsMovingStage(false);
     setStageError("");
+    setIsSavingTemperature(false);
+    setTemperatureError("");
 
     if (!lead) return;
 
@@ -446,6 +457,27 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
       setStageError(error instanceof Error ? error.message : "Não foi possível mover o lead para a etapa selecionada.");
     } finally {
       setIsMovingStage(false);
+    }
+  }
+
+  async function handleConsultantTemperatureChange(temperature: LeadTemperature) {
+    if (!lead || !formState || !canEditSalesFields || canEditFull || isSavingTemperature) return;
+    const previousTemperature = formState.temperature;
+    const nextFormState = { ...formState, temperature };
+    setFormState(nextFormState);
+    setIsSavingTemperature(true);
+    setTemperatureError("");
+    preserveFormAfterTemperatureUpdateRef.current = { leadId: lead.id, formState: nextFormState };
+
+    try {
+      const updatedLead = await updateLeadTemperatureOnServer(lead.id, temperature);
+      onKanbanLeadUpdated?.(updatedLead);
+    } catch (error) {
+      preserveFormAfterTemperatureUpdateRef.current = null;
+      setFormState((currentState) => currentState ? { ...currentState, temperature: previousTemperature } : currentState);
+      setTemperatureError(error instanceof Error ? error.message : "Não foi possível alterar a temperatura do lead.");
+    } finally {
+      setIsSavingTemperature(false);
     }
   }
 
@@ -757,7 +789,18 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
                   <label className="field"><span>Empresa</span><input type="text" value={formState.company} onChange={(event) => updateField("company", event.target.value)} /></label>
                   <label className="field"><span>Website</span><input type="text" value={formState.website} onChange={(event) => updateField("website", event.target.value)} /></label>
                   <label className="field"><span>Instagram</span><input type="text" value={formState.instagram} onChange={(event) => updateField("instagram", event.target.value)} placeholder="@empresa ou instagram.com/empresa" /></label>
-                  <label className="field"><span>Temperatura</span><select value={formState.temperature} onChange={(event) => updateField("temperature", event.target.value as LeadTemperature)}>{leadTemperatureOptions.map((temperature) => <option key={temperature || "empty"} value={temperature}>{temperature || "Selecione"}</option>)}</select></label>
+                  <label className="field">
+                    <span>Temperatura</span>
+                    <select
+                      value={formState.temperature}
+                      onChange={(event) => void handleConsultantTemperatureChange(event.target.value as LeadTemperature)}
+                      disabled={isSavingTemperature}
+                    >
+                      {leadTemperatureOptions.map((temperature) => <option key={temperature || "empty"} value={temperature}>{temperature || "Selecione"}</option>)}
+                    </select>
+                    <small>{isSavingTemperature ? "Salvando temperatura..." : "A temperatura é salva imediatamente."}</small>
+                    {temperatureError ? <small className="fieldError" role="alert">{temperatureError}</small> : null}
+                  </label>
                   <label className="field"><span>Fechamento previsto <small className="dateFormatHint">Dia/Mês/Ano · Hora</small></span><BrDateInput withTime value={toDateTimeLocalInput(formState.expectedCloseAt)} onChange={(value) => updateField("expectedCloseAt", fromDateTimeLocalInput(value))} ariaLabel="Fechamento previsto" /></label>
                   {canMoveLeadStage && lead.pipelineId ? (
                     <label className="field">

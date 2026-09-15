@@ -40,6 +40,7 @@ import { useConfirmationDialog } from "./ConfirmationDialog";
 import { IntegrationDashboard } from "./IntegrationDashboard";
 import { ActiveCampaignNotesImport } from "./ActiveCampaignNotesImport";
 import { HandoffActivityDashboard } from "./HandoffActivityDashboard";
+import { CommercialAuditDashboard } from "./CommercialAuditDashboard";
 
 type SettingsCenterProps = {
   currentUser: CRMUser;
@@ -464,7 +465,7 @@ export function SettingsCenter({
     ...(canRestore ? [{ id: "trash" as AdminTab, label: "Lixeira", count: deletedPagination.total }] : []),
     { id: "duplicates" as AdminTab, label: "Duplicados", count: adminOverview.duplicateGroups },
     ...(canManageUsers ? [{ id: "handoffs" as AdminTab, label: "Encaminhamentos", count: 0 }] : []),
-    ...(canAudit ? [{ id: "audit" as AdminTab, label: "Auditoria", count: auditEntries.length }] : []),
+    ...(canAudit ? [{ id: "audit" as AdminTab, label: "Auditoria comercial", count: 0 }] : []),
     ...(canAudit ? [{ id: "integrations" as AdminTab, label: "Integrações", count: 0 }] : []),
     ...(canAudit ? [{ id: "activecampaign" as AdminTab, label: "ActiveCampaign", count: 0 }] : []),
     { id: "system" as AdminTab, label: "Sistema", count: 0 },
@@ -891,24 +892,7 @@ export function SettingsCenter({
       ) : null}
 
       {activeAdminTab === "audit" && canAudit ? (
-        <section className="panel productionPanel productionPanelV32">
-          <div className="sectionTitleRow">
-            <div>
-              <h3>Auditoria</h3>
-              <p>Eventos recentes do sistema, usuários e alterações críticas.</p>
-            </div>
-            <span className="badge badgeBlue">{auditEntries.length} evento(s)</span>
-          </div>
-
-          <div className="auditList auditListV32">
-            {auditEntries.length ? auditEntries.slice(0, 80).map((entry) => (
-              <article className="auditItem" key={entry.id}>
-                <strong>{entry.summary || entry.action}</strong>
-                <span>{entry.actorName} • {formatDateTime(entry.createdAt)}</span>
-              </article>
-            )) : <div className="operationEmptyCompact"><strong>Nenhum histórico registrado ainda.</strong></div>}
-          </div>
-        </section>
+        <CommercialAuditDashboard onViewLead={onViewLead} />
       ) : null}
 
       {activeAdminTab === "integrations" && canAudit ? (
