@@ -3,6 +3,8 @@ import { phoneKeyVariants } from "./zapeIntegration.js";
 
 const PROVIDER = "activecampaign";
 const PAGE_SIZE = 100;
+const DEAL_LOOKUP_CONCURRENCY = 4;
+const DEAL_BULK_LOOKUP_THRESHOLD = 20;
 
 export function normalizeActiveCampaignBaseUrl(value) {
   const raw = String(value || "").trim().replace(/\/+$/, "").replace(/\/api\/3$/i, "");
@@ -119,6 +121,10 @@ function progressStats(summary = {}, extra = {}) {
   return {
     notesFetched: Number(summary.notesFetched || 0),
     contactNotes: Number(summary.contactNotes || 0),
+    dealNotes: Number(summary.dealNotes || 0),
+    dealsReferenced: Number(summary.dealsReferenced || 0),
+    dealsFound: Number(summary.dealsFound || 0),
+    dealNotesWithoutContact: Number(summary.dealNotesWithoutContact || 0),
     processedNotes: Number(extra.processedNotes ?? summary.processedNotes ?? 0),
     imported: Number(summary.imported || 0),
     updated: Number(summary.updated || 0),
@@ -183,6 +189,117 @@ async function fetchAllNotes(credentials, updateProgress, summary, shouldCancel)
   return notes;
 }
 
+function noteOwnerKind(note) {
+  const ownerType = String(note?.owner?.type || "").trim().toLowerCase();
+  const reltype = String(note?.reltype || "").trim().toLowerCase();
+  if (ownerType === "contact") return "contact";
+  if (ownerType === "deal") return "deal";
+  if (reltype === "subscriber") return "contact";
+  if (reltype === "deal") return "deal";
+  return "";
+}
+
+function noteOwnerId(note) {
+  return String(note?.owner?.id || note?.relid || "").trim();
+}
+
+async function fetchDealsForIds(credentials, requiredIds, updateProgress, summary, shouldCancel) {
+  const deals = new Map();
+  const ids = [...requiredIds];
+  if (!ids.length) return deals;
+
+  if (ids.length <= DEAL_BULK_LOOKUP_THRESHOLD) {
+    let completed = 0;
+    for (let start = 0; start < ids.length; start += DEAL_LOOKUP_CONCURRENCY) {
+      await assertNotCanceled(shouldCancel);
+      const batch = ids.slice(start, start + DEAL_LOOKUP_CONCURRENCY);
+      const results = await Promise.all(batch.map(async (dealId) => {
+        try {
+          const body = await activeRequest(credentials, `/deals/${encodeURIComponent(dealId)}`, new URLSearchParams(), { shouldCancel });
+          return { dealId, deal: body?.deal || null, error: null };
+        } catch (error) {
+          if (error?.code === "JOB_CANCELED") throw error;
+          if (error?.code === "ACTIVE_CAMPAIGN_HTTP_403" || error?.code === "ACTIVE_CAMPAIGN_HTTP_404") {
+            return { dealId, deal: null, error };
+          }
+          throw error;
+        }
+      }));
+
+      for (const result of results) {
+        completed += 1;
+        if (result.deal) deals.set(String(result.deal?.id || result.dealId), result.deal);
+        else summary.dealLookupErrors += 1;
+      }
+      summary.dealsFound = deals.size;
+
+      await reportProgress(
+        updateProgress,
+        stagePercent(40, 52, completed, ids.length),
+        `Localizando negócios da ActiveCampaign: ${completed} de ${ids.length}`,
+        {
+          stage: "fetch_deals",
+          stageLabel: "Localizando negócios",
+          stageCurrent: completed,
+          stageTotal: ids.length,
+          currentPage: Math.floor(start / DEAL_LOOKUP_CONCURRENCY) + 1,
+          stats: progressStats(summary),
+        },
+      );
+    }
+    return deals;
+  }
+
+  let offset = 0;
+  let scanned = 0;
+  let totalAvailable = null;
+  let pageNumber = 0;
+  try {
+    while (deals.size < requiredIds.size) {
+      await assertNotCanceled(shouldCancel);
+      const search = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
+      const body = await activeRequest(credentials, "/deals", search, { shouldCancel });
+      await assertNotCanceled(shouldCancel);
+      const page = Array.isArray(body?.deals) ? body.deals : [];
+      pageNumber += 1;
+      if (totalAvailable === null) totalAvailable = Number(body?.meta?.total || 0) || null;
+      if (!page.length) break;
+      scanned += page.length;
+      for (const deal of page) {
+        const id = String(deal?.id || "").trim();
+        if (requiredIds.has(id)) deals.set(id, deal);
+      }
+      summary.dealsFound = deals.size;
+      offset += page.length;
+      const percent = totalAvailable
+        ? stagePercent(40, 52, Math.min(scanned, totalAvailable), totalAvailable)
+        : Math.min(51, 40 + Math.max(1, pageNumber));
+      await reportProgress(
+        updateProgress,
+        percent,
+        `Localizando negócios da ActiveCampaign: ${deals.size} de ${ids.length}`,
+        {
+          stage: "fetch_deals",
+          stageLabel: "Localizando negócios",
+          stageCurrent: deals.size,
+          stageTotal: ids.length,
+          scannedDeals: scanned,
+          currentPage: pageNumber,
+          stats: progressStats(summary),
+        },
+      );
+      if (page.length < PAGE_SIZE) break;
+      if (totalAvailable !== null && scanned >= totalAvailable) break;
+    }
+  } catch (error) {
+    if (error?.code !== "ACTIVE_CAMPAIGN_HTTP_403") throw error;
+  }
+
+  summary.dealsFound = deals.size;
+  summary.dealLookupErrors += Math.max(0, requiredIds.size - deals.size);
+  return deals;
+}
+
 async function fetchContactsForIds(credentials, requiredIds, updateProgress, summary, shouldCancel) {
   const contacts = new Map();
   if (!requiredIds.size) return contacts;
@@ -207,8 +324,8 @@ async function fetchContactsForIds(credentials, requiredIds, updateProgress, sum
     }
     const lastId = String(page[page.length - 1]?.id || "");
     const percent = totalAvailable
-      ? stagePercent(40, 60, Math.min(scanned, totalAvailable), totalAvailable)
-      : Math.min(59, 40 + Math.max(1, pageNumber));
+      ? stagePercent(54, 68, Math.min(scanned, totalAvailable), totalAvailable)
+      : Math.min(67, 54 + Math.max(1, pageNumber));
     await reportProgress(
       updateProgress,
       percent,
@@ -268,7 +385,8 @@ function noteHash(note, body) {
 export async function importActiveCampaignNotes({ credentials, fromDate = "", queryRows, execute, withTransaction, updateProgress, shouldCancel }) {
   const startedAt = new Date().toISOString();
   const summary = {
-    notesFetched: 0, contactNotes: 0, processedNotes: 0, ignoredNonContact: 0, ignoredByDate: 0,
+    notesFetched: 0, contactNotes: 0, dealNotes: 0, processedNotes: 0, ignoredNonContact: 0, ignoredByDate: 0,
+    dealsReferenced: 0, dealsFound: 0, dealsWithoutPrimaryContact: 0, dealLookupErrors: 0, dealNotesWithoutContact: 0,
     contactsReferenced: 0, contactsFound: 0, contactsMatchedByEmail: 0, contactsMatchedByPhone: 0,
     contactsWithoutLead: 0, ambiguousContacts: 0, imported: 0, updated: 0, duplicates: 0, truncated: 0, emptyNotes: 0,
     startedAt, completedAt: "",
@@ -287,39 +405,72 @@ export async function importActiveCampaignNotes({ credentials, fromDate = "", qu
   const allNotes = await fetchAllNotes(credentials, updateProgress, summary, shouldCancel);
   await assertNotCanceled(shouldCancel);
   const fromTimestamp = fromDate ? Date.parse(`${fromDate}T00:00:00`) : NaN;
-  const relevantNotes = [];
-  const contactIds = new Set();
+  const candidateNotes = [];
+  const directContactIds = new Set();
+  const dealIds = new Set();
   let filteredNotes = 0;
   for (const note of allNotes) {
     if (filteredNotes % 1000 === 0) await assertNotCanceled(shouldCancel);
     filteredNotes += 1;
-    const ownerType = String(note?.owner?.type || "").toLowerCase();
-    const reltype = String(note?.reltype || "").toLowerCase();
-    if (ownerType !== "contact" && reltype !== "subscriber") { summary.ignoredNonContact += 1; continue; }
+    const ownerKind = noteOwnerKind(note);
+    if (!ownerKind) { summary.ignoredNonContact += 1; continue; }
     const created = Date.parse(String(note?.cdate || ""));
     if (Number.isFinite(fromTimestamp) && Number.isFinite(created) && created < fromTimestamp) { summary.ignoredByDate += 1; continue; }
-    const contactId = String(note?.owner?.id || note?.relid || "").trim();
-    if (!contactId) continue;
-    relevantNotes.push(note);
-    contactIds.add(contactId);
+    const ownerId = noteOwnerId(note);
+    if (!ownerId) continue;
+    candidateNotes.push({ note, ownerKind, ownerId });
+    if (ownerKind === "contact") {
+      summary.contactNotes += 1;
+      directContactIds.add(ownerId);
+    } else {
+      summary.dealNotes += 1;
+      dealIds.add(ownerId);
+    }
   }
-  summary.contactNotes = relevantNotes.length;
-  summary.contactsReferenced = contactIds.size;
+  summary.dealsReferenced = dealIds.size;
 
-  await reportProgress(updateProgress, 38, `Preparando ${relevantNotes.length} nota(s) de contato para cruzamento`, {
+  await reportProgress(updateProgress, 38, `Preparando ${candidateNotes.length} nota(s) de contato e negócio para cruzamento`, {
     stage: "filter_notes",
     stageLabel: "Preparando notas",
-    stageCurrent: relevantNotes.length,
-    stageTotal: relevantNotes.length,
+    stageCurrent: candidateNotes.length,
+    stageTotal: candidateNotes.length,
     currentPage: 0,
     stats: progressStats(summary),
   });
+
+  const deals = await fetchDealsForIds(credentials, dealIds, updateProgress, summary, shouldCancel);
+  await assertNotCanceled(shouldCancel);
+  summary.dealsFound = deals.size;
+  const dealContactIds = new Map();
+  for (const dealId of dealIds) {
+    const deal = deals.get(dealId);
+    if (!deal) continue;
+    const rawContact = deal?.contact;
+    const contactId = String(typeof rawContact === "object" ? rawContact?.id || "" : rawContact || "").trim();
+    if (contactId) dealContactIds.set(dealId, contactId);
+    else summary.dealsWithoutPrimaryContact += 1;
+  }
+
+  const relevantNotes = [];
+  const contactIds = new Set(directContactIds);
+  for (const candidate of candidateNotes) {
+    const contactId = candidate.ownerKind === "contact"
+      ? candidate.ownerId
+      : String(dealContactIds.get(candidate.ownerId) || "").trim();
+    if (!contactId) {
+      if (candidate.ownerKind === "deal") summary.dealNotesWithoutContact += 1;
+      continue;
+    }
+    relevantNotes.push({ ...candidate, contactId });
+    contactIds.add(contactId);
+  }
+  summary.contactsReferenced = contactIds.size;
 
   const contacts = await fetchContactsForIds(credentials, contactIds, updateProgress, summary, shouldCancel);
   await assertNotCanceled(shouldCancel);
   summary.contactsFound = contacts.size;
 
-  await reportProgress(updateProgress, 62, "Cruzando contatos da ActiveCampaign com os leads do BobCRM", {
+  await reportProgress(updateProgress, 70, "Cruzando contatos da ActiveCampaign com os leads do BobCRM", {
     stage: "match_leads",
     stageLabel: "Cruzando leads",
     stageCurrent: 0,
@@ -345,7 +496,7 @@ export async function importActiveCampaignNotes({ credentials, fromDate = "", qu
   }
   summary.contactsWithoutLead += Math.max(0, contactIds.size - contacts.size);
 
-  await reportProgress(updateProgress, 65, "Cruzamento concluído. Iniciando gravação das notas", {
+  await reportProgress(updateProgress, 72, "Cruzamento concluído. Iniciando gravação das notas", {
     stage: "match_leads",
     stageLabel: "Cruzando leads",
     stageCurrent: matchedContactsProcessed,
@@ -363,10 +514,10 @@ export async function importActiveCampaignNotes({ credentials, fromDate = "", qu
     await assertNotCanceled(shouldCancel);
     const batch = relevantNotes.slice(start, start + 100);
     await withTransaction(async (client) => {
-      for (const note of batch) {
+      for (const item of batch) {
         processed += 1;
         summary.processedNotes = processed;
-        const contactId = String(note?.owner?.id || note?.relid || "").trim();
+        const { note, contactId } = item;
         const match = contactMatches.get(contactId);
         if (!match?.leadId) continue;
         const normalized = normalizeImportedBody(note?.note);
@@ -393,7 +544,7 @@ export async function importActiveCampaignNotes({ credentials, fromDate = "", qu
       }
     });
     await assertNotCanceled(shouldCancel);
-    const percent = stagePercent(65, 98, processed, Math.max(1, relevantNotes.length));
+    const percent = stagePercent(72, 98, processed, Math.max(1, relevantNotes.length));
     await reportProgress(updateProgress, percent, `Importando notas: ${processed} de ${relevantNotes.length}`, {
       stage: "import_notes",
       stageLabel: "Importando notas",
@@ -426,4 +577,3 @@ export async function importActiveCampaignNotes({ credentials, fromDate = "", qu
   });
   return summary;
 }
-

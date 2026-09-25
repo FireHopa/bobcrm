@@ -17,6 +17,7 @@ function formatDateTime(value: string) { const date = new Date(value); return Nu
 const PROGRESS_STAGES = [
   { id: "preparing", label: "Preparando" },
   { id: "fetch_notes", label: "Buscando notas" },
+  { id: "fetch_deals", label: "Localizando negócios" },
   { id: "fetch_contacts", label: "Localizando contatos" },
   { id: "match_leads", label: "Cruzando leads" },
   { id: "import_notes", label: "Importando notas" },
@@ -161,13 +162,13 @@ export function ActiveCampaignNotesImport() {
   return (
     <section className="panel productionPanel productionPanelV32 activeCampaignPanel">
       <div className="sectionTitleRow">
-        <div><h3>ActiveCampaign · Importar notas</h3><p>Busca notas dos contatos na ActiveCampaign e adiciona cada uma ao lead correspondente no BobCRM.</p></div>
+        <div><h3>ActiveCampaign · Importar notas</h3><p>Busca notas de contatos e de negócios (Deals) na ActiveCampaign e adiciona cada uma ao lead correspondente no BobCRM.</p></div>
         <span className="badge badgeBlue">Importação manual</span>
       </div>
 
       <div className="activeCampaignNotice">
         <strong>Como o BobCRM encontra o lead</strong>
-        <span>Primeiro pelo e-mail. Se não encontrar, tenta o telefone normalizado. Correspondências ambíguas não são importadas.</span>
+        <span>Notas de negócios são vinculadas ao contato principal do Deal. Depois, o lead é localizado primeiro pelo e-mail e, se necessário, pelo telefone normalizado. Correspondências ambíguas não são importadas.</span>
       </div>
 
       <form className="activeCampaignForm" onSubmit={handleTest}>
@@ -213,6 +214,8 @@ export function ActiveCampaignNotesImport() {
 
           <div className="activeCampaignLiveGrid">
             <article><span>Notas encontradas</span><strong>{formatNumber(Number(stats.notesFetched || 0))}</strong></article>
+            <article><span>Notas de contatos</span><strong>{formatNumber(Number(stats.contactNotes || 0))}</strong></article>
+            <article><span>Notas de negócios</span><strong>{formatNumber(Number(stats.dealNotes || 0))}</strong></article>
             <article><span>Notas processadas</span><strong>{formatNumber(Number(stats.processedNotes || 0))}</strong></article>
             <article><span>Importadas</span><strong>{formatNumber(Number(stats.imported || 0))}</strong></article>
             <article><span>Atualizadas</span><strong>{formatNumber(Number(stats.updated || 0))}</strong></article>
@@ -235,6 +238,9 @@ export function ActiveCampaignNotesImport() {
           <div className="activeCampaignResultGrid">
             <article><span>Notas encontradas</span><strong>{formatNumber(summary.notesFetched)}</strong></article>
             <article><span>Notas de contatos</span><strong>{formatNumber(summary.contactNotes)}</strong></article>
+            <article><span>Notas de negócios</span><strong>{formatNumber(summary.dealNotes)}</strong></article>
+            <article><span>Negócios localizados</span><strong>{formatNumber(summary.dealsFound)} / {formatNumber(summary.dealsReferenced)}</strong></article>
+            <article><span>Notas de negócio sem contato</span><strong>{formatNumber(summary.dealNotesWithoutContact)}</strong></article>
             <article><span>Notas processadas</span><strong>{formatNumber(summary.processedNotes)}</strong></article>
             <article><span>Novas importadas</span><strong>{formatNumber(summary.imported)}</strong></article>
             <article><span>Notas atualizadas</span><strong>{formatNumber(summary.updated)}</strong></article>
@@ -245,6 +251,7 @@ export function ActiveCampaignNotesImport() {
             <article><span>Correspondência ambígua</span><strong>{formatNumber(summary.ambiguousContacts)}</strong></article>
             <article><span>Ignoradas pela data</span><strong>{formatNumber(summary.ignoredByDate)}</strong></article>
           </div>
+          {summary.dealLookupErrors ? <p className="activeCampaignFootnote">{formatNumber(summary.dealLookupErrors)} negócio(s) não puderam ser consultados pela API, normalmente por permissão de pipeline ou porque o negócio não existe mais.</p> : null}
           {summary.truncated ? <p className="activeCampaignFootnote">{formatNumber(summary.truncated)} nota(s) excediam 5.000 caracteres e foram truncadas para respeitar o limite atual do BobCRM.</p> : null}
         </div>
       ) : null}

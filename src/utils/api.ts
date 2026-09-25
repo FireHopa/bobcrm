@@ -1669,9 +1669,15 @@ export type ActiveCampaignConnectionResult = {
 export type ActiveCampaignImportSummary = {
   notesFetched: number;
   contactNotes: number;
+  dealNotes: number;
   processedNotes: number;
   ignoredNonContact: number;
   ignoredByDate: number;
+  dealsReferenced: number;
+  dealsFound: number;
+  dealsWithoutPrimaryContact: number;
+  dealLookupErrors: number;
+  dealNotesWithoutContact: number;
   contactsReferenced: number;
   contactsFound: number;
   contactsMatchedByEmail: number;
@@ -1688,7 +1694,7 @@ export type ActiveCampaignImportSummary = {
 };
 
 export type ActiveCampaignImportProgress = {
-  stage?: "preparing" | "fetch_notes" | "filter_notes" | "fetch_contacts" | "match_leads" | "import_notes" | "finalizing" | "completed";
+  stage?: "preparing" | "fetch_notes" | "filter_notes" | "fetch_deals" | "fetch_contacts" | "match_leads" | "import_notes" | "finalizing" | "completed";
   stageLabel?: string;
   stageCurrent?: number;
   stageTotal?: number;
@@ -1698,6 +1704,10 @@ export type ActiveCampaignImportProgress = {
   stats?: {
     notesFetched?: number;
     contactNotes?: number;
+    dealNotes?: number;
+    dealsReferenced?: number;
+    dealsFound?: number;
+    dealNotesWithoutContact?: number;
     processedNotes?: number;
     imported?: number;
     updated?: number;
