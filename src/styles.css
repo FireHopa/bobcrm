@@ -14283,3 +14283,345 @@ tbody tr:hover {
   .commercialAuditTransitionRoute b { transform: rotate(90deg); }
   .commercialAuditTransitionRoute > span:last-child { text-align: left; }
 }
+
+/* Lead export center */
+.leadExportPanel { display: grid; gap: 18px; }
+.exportHero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, .95fr);
+  gap: 18px;
+  padding: 20px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 20px;
+  background: linear-gradient(135deg, rgba(37,99,235,.06), rgba(15,23,42,.015));
+}
+.exportHeroMain { display: grid; gap: 10px; align-content: start; }
+.exportHeroMain h3 { margin: 0; }
+.exportHeroMain p { margin: 0; color: var(--muted, #475569); max-width: 70ch; }
+.exportHeroBadges { display: flex; flex-wrap: wrap; gap: 8px; }
+.exportHeroBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.76);
+  border: 1px solid rgba(148, 163, 184, .28);
+  color: var(--text, #0f172a);
+  font-size: .82rem;
+  font-weight: 600;
+}
+.exportHeroStats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-content: start; }
+.exportStatCard {
+  display: grid;
+  gap: 4px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(255,255,255,.88);
+  border: 1px solid rgba(148, 163, 184, .24);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, .05);
+}
+.exportStatCardPrimary {
+  background: linear-gradient(180deg, rgba(37,99,235,.10), rgba(255,255,255,.98));
+  border-color: rgba(37,99,235,.24);
+}
+.exportStatCard span { font-size: .78rem; font-weight: 700; color: var(--muted, #475569); text-transform: uppercase; letter-spacing: .04em; }
+.exportStatCard strong { font-size: 1.7rem; line-height: 1; }
+.exportStatCard small { font-size: .8rem; color: var(--muted, #475569); }
+.exportToolbarCard,
+.exportPreviewBlock,
+.exportActionsBar {
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 18px;
+  background: var(--surface, #fff);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, .04);
+}
+.exportToolbarCard { padding: 18px; display: grid; gap: 14px; }
+.exportToolbarHeader { align-items: start; }
+.exportToolbarHeader h4,
+.exportPreviewBlock h4 { margin: 0; }
+.exportToolbarHeader p,
+.exportPreviewBlock p { margin: 4px 0 0; color: var(--muted, #475569); }
+.exportCountBox { min-width: 170px; padding: 14px 18px; border: 1px solid var(--border, #e2e8f0); border-radius: 14px; display: grid; gap: 2px; text-align: right; background: var(--surface-soft, #f8fafc); }
+.exportCountBox strong { font-size: 1.8rem; line-height: 1; }
+.exportCountBox span { font-size: .82rem; opacity: .7; }
+.exportPresetBar { display: grid; grid-template-columns: minmax(220px, 1.1fr) minmax(260px, 1.3fr) auto auto; gap: 12px; align-items: end; }
+.exportFilterSections { display: grid; gap: 12px; }
+.exportFilterSection {
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 18px;
+  overflow: hidden;
+  background: var(--surface, #fff);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .03);
+}
+.exportFilterSection > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 16px 20px;
+  background: linear-gradient(180deg, rgba(248,250,252,.95), rgba(255,255,255,.95));
+  user-select: none;
+  position: relative;
+}
+.exportFilterSection > summary::-webkit-details-marker { display: none; }
+.exportFilterSection > summary::after {
+  content: '⌄';
+  position: absolute;
+  right: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 1rem;
+  color: var(--muted, #64748b);
+  transition: transform .18s ease;
+}
+.exportFilterSection[open] > summary::after { transform: translateY(-50%) rotate(180deg); }
+.exportFilterSection > summary strong { display: block; font-size: 1rem; }
+.exportFilterSection > summary small { display: block; margin-top: 3px; font-size: .84rem; color: var(--muted, #64748b); max-width: 72ch; }
+.exportFilterSection[open] > summary { border-bottom: 1px solid var(--border, #e2e8f0); }
+.exportFilterSection > :not(summary) { margin: 16px 18px; }
+.exportFilterSection > :not(summary) + :not(summary) { margin-top: 14px; }
+.exportFieldGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.exportWideField { grid-column: span 2; }
+.exportCheckGroup { border: 0; padding: 0; min-width: 0; }
+.exportCheckGroup legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-weight: 700;
+  font-size: .9rem;
+  margin-bottom: 10px;
+}
+.exportCheckGroup legend small {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(37,99,235,.08);
+  color: var(--primary, #2563eb);
+  font-weight: 700;
+  font-size: .75rem;
+}
+.exportCheckGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.exportCheckOption {
+  position: relative;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  min-height: 54px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 14px;
+  padding: 12px 14px;
+  font-size: .87rem;
+  cursor: pointer;
+  background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.72));
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease, background .18s ease;
+}
+.exportCheckOption:hover {
+  transform: translateY(-1px);
+  border-color: rgba(37,99,235,.28);
+  box-shadow: 0 10px 22px rgba(37,99,235,.08);
+}
+.exportCheckOption input {
+  position: absolute;
+  opacity: 0;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+.exportCheckMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #cbd5e1);
+  background: #fff;
+  font-size: .75rem;
+  font-weight: 800;
+  color: #fff;
+}
+.exportCheckText { line-height: 1.35; color: var(--text, #0f172a); }
+.exportCheckOption.is-selected {
+  border-color: rgba(37,99,235,.5);
+  background: linear-gradient(180deg, rgba(37,99,235,.08), rgba(255,255,255,.98));
+  box-shadow: 0 0 0 1px rgba(37,99,235,.12) inset, 0 10px 26px rgba(37,99,235,.08);
+}
+.exportCheckOption.is-selected .exportCheckMark {
+  border-color: var(--primary, #2563eb);
+  background: var(--primary, #2563eb);
+}
+.exportDateGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.exportDateFilter { display: grid; gap: 8px; }
+.exportDateRange { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.exportPreviewBlock { display: grid; gap: 10px; padding: 18px; }
+.exportPreviewTable td small { display: block; opacity: .68; margin-top: 3px; }
+.exportActionsBar {
+  position: sticky;
+  bottom: 10px;
+  z-index: 5;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 18px;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, .12);
+}
+.exportActionsBar > div:first-child { display: grid; gap: 4px; }
+.exportActionsBar strong { font-size: 1rem; }
+.exportActionsBar span { font-size: .82rem; opacity: .72; }
+.exportActionButtons { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.exportAuditHint { opacity: .66; }
+.leadTableHeaderActions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+@media (max-width: 1180px) {
+  .exportHero { grid-template-columns: 1fr; }
+  .exportHeroStats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .exportPresetBar { grid-template-columns: 1fr 1fr; }
+  .exportPresetBar button { width: 100%; }
+}
+@media (max-width: 980px) {
+  .exportFieldGrid, .exportDateGrid { grid-template-columns: 1fr 1fr; }
+  .exportActionsBar { position: static; align-items: flex-start; flex-direction: column; }
+  .exportWideField { grid-column: 1 / -1; }
+}
+@media (max-width: 680px) {
+  .exportHero { padding: 16px; }
+  .exportHeroStats { grid-template-columns: 1fr; }
+  .exportPresetBar, .exportFieldGrid, .exportDateGrid, .exportDateRange { grid-template-columns: 1fr; }
+  .exportWideField { grid-column: auto; }
+  .exportActionButtons { width: 100%; justify-content: stretch; }
+  .exportActionButtons button { flex: 1 1 100%; }
+  .exportCheckGrid { grid-template-columns: 1fr; }
+}
+
+/* Lead Export Center - responsive containment fix */
+.leadExportPanel,
+.leadExportPanel > *,
+.exportFilterSections,
+.exportFilterSection,
+.exportCheckGroup,
+.exportPreviewBlock,
+.exportActionsBar {
+  min-width: 0 !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+.leadExportPanel {
+  width: 100% !important;
+}
+
+/* Multi-select cards: wrap inside the section instead of widening it. */
+.exportFilterSection {
+  overflow: visible !important;
+}
+
+.exportCheckGrid {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: stretch !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  gap: 10px !important;
+}
+
+.exportCheckOption {
+  flex: 1 1 210px !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  height: auto !important;
+}
+
+.exportCheckText {
+  min-width: 0 !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+  word-break: break-word !important;
+}
+
+/* The preview table scrolls inside its own card and cannot widen Administration. */
+.exportPreviewBlock {
+  width: 100% !important;
+  overflow: hidden !important;
+}
+
+.exportPreviewBlock .tableScroller {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.exportPreviewTable {
+  width: max-content !important;
+  min-width: 100% !important;
+  max-width: none !important;
+  table-layout: auto !important;
+}
+
+.exportPreviewTable th,
+.exportPreviewTable td {
+  min-width: 145px;
+  max-width: 260px;
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+  word-break: break-word !important;
+}
+
+.exportPreviewTable th:first-child,
+.exportPreviewTable td:first-child {
+  min-width: 260px;
+  max-width: 360px;
+}
+
+/* Keep export controls visible even when the preview table is wider. */
+.exportActionsBar {
+  width: 100% !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  align-items: center !important;
+  overflow: visible !important;
+}
+
+.exportActionsBar > div:first-child {
+  min-width: 0 !important;
+}
+
+.exportActionsBar > div:first-child span {
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+}
+
+.exportActionButtons {
+  min-width: 0 !important;
+  max-width: 100% !important;
+  display: flex !important;
+  flex-wrap: wrap !important;
+  justify-content: flex-end !important;
+}
+
+@media (max-width: 1100px) {
+  .exportActionsBar {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+
+  .exportActionButtons {
+    width: 100% !important;
+    justify-content: flex-start !important;
+  }
+}
+
+@media (max-width: 680px) {
+  .exportCheckOption {
+    flex: 1 1 100% !important;
+  }
+}

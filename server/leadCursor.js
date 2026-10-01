@@ -22,5 +22,11 @@ export function leadCursorFilterKey(filters = {}) {
     filters.responsible || "",
     filters.source || "",
     filters.quickFilter || "",
+    filters.dates?.nextContactAt?.preset || "",
+    filters.dates?.nextContactAt?.from || "",
+    filters.dates?.nextContactAt?.to || "",
+    filters.dates?.expectedCloseAt?.preset || "",
+    filters.dates?.expectedCloseAt?.from || "",
+    filters.dates?.expectedCloseAt?.to || "",
   ]);
 }

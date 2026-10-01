@@ -229,6 +229,77 @@ export type FetchLeadsParams = {
   includeOpportunitySummary?: boolean;
 };
 
+export type LeadExportDateFilter = {
+  preset?: string;
+  from?: string;
+  to?: string;
+};
+
+export type LeadExportFilters = {
+  base?: "active" | "deleted" | "archived";
+  search?: string;
+  status?: string;
+  temperature?: string;
+  responsible?: string;
+  source?: string;
+  quickFilter?: string;
+  statuses?: string[];
+  temperatures?: string[];
+  responsibleUserIds?: string[];
+  responsibleNames?: string[];
+  sdrResponsibleUserIds?: string[];
+  sdrResponsibleNames?: string[];
+  sources?: string[];
+  lostReasons?: string[];
+  pipelineIds?: string[];
+  stageIds?: string[];
+  stageTypes?: ("open" | "won" | "lost")[];
+  dates?: Record<string, LeadExportDateFilter>;
+  fieldStates?: Record<string, "filled" | "empty" | "">;
+  advertising?: Record<string, "yes" | "no" | "">;
+  serviceInterests?: string[];
+  serviceStatuses?: string[];
+  customFields?: Record<string, string>;
+  estimatedBudgetContains?: string;
+  expectedValueMin?: number | null;
+  expectedValueMax?: number | null;
+  closedValueMin?: number | null;
+  closedValueMax?: number | null;
+  task?: {
+    presence?: string;
+    responsibleUserIds?: string[];
+    types?: string[];
+    priorities?: string[];
+    statuses?: string[];
+    due?: LeadExportDateFilter;
+  };
+  handoff?: {
+    actorUserIds?: string[];
+    fromUserIds?: string[];
+    toUserIds?: string[];
+    pipelineIds?: string[];
+    stageIds?: string[];
+    created?: LeadExportDateFilter;
+  };
+  audit?: {
+    actorUserIds?: string[];
+    actions?: string[];
+    created?: LeadExportDateFilter;
+  };
+  externalOrigin?: {
+    providers?: string[];
+    sources?: string[];
+    webhookNames?: string[];
+  };
+};
+
+export type LeadExportPreview = {
+  total: number;
+  searchMode: string;
+  filters: LeadExportFilters;
+  sample: Array<Lead & { pipelineName?: string; stageName?: string }>;
+};
+
 export type FetchLeadsPageResult = {
   leads: Lead[];
   pagination: LeadPagination;
@@ -1638,20 +1709,52 @@ export async function downloadBackupById(backupId: string): Promise<void> {
   await downloadFile(`/api/backups/${encodeURIComponent(backupId)}/download`, `crm-casa-do-ads-backup-${new Date().toISOString().slice(0, 10)}.cadbkp`);
 }
 
-async function createAndDownloadLeadExport(format: "csv" | "xlsx"): Promise<void> {
-  const completed = await enqueueAndWaitForJob("/api/exports/leads", { format }, 30 * 60 * 1000);
+export function leadExportFiltersFromFetchParams(params: FetchLeadsParams = {}): LeadExportFilters {
+  const dates: Record<string, LeadExportDateFilter> = {};
+  if (params.nextStepDateFilter || params.nextStepFrom || params.nextStepTo) {
+    dates.nextContactAt = { preset: params.nextStepDateFilter, from: params.nextStepFrom, to: params.nextStepTo };
+  }
+  if (params.expectedCloseDateFilter || params.expectedCloseFrom || params.expectedCloseTo) {
+    dates.expectedCloseAt = { preset: params.expectedCloseDateFilter, from: params.expectedCloseFrom, to: params.expectedCloseTo };
+  }
+  return {
+    base: "active",
+    search: params.search,
+    status: params.status,
+    temperature: params.temperature,
+    responsible: params.responsible,
+    source: params.source,
+    quickFilter: params.quickFilter,
+    dates,
+  };
+}
+
+export async function previewLeadExport(filters: LeadExportFilters = {}): Promise<LeadExportPreview> {
+  return requestApi<LeadExportPreview>("/api/exports/leads/preview", {
+    method: "POST",
+    body: JSON.stringify({ filters }),
+    timeoutMs: 60_000,
+  });
+}
+
+async function createAndDownloadLeadExport(
+  format: "csv" | "xlsx",
+  filters: LeadExportFilters = {},
+  mode: "simple" | "complete" = "simple",
+): Promise<void> {
+  const completed = await enqueueAndWaitForJob("/api/exports/leads", { format, filters, mode }, 30 * 60 * 1000);
   await downloadFile(
     `/api/jobs/${encodeURIComponent(completed.id)}/download`,
-    `crm-casa-do-ads-leads-${new Date().toISOString().slice(0, 10)}.${format}`,
+    `crm-casa-do-ads-leads-${mode === "complete" && format === "xlsx" ? "completo-" : ""}${new Date().toISOString().slice(0, 10)}.${format}`,
   );
 }
 
-export async function downloadLeadsCsvExport(): Promise<void> {
-  await createAndDownloadLeadExport("csv");
+export async function downloadLeadsCsvExport(filters: LeadExportFilters = {}): Promise<void> {
+  await createAndDownloadLeadExport("csv", filters, "simple");
 }
 
-export async function downloadLeadsXlsxExport(): Promise<void> {
-  await createAndDownloadLeadExport("xlsx");
+export async function downloadLeadsXlsxExport(filters: LeadExportFilters = {}, mode: "simple" | "complete" = "simple"): Promise<void> {
+  await createAndDownloadLeadExport("xlsx", filters, mode);
 }
 
 export async function downloadDatabaseBackup(): Promise<BackupEntry> {

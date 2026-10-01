@@ -1,7 +1,7 @@
 import { lazy, memo, Suspense, useEffect, useMemo, useState } from "react";
 import { getClientIntelligence } from "../constants/services";
 import type { Lead, LeadStatus, LeadTemperature } from "../types/Lead";
-import type { FetchLeadsParams, LeadPagination, LeadSummary } from "../utils/api";
+import { downloadLeadsXlsxExport, leadExportFiltersFromFetchParams, type FetchLeadsParams, type LeadPagination, type LeadSummary } from "../utils/api";
 import { getLeadScores, getRecommendedCommercialPlan, isActiveLead } from "../utils/commercial";
 import { formatDate, formatPhone, isPastDate, isToday } from "../utils/formatters";
 import { createLeadMenuIcon, LeadOverflowMenu } from "./LeadActionMenus";
@@ -28,6 +28,7 @@ type LeadTableProps = {
   canMoveKanbanCards?: boolean;
   canAddKanbanCards?: boolean;
   canManageKanban?: boolean;
+  canExportLeads?: boolean;
   isSalesConsultant?: boolean;
   hideExpectedCloseFilter?: boolean;
   onKanbanLeadUpdated?: (lead: Lead) => void;
@@ -353,6 +354,7 @@ export const LeadTable = memo(function LeadTable({
   canMoveKanbanCards = false,
   canAddKanbanCards = false,
   canManageKanban = false,
+  canExportLeads = false,
   isSalesConsultant = false,
   hideExpectedCloseFilter = false,
   onKanbanLeadUpdated,
@@ -375,6 +377,7 @@ export const LeadTable = memo(function LeadTable({
   const [quickFilter, setQuickFilter] = useState<QuickFilter>(isSalesConsultant ? "all" : (requestedQuickFilter || "all"));
   const [sortBy, setSortBy] = useState<NonNullable<FetchLeadsParams["sortBy"]>>("updatedAt");
   const [sortDirection, setSortDirection] = useState<NonNullable<FetchLeadsParams["sortDirection"]>>("desc");
+  const [isExportingCurrent, setIsExportingCurrent] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     const stored = localStorage.getItem("crmCasaAdsLeadViewMode");
     return stored === "complete" || stored === "kanban" ? stored : "compact";
@@ -552,6 +555,29 @@ export const LeadTable = memo(function LeadTable({
     }, { append: true });
   }
 
+  async function handleExportCurrentResults() {
+    setIsExportingCurrent(true);
+    try {
+      const params: FetchLeadsParams = {
+        search,
+        status: statusFilter,
+        temperature: temperatureFilter,
+        responsible: ownerFilter,
+        source: sourceFilter,
+        nextStepDateFilter,
+        nextStepFrom,
+        nextStepTo,
+        expectedCloseDateFilter,
+        expectedCloseFrom,
+        expectedCloseTo,
+        quickFilter: getServerQuickFilter(quickFilter),
+      };
+      await downloadLeadsXlsxExport(leadExportFiltersFromFetchParams(params));
+    } finally {
+      setIsExportingCurrent(false);
+    }
+  }
+
   function handleViewModeChange(mode: ViewMode) {
     setViewMode(mode);
     localStorage.setItem("crmCasaAdsLeadViewMode", mode);
@@ -582,12 +608,19 @@ export const LeadTable = memo(function LeadTable({
           <p>Filtre a base, encontre pendências e abra o drawer apenas quando precisar de detalhe.</p>
         </div>
 
-        <div className="viewModeSwitch" aria-label="Modo de visualização">
-          {(["compact", "complete", "kanban"] as ViewMode[]).map((mode) => (
-            <button key={mode} type="button" className={viewMode === mode ? "viewModeActive" : ""} onClick={() => handleViewModeChange(mode)}>
-              {mode === "compact" ? "Compacto" : mode === "complete" ? "Completo" : "Kanban"}
+        <div className="leadTableHeaderActions">
+          {canExportLeads ? (
+            <button className="secondaryButton" type="button" onClick={() => void handleExportCurrentResults()} disabled={isExportingCurrent}>
+              {isExportingCurrent ? "Exportando…" : "Exportar resultados atuais"}
             </button>
-          ))}
+          ) : null}
+          <div className="viewModeSwitch" aria-label="Modo de visualização">
+            {(["compact", "complete", "kanban"] as ViewMode[]).map((mode) => (
+              <button key={mode} type="button" className={viewMode === mode ? "viewModeActive" : ""} onClick={() => handleViewModeChange(mode)}>
+                {mode === "compact" ? "Compacto" : mode === "complete" ? "Completo" : "Kanban"}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

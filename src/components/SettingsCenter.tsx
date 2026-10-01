@@ -9,8 +9,6 @@ import {
   describeApiError,
   downloadBackupById,
   downloadDatabaseBackup,
-  downloadLeadsCsvExport,
-  downloadLeadsXlsxExport,
   downloadArchivedLeadsCsvExport,
   fetchArchivedLeadsFromServer,
   fetchLeadArchiveStatsFromServer,
@@ -41,6 +39,7 @@ import { IntegrationDashboard } from "./IntegrationDashboard";
 import { ActiveCampaignNotesImport } from "./ActiveCampaignNotesImport";
 import { HandoffActivityDashboard } from "./HandoffActivityDashboard";
 import { CommercialAuditDashboard } from "./CommercialAuditDashboard";
+import { LeadExportCenter } from "./LeadExportCenter";
 
 type SettingsCenterProps = {
   currentUser: CRMUser;
@@ -62,7 +61,7 @@ type UserFormState = {
   leadAccessScope: CRMUser["leadAccessScope"];
 };
 
-type AdminTab = "summary" | "users" | "backups" | "archive" | "trash" | "duplicates" | "handoffs" | "audit" | "integrations" | "activecampaign" | "system";
+type AdminTab = "summary" | "users" | "exports" | "backups" | "archive" | "trash" | "duplicates" | "handoffs" | "audit" | "integrations" | "activecampaign" | "system";
 type AdminLoadModule = "users" | "teams" | "overview" | "trash" | "backups" | "audit";
 
 const adminLoadModuleLabels: Record<AdminLoadModule, string> = {
@@ -460,6 +459,7 @@ export function SettingsCenter({
   const adminTabs = [
     { id: "summary" as AdminTab, label: "Resumo", count: 0 },
     ...(canManageUsers ? [{ id: "users" as AdminTab, label: "Usuários", count: users.length }] : []),
+    ...(canExport ? [{ id: "exports" as AdminTab, label: "Exportação", count: 0 }] : []),
     ...(canBackup ? [{ id: "backups" as AdminTab, label: "Backups", count: backups.length }] : []),
     ...(canManageUsers ? [{ id: "archive" as AdminTab, label: "Arquivo de Leads", count: archiveStats?.archivedLeads || 0 }] : []),
     ...(canRestore ? [{ id: "trash" as AdminTab, label: "Lixeira", count: deletedPagination.total }] : []),
@@ -681,6 +681,10 @@ export function SettingsCenter({
             ))}
           </div>
         </section>
+      ) : null}
+
+      {activeAdminTab === "exports" && canExport ? (
+        <LeadExportCenter currentUser={currentUser} users={users} />
       ) : null}
 
       {activeAdminTab === "backups" && canBackup ? (
@@ -924,8 +928,7 @@ export function SettingsCenter({
 
           {canExport ? (
             <div className="settingsActions settingsActionsV32">
-              <button className="primaryButton" type="button" onClick={downloadLeadsXlsxExport}>Exportar XLSX</button>
-              <button className="secondaryButton" type="button" onClick={downloadLeadsCsvExport}>Exportar CSV</button>
+              <button className="primaryButton" type="button" onClick={() => setActiveAdminTab("exports")}>Abrir exportador de leads</button>
             </div>
           ) : null}
         </section>

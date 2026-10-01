@@ -879,6 +879,7 @@ export default function App() {
               canMoveKanbanCards={hasPermission(currentUser, "move_lead_stage")}
               canAddKanbanCards={hasPermission(currentUser, "bulk_move_leads")}
               canManageKanban={hasPermission(currentUser, "manage_pipelines")}
+              canExportLeads={hasPermission(currentUser, "export_leads")}
               isSalesConsultant={currentUser.role === "consultor_vendas"}
               onKanbanLeadUpdated={replaceLeadInState}
               kanbanRefreshVersion={kanbanRefreshVersion}

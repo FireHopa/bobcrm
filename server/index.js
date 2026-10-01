@@ -10,6 +10,7 @@ import { createOperationalRuntime, resolveOperationalSettings } from "./operatio
 import { createTtlCache } from "./runtimeCache.js";
 import { decodeLeadCursor, encodeLeadCursor, leadCursorFilterKey } from "./leadCursor.js";
 import { buildLeadOwnerOptionsSql, buildLeadSourceOptionsSql } from "./leadFilterOptionsSql.js";
+import { addLeadFilterClauses, buildLeadBaseWhere, getLeadBaseTable, normalizeLeadFilterPayload } from "./leadFilterSql.js";
 import { normalizeZapePayload, phoneKeyVariants, safeSecretEquals } from "./zapeIntegration.js";
 import { buildIntegrationEventsCsv, getIntegrationDashboardOverview, getIntegrationEventDetail, retryIntegrationEvents } from "./integrationDashboard.js";
 import { createIntegrationHealthCollector, updateIntegrationIncident } from "./integrationObservability.js";
@@ -200,7 +201,7 @@ import {
   resolveJobStoragePath,
   writeJsonJobPayload,
 } from "./jobArtifacts.js";
-import { writeCsvExport, writeXlsxExport } from "./leadExport.js";
+import { writeCsvExport, writeDetailedXlsxExport, writeXlsxExport } from "./leadExport.js";
 import { sendBufferResponse } from "./httpCompression.js";
 import { createStaticAssetsHandler } from "./http/staticAssets.js";
 import {
@@ -1220,7 +1221,7 @@ async function getDuplicateGroupsPage(accessContext, options = {}, client = pool
   };
 }
 
-async function resolveLeadSearchClause({ search, baseWhere, baseParams, alias = "", client = pool, preferredMode = "" }) {
+async function resolveLeadSearchClause({ search, baseWhere, baseParams, alias = "", client = pool, preferredMode = "", tableName = "leads" }) {
   const plan = buildLeadSearchPlan(search, { alias, fullTextEnabled: leadSearchFullTextEnabled });
   if (!plan || plan.mode === "none") return null;
   if (preferredMode === LEAD_SEARCH_MODES.FALLBACK && plan.fallback) return plan.fallback;
@@ -1228,7 +1229,8 @@ async function resolveLeadSearchClause({ search, baseWhere, baseParams, alias = 
   if (!plan.primary || !plan.requiresProbe) return chooseLeadSearchPlan(plan, false);
 
   const tableAlias = String(alias || "").replace(/[^a-zA-Z0-9_]/g, "");
-  const fromClause = tableAlias ? `leads ${tableAlias}` : "leads";
+  const safeTableName = tableName === "leads_archive" ? "leads_archive" : "leads";
+  const fromClause = tableAlias ? `${safeTableName} ${tableAlias}` : safeTableName;
   const primaryHasMatches = Boolean(await scalar(
     `SELECT 1 AS found FROM ${fromClause} WHERE ${baseWhere} AND ${plan.primary.clause} LIMIT 1`,
     [...baseParams, ...plan.primary.params],
@@ -1257,45 +1259,11 @@ function addLeadQuickFilterClause(whereParts, quickFilter, alias = "") {
 }
 
 async function buildLeadsPageQuery(params = {}, accessContext = null, alias = "", client = pool) {
-  const prefix = alias ? `${alias}.` : "";
-  const whereParts = [`${prefix}deleted_at = ''`];
+  const whereParts = [buildLeadBaseWhere(params, { alias })];
   const sqlParams = [];
 
   if (accessContext) addLeadAccessClause(whereParts, sqlParams, accessContext, alias);
-
-  if (params.status) {
-    whereParts.push(`${prefix}status = ?`);
-    sqlParams.push(params.status);
-  }
-
-  if (params.temperature) {
-    whereParts.push(`${prefix}temperature = ?`);
-    sqlParams.push(params.temperature);
-  }
-
-  if (params.responsible) {
-    whereParts.push(`${prefix}responsible = ?`);
-    sqlParams.push(params.responsible);
-  }
-
-  if (params.source) {
-    const leadIdReference = alias ? `${alias}.id` : "leads.id";
-    whereParts.push(`(
-      ${prefix}source = ?
-      OR EXISTS (
-        SELECT 1
-        FROM lead_external_origins leo_source_filter
-        WHERE leo_source_filter.lead_id = ${leadIdReference}
-          AND leo_source_filter.provider = 'zape'
-          AND (
-            leo_source_filter.webhook_name = ?
-            OR leo_source_filter.source = ?
-          )
-      )
-    )`);
-    sqlParams.push(params.source, params.source, params.source);
-  }
-
+  addLeadFilterClauses(whereParts, sqlParams, params, { alias, includeRelations: true, customFieldLabels });
   addLeadQuickFilterClause(whereParts, params.quickFilter, alias);
 
   const baseWhere = whereParts.join(" AND ");
@@ -1330,6 +1298,15 @@ async function getLeadsPageFromRequest(requestUrl, currentUser) {
   const leadProjection = getLeadListProjection({ includeCommercialContext: includeOpportunitySummary });
   const sort = normalizeLeadSort(searchParams.get("sortBy"), searchParams.get("sortDirection"));
   const accessContext = await getLeadAccessContext(currentUser);
+  const nextStepDateFilter = searchParams.get("nextStepDateFilter") || "";
+  const nextStepFrom = searchParams.get("nextStepFrom") || "";
+  const nextStepTo = searchParams.get("nextStepTo") || "";
+  const expectedCloseDateFilter = searchParams.get("expectedCloseDateFilter") || "";
+  const expectedCloseFrom = searchParams.get("expectedCloseFrom") || "";
+  const expectedCloseTo = searchParams.get("expectedCloseTo") || "";
+  const dates = {};
+  if (nextStepDateFilter || nextStepFrom || nextStepTo) dates.nextContactAt = { preset: nextStepDateFilter, from: nextStepFrom, to: nextStepTo };
+  if (expectedCloseDateFilter || expectedCloseFrom || expectedCloseTo) dates.expectedCloseAt = { preset: expectedCloseDateFilter, from: expectedCloseFrom, to: expectedCloseTo };
   const filters = {
     search: searchParams.get("search") || "",
     status: searchParams.get("status") || "",
@@ -1337,6 +1314,7 @@ async function getLeadsPageFromRequest(requestUrl, currentUser) {
     responsible: searchParams.get("responsible") || "",
     source: searchParams.get("source") || "",
     quickFilter: searchParams.get("quickFilter") || "",
+    ...(Object.keys(dates).length ? { dates } : {}),
   };
   const filterKey = leadCursorFilterKey(filters);
   if (cursor?.filterKey && cursor.filterKey !== filterKey) {
@@ -1684,6 +1662,15 @@ async function getKanbanPipelines(currentUser = null, client = pool) {
 }
 
 function getKanbanFiltersFromUrl(requestUrl) {
+  const nextStepDateFilter = requestUrl.searchParams.get("nextStepDateFilter") || "";
+  const nextStepFrom = requestUrl.searchParams.get("nextStepFrom") || "";
+  const nextStepTo = requestUrl.searchParams.get("nextStepTo") || "";
+  const expectedCloseDateFilter = requestUrl.searchParams.get("expectedCloseDateFilter") || "";
+  const expectedCloseFrom = requestUrl.searchParams.get("expectedCloseFrom") || "";
+  const expectedCloseTo = requestUrl.searchParams.get("expectedCloseTo") || "";
+  const dates = {};
+  if (nextStepDateFilter || nextStepFrom || nextStepTo) dates.nextContactAt = { preset: nextStepDateFilter, from: nextStepFrom, to: nextStepTo };
+  if (expectedCloseDateFilter || expectedCloseFrom || expectedCloseTo) dates.expectedCloseAt = { preset: expectedCloseDateFilter, from: expectedCloseFrom, to: expectedCloseTo };
   return {
     search: requestUrl.searchParams.get("search") || "",
     status: requestUrl.searchParams.get("status") || "",
@@ -1691,6 +1678,7 @@ function getKanbanFiltersFromUrl(requestUrl) {
     responsible: requestUrl.searchParams.get("responsible") || "",
     source: requestUrl.searchParams.get("source") || "",
     quickFilter: requestUrl.searchParams.get("quickFilter") || "",
+    ...(Object.keys(dates).length ? { dates } : {}),
   };
 }
 
@@ -4070,6 +4058,7 @@ async function getLeadHandoffOrigin(currentUser, leadId, client = pool) {
 }
 
 const LEAD_EXPORT_HEADERS = [
+  "ID do Lead",
   "Nome",
   "Email",
   "Telefone",
@@ -4078,14 +4067,24 @@ const LEAD_EXPORT_HEADERS = [
   "Instagram",
   "Status",
   "Responsavel",
+  "Responsavel ID",
+  "SDR responsavel",
+  "SDR responsavel ID",
   "Temperatura",
   "Dor",
   "Origem",
+  "Funil",
+  "Etapa",
   "Proximo contato",
   "Fechamento previsto",
   "Ultimo contato",
   "Contato feito em",
+  "Entrada no funil",
+  "Ganho em",
+  "Perdido em",
   "Orcamento estimado",
+  "Valor esperado",
+  "Valor fechado",
   "Anuncia Google",
   "Anuncia Meta",
   "Nao anuncia Google",
@@ -4098,10 +4097,13 @@ const LEAD_EXPORT_HEADERS = [
   ...customFieldLabels,
   "Criado em",
   "Atualizado em",
+  "Excluido em",
 ];
 
-function buildLeadExportRow(lead) {
+function buildLeadExportRow(row) {
+  const lead = rowToLead(row);
   return [
+    lead.id,
     lead.name,
     lead.email,
     lead.phone,
@@ -4110,14 +4112,24 @@ function buildLeadExportRow(lead) {
     lead.instagram || "",
     lead.status,
     lead.responsible,
+    lead.responsibleUserId,
+    lead.sdrResponsible,
+    lead.sdrResponsibleUserId,
     lead.temperature,
     lead.pain,
     lead.source,
+    row.pipeline_name || "",
+    row.stage_name || "",
     lead.nextContactAt,
     lead.expectedCloseAt,
     lead.lastContactAt,
     lead.contactMadeAt,
+    lead.pipelineEnteredAt || "",
+    row.won_at || "",
+    row.lost_at || "",
     lead.estimatedBudget,
+    row.expected_value ?? "",
+    row.closed_value ?? "",
     lead.advertisesOnGoogle ? "Sim" : "Não",
     lead.advertisesOnMeta ? "Sim" : "Não",
     lead.doesNotAdvertiseOnGoogle ? "Sim" : "Não",
@@ -4130,6 +4142,7 @@ function buildLeadExportRow(lead) {
     ...customFieldLabels.map((field) => lead.customFields?.[field] || ""),
     lead.createdAt,
     lead.updatedAt,
+    lead.deletedAt || "",
   ].map(sanitizeSpreadsheetCell);
 }
 
@@ -4931,15 +4944,75 @@ async function performImportLeadsJob(job) {
   await hotColdRuntime.queueAutoArchive({ id: "system", name: "Sistema" }).catch(() => undefined);
   return { result: { report, importDestination: importKanbanTarget }, expiresAt: job.expiresAt };
 }
-async function createLeadExportPageFetcher(actor) {
-  const accessContext = await getLeadAccessContext(actor);
-  const scopedAccess = buildLeadAccessSql(accessContext.user, accessContext.teamMembers, "l");
+async function buildAdminLeadExportFilterContext(rawFilters = {}) {
+  const filters = normalizeLeadFilterPayload(rawFilters);
+  const tableName = getLeadBaseTable(filters.base);
+  const alias = "l";
+  const whereParts = [buildLeadBaseWhere(filters, { alias })];
+  const sqlParams = [];
+  addLeadFilterClauses(whereParts, sqlParams, filters, { alias, includeRelations: true, customFieldLabels });
+  addLeadQuickFilterClause(whereParts, filters.quickFilter, alias);
+
+  const baseWhere = whereParts.join(" AND ");
+  const searchClause = await resolveLeadSearchClause({
+    search: filters.search,
+    baseWhere,
+    baseParams: [...sqlParams],
+    alias,
+    client: pool,
+    tableName,
+  });
+  if (searchClause?.clause) {
+    whereParts.push(searchClause.clause);
+    sqlParams.push(...searchClause.params);
+  }
+
+  return {
+    filters,
+    tableName,
+    where: whereParts.join(" AND "),
+    params: sqlParams,
+    searchMode: searchClause?.mode || "none",
+  };
+}
+
+async function getLeadExportPreview(rawFilters = {}) {
+  const context = await buildAdminLeadExportFilterContext(rawFilters);
   const total = Number(await scalar(
-    `SELECT COUNT(*) AS total FROM leads l WHERE l.deleted_at = '' AND ${scopedAccess.clause}`,
-    scopedAccess.params,
+    `SELECT COUNT(*) AS total FROM ${context.tableName} l WHERE ${context.where}`,
+    context.params,
+  ) || 0);
+  const rows = await queryRows(
+    `SELECT l.*, p.name AS pipeline_name, s.name AS stage_name
+     FROM ${context.tableName} l
+     LEFT JOIN kanban_pipelines p ON p.id = l.pipeline_id
+     LEFT JOIN kanban_stages s ON s.id = l.pipeline_stage_id
+     WHERE ${context.where}
+     ORDER BY l.updated_at DESC, l.created_at DESC, l.id DESC
+     LIMIT 20`,
+    context.params,
+  );
+  return {
+    total,
+    searchMode: context.searchMode,
+    filters: context.filters,
+    sample: rows.map((row) => ({
+      ...rowToLead(row),
+      pipelineName: String(row.pipeline_name || ""),
+      stageName: String(row.stage_name || ""),
+    })),
+  };
+}
+
+async function createLeadExportPageFetcher(actor, rawFilters = {}) {
+  requirePermission(actor, "export_leads");
+  const context = await buildAdminLeadExportFilterContext(rawFilters);
+  const total = Number(await scalar(
+    `SELECT COUNT(*) AS total FROM ${context.tableName} l WHERE ${context.where}`,
+    context.params,
   ) || 0);
 
-  return async ({ cursor, limit }) => {
+  const fetchPage = async ({ cursor, limit }) => {
     const cursorClause = cursor
       ? ` AND (
           l.updated_at < ?
@@ -4951,12 +5024,14 @@ async function createLeadExportPageFetcher(actor) {
       ? [cursor.updatedAt, cursor.updatedAt, cursor.createdAt, cursor.updatedAt, cursor.createdAt, cursor.id]
       : [];
     const rows = await queryRows(
-      `SELECT l.*
-       FROM leads l
-       WHERE l.deleted_at = '' AND ${scopedAccess.clause}${cursorClause}
+      `SELECT l.*, p.name AS pipeline_name, s.name AS stage_name
+       FROM ${context.tableName} l
+       LEFT JOIN kanban_pipelines p ON p.id = l.pipeline_id
+       LEFT JOIN kanban_stages s ON s.id = l.pipeline_stage_id
+       WHERE ${context.where}${cursorClause}
        ORDER BY l.updated_at DESC, l.created_at DESC, l.id DESC
        LIMIT ?`,
-      [...scopedAccess.params, ...cursorParams, limit],
+      [...context.params, ...cursorParams, limit],
     );
     const last = rows.at(-1);
     return {
@@ -4969,19 +5044,134 @@ async function createLeadExportPageFetcher(actor) {
       } : null,
     };
   };
+
+  return { fetchPage, context, total };
+}
+
+async function createFilteredRelationExportFetcher(context, {
+  table,
+  alias,
+  joinCondition,
+  selectSql,
+  extraWhere = "",
+  extraParams = [],
+}) {
+  const relationWhere = `${context.where}${extraWhere ? ` AND ${extraWhere}` : ""}`;
+  const params = [...context.params, ...extraParams];
+  const total = Number(await scalar(
+    `SELECT COUNT(*) AS total
+     FROM ${table} ${alias}
+     INNER JOIN ${context.tableName} l ON ${joinCondition}
+     WHERE ${relationWhere}`,
+    params,
+  ) || 0);
+
+  return async ({ cursor, limit }) => {
+    const cursorClause = cursor ? ` AND ${alias}.id > ?` : "";
+    const rows = await queryRows(
+      `SELECT ${selectSql}
+       FROM ${table} ${alias}
+       INNER JOIN ${context.tableName} l ON ${joinCondition}
+       WHERE ${relationWhere}${cursorClause}
+       ORDER BY ${alias}.id ASC
+       LIMIT ?`,
+      [...params, ...(cursor ? [cursor.id] : []), limit],
+    );
+    const last = rows.at(-1);
+    return {
+      records: rows,
+      total,
+      nextCursor: rows.length === limit && last ? { id: last.id } : null,
+    };
+  };
+}
+
+const TASK_EXPORT_HEADERS = [
+  "ID da Tarefa", "ID do Lead", "Lead", "Empresa", "Tipo", "Titulo", "Descricao", "Responsavel", "Responsavel ID",
+  "Prioridade", "Status", "Vencimento", "Resultado", "Concluida em", "Criada por", "Criada em", "Atualizada em",
+];
+const NOTE_EXPORT_HEADERS = ["ID da Nota", "ID do Lead", "Lead", "Empresa", "Nota", "Criada por", "Criada em"];
+const HANDOFF_EXPORT_HEADERS = [
+  "ID", "ID do Lead", "Lead", "Empresa", "De", "De ID", "Executado por", "Executor ID", "Para", "Para ID",
+  "Funil", "Etapa", "Data",
+];
+const AUDIT_EXPORT_HEADERS = ["ID", "ID do Lead", "Lead", "Empresa", "Acao", "Executado por", "Executor ID", "Resumo", "Alteracoes", "Data"];
+const ORIGIN_EXPORT_HEADERS = [
+  "ID", "ID do Lead", "Lead", "Empresa", "Provedor", "Tenant", "Webhook ID", "Webhook", "Origem", "Primeira vez", "Ultima vez", "Ocorrencias", "Metadados",
+];
+
+function buildTaskExportRow(row) {
+  return [row.id, row.lead_id, row.lead_name, row.lead_company, row.type, row.title, row.description, row.responsible_name,
+    row.responsible_user_id, row.priority, row.status, row.due_at, row.result, row.completed_at, row.created_by_name, row.created_at, row.updated_at]
+    .map(sanitizeSpreadsheetCell);
+}
+function buildNoteExportRow(row) {
+  return [row.id, row.lead_id, row.lead_name, row.lead_company, row.body, row.created_by_name, row.created_at].map(sanitizeSpreadsheetCell);
+}
+function buildHandoffExportRow(row) {
+  return [row.id, row.lead_id, row.lead_name || row.filtered_lead_name, row.lead_company || row.filtered_lead_company,
+    row.from_user_name, row.from_user_id, row.actor_name, row.actor_user_id, row.to_user_name, row.to_user_id,
+    row.pipeline_name, row.stage_name, row.created_at].map(sanitizeSpreadsheetCell);
+}
+function buildAuditExportRow(row) {
+  const changes = typeof row.changes_json === "string" ? row.changes_json : JSON.stringify(row.changes_json || {});
+  return [row.id, row.entity_id, row.lead_name, row.lead_company, row.action, row.actor_name, row.actor_id, row.summary, changes, row.created_at]
+    .map(sanitizeSpreadsheetCell);
+}
+function buildOriginExportRow(row) {
+  const metadata = typeof row.metadata_json === "string" ? row.metadata_json : JSON.stringify(row.metadata_json || {});
+  return [row.id, row.lead_id, row.lead_name, row.lead_company, row.provider, row.tenant_id, row.webhook_id, row.webhook_name,
+    row.source, row.first_seen_at, row.last_seen_at, row.occurrences, metadata].map(sanitizeSpreadsheetCell);
+}
+
+async function buildDetailedLeadExportSheets(context) {
+  const commonLeadSelect = "l.name AS lead_name, l.company AS lead_company";
+  const tasks = await createFilteredRelationExportFetcher(context, {
+    table: "tasks", alias: "rel", joinCondition: "rel.lead_id = l.id",
+    selectSql: `rel.*, ${commonLeadSelect}`,
+  });
+  const notes = await createFilteredRelationExportFetcher(context, {
+    table: "lead_notes", alias: "rel", joinCondition: "rel.lead_id = l.id",
+    selectSql: `rel.*, ${commonLeadSelect}`,
+  });
+  const handoffs = await createFilteredRelationExportFetcher(context, {
+    table: "lead_handoffs", alias: "rel", joinCondition: "rel.lead_id = l.id",
+    selectSql: `rel.*, l.name AS filtered_lead_name, l.company AS filtered_lead_company`,
+  });
+  const audit = await createFilteredRelationExportFetcher(context, {
+    table: "audit_log", alias: "rel", joinCondition: "rel.entity_id = l.id",
+    selectSql: `rel.*, ${commonLeadSelect}`,
+    extraWhere: "rel.entity_type = 'lead'",
+  });
+  const origins = await createFilteredRelationExportFetcher(context, {
+    table: "lead_external_origins", alias: "rel", joinCondition: "rel.lead_id = l.id",
+    selectSql: `rel.*, ${commonLeadSelect}`,
+  });
+
+  return [
+    { name: "Tarefas", headers: TASK_EXPORT_HEADERS, fetchPage: tasks, mapRow: buildTaskExportRow },
+    { name: "Notas", headers: NOTE_EXPORT_HEADERS, fetchPage: notes, mapRow: buildNoteExportRow },
+    { name: "Encaminhamentos", headers: HANDOFF_EXPORT_HEADERS, fetchPage: handoffs, mapRow: buildHandoffExportRow },
+    { name: "Auditoria", headers: AUDIT_EXPORT_HEADERS, fetchPage: audit, mapRow: buildAuditExportRow },
+    { name: "Origens externas", headers: ORIGIN_EXPORT_HEADERS, fetchPage: origins, mapRow: buildOriginExportRow },
+  ];
 }
 
 async function performLeadExportJob(job, format) {
   const actor = await getActiveJobActor(job);
   requirePermission(actor, "export_leads");
+  const filters = normalizeLeadFilterPayload(job.payload?.filters || {});
+  const mode = format === "xlsx" && job.payload?.mode === "complete" ? "complete" : "simple";
   const extension = format === "xlsx" ? "xlsx" : "csv";
   const contentType = format === "xlsx"
     ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     : "text/csv; charset=utf-8";
   const storageKey = createJobStorageKey(`leads-export-${format}`, extension);
   const filePath = await prepareJobStoragePath(jobArtifactSettings.storageRoot, storageKey);
-  const fileName = `crm-casa-do-ads-leads-${todayFileStamp()}.${extension}`;
-  const fetchPage = await createLeadExportPageFetcher(actor);
+  const baseSuffix = filters.base === "active" ? "ativos" : filters.base === "deleted" ? "excluidos" : "arquivados";
+  const completeSuffix = mode === "complete" ? "-completo" : "";
+  const fileName = `crm-casa-do-ads-leads-${baseSuffix}${completeSuffix}-${todayFileStamp()}.${extension}`;
+  const { fetchPage, context } = await createLeadExportPageFetcher(actor, filters);
   const onProgress = ({ current, total, message }) => updateJobProgress({
     execute,
     jobId: job.id,
@@ -4992,23 +5182,41 @@ async function performLeadExportJob(job, format) {
   });
 
   try {
-    const exportResult = format === "xlsx"
-      ? await writeXlsxExport({
-          filePath,
+    let exportResult;
+    if (format === "xlsx" && mode === "complete") {
+      const extraSheets = await buildDetailedLeadExportSheets(context);
+      exportResult = await writeDetailedXlsxExport({
+        filePath,
+        primarySheet: {
+          name: "Leads CRM",
           headers: LEAD_EXPORT_HEADERS,
           fetchPage,
-          mapRow: (row) => buildLeadExportRow(rowToLead(row)),
+          mapRow: buildLeadExportRow,
           pageSize: Math.min(2000, EXPORT_PAGE_SIZE),
-          onProgress,
-        })
-      : await writeCsvExport({
-          filePath,
-          headers: LEAD_EXPORT_HEADERS,
-          fetchPage,
-          mapRow: (row) => buildLeadExportRow(rowToLead(row)),
-          pageSize: EXPORT_PAGE_SIZE,
-          onProgress,
-        });
+          progressLabel: "Leads",
+        },
+        extraSheets,
+        onProgress,
+      });
+    } else if (format === "xlsx") {
+      exportResult = await writeXlsxExport({
+        filePath,
+        headers: LEAD_EXPORT_HEADERS,
+        fetchPage,
+        mapRow: buildLeadExportRow,
+        pageSize: Math.min(2000, EXPORT_PAGE_SIZE),
+        onProgress,
+      });
+    } else {
+      exportResult = await writeCsvExport({
+        filePath,
+        headers: LEAD_EXPORT_HEADERS,
+        fetchPage,
+        mapRow: buildLeadExportRow,
+        pageSize: EXPORT_PAGE_SIZE,
+        onProgress,
+      });
+    }
 
     const artifact = await describeJobArtifact({
       storageRoot: jobArtifactSettings.storageRoot,
@@ -5022,10 +5230,11 @@ async function performLeadExportJob(job, format) {
       entityId: job.id,
       action: `export_${format}`,
       actor,
-      summary: `Exportou ${exportResult.total} lead(s) em ${format.toUpperCase()} por job assíncrono.`,
+      summary: `Exportou ${exportResult.total} lead(s) em ${format.toUpperCase()} (${mode === "complete" ? "completo" : "simples"}).`,
+      changes: { format, mode, filters, total: exportResult.total, sheetTotals: exportResult.sheetTotals || {} },
     });
     return {
-      result: { format, total: exportResult.total },
+      result: { format, mode, filters, total: exportResult.total, sheetTotals: exportResult.sheetTotals || {} },
       artifact,
       expiresAt: jobArtifactExpiryIso(jobArtifactSettings.artifactTtlHours),
     };
@@ -6663,17 +6872,36 @@ async function handleApi(request, response, requestUrl) {
     return;
   }
 
+  if (pathname === "/api/exports/leads/preview" && method === "POST") {
+    requirePermission(currentUser, "export_leads");
+    const body = await readRequestBody(request);
+    sendJson(response, 200, await getLeadExportPreview(body.filters || {}));
+    return;
+  }
+
   if (pathname === "/api/exports/leads" && method === "POST") {
     requirePermission(currentUser, "export_leads");
     const body = await readRequestBody(request);
     const format = String(body.format || "csv").toLowerCase();
-    if (!['csv', 'xlsx'].includes(format)) {
+    if (!["csv", "xlsx"].includes(format)) {
       const error = new Error("Formato de exportação inválido. Use CSV ou XLSX.");
       error.statusCode = 400;
       throw error;
     }
+    const filters = normalizeLeadFilterPayload(body.filters || {});
+    const mode = format === "xlsx" && body.mode === "complete" ? "complete" : "simple";
     const type = format === "xlsx" ? JOB_TYPES.EXPORT_LEADS_XLSX : JOB_TYPES.EXPORT_LEADS_CSV;
-    const queued = await enqueuePersistentJob({ type, payload: { format }, actor: currentUser, dedupeKey: `export:${currentUser.id}:${format}`, maxAttempts: 3 });
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify({ format, mode, filters }))
+      .digest("hex")
+      .slice(0, 32);
+    const queued = await enqueuePersistentJob({
+      type,
+      payload: { format, mode, filters },
+      actor: currentUser,
+      dedupeKey: `export:${currentUser.id}:${fingerprint}`,
+      maxAttempts: 3,
+    });
     sendJson(response, 202, publicJob(queued.job));
     return;
   }
@@ -6681,9 +6909,13 @@ async function handleApi(request, response, requestUrl) {
   if ((pathname === "/api/export/leads.csv" || pathname === "/api/export/leads.xlsx") && method === "GET") {
     requirePermission(currentUser, "export_leads");
     const format = pathname.endsWith(".xlsx") ? "xlsx" : "csv";
+    const filters = normalizeLeadFilterPayload({});
     const queued = await enqueuePersistentJob({
-      type: format === "xlsx" ? JOB_TYPES.EXPORT_LEADS_XLSX : JOB_TYPES.EXPORT_LEADS_CSV, payload: { format, compatibilityRoute: pathname },
-      actor: currentUser, dedupeKey: `export:${currentUser.id}:${format}`, maxAttempts: 3,
+      type: format === "xlsx" ? JOB_TYPES.EXPORT_LEADS_XLSX : JOB_TYPES.EXPORT_LEADS_CSV,
+      payload: { format, mode: "simple", filters, compatibilityRoute: pathname },
+      actor: currentUser,
+      dedupeKey: `export:${currentUser.id}:${format}:compat`,
+      maxAttempts: 3,
     });
     response.setHeader("Deprecation", "true");
     response.setHeader("Link", '</api/exports/leads>; rel="successor-version"');
