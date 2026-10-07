@@ -14,6 +14,7 @@ import type {
   LeadStatus,
   LeadTemperature,
   LostReason,
+  PaymentStatus,
   ServiceInterest,
   ServiceProviderStatus,
   ServiceStatusMap,
@@ -52,6 +53,7 @@ import {
   leadSourceOptions,
   leadStatusOptions,
   leadTemperatureOptions,
+  paymentStatusOptions,
   validateLeadDrawerForm,
   type DrawerMode,
   type LeadDrawerFormErrors,
@@ -403,6 +405,8 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
       isLost: normalizedIsLost,
       lostReason: formState.lostReason,
       commercialNotes: formState.commercialNotes.trim(),
+      paymentStatus: formState.paymentStatus,
+      observation: formState.observation.trim(),
       status: normalizedIsLost ? "Perdido" : formState.status,
       responsible: formState.responsible.trim(),
       responsibleUserId: formState.responsibleUserId,
@@ -734,6 +738,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
                     </div>
                     <label className="field"><span>Temperatura</span><select value={formState.temperature} onChange={(event) => updateField("temperature", event.target.value as LeadTemperature)}>{leadTemperatureOptions.map((temperature) => <option key={temperature || "empty"} value={temperature}>{temperature || "Selecione"}</option>)}</select></label>
                     <label className="field"><span>Origem</span><select value={formState.source} onChange={(event) => updateField("source", event.target.value as LeadSource)}>{leadSourceOptions.map((source) => <option key={source || "empty"} value={source}>{source || "Selecione"}</option>)}</select></label>
+                    <label className="field"><span>Status de pagamento</span><select value={formState.paymentStatus} onChange={(event) => updateField("paymentStatus", event.target.value as PaymentStatus)}>{paymentStatusOptions.map((option) => <option key={option.value || "empty"} value={option.value}>{option.label}</option>)}</select></label>
                     {currentUser?.role !== "pre_venda" ? <label className="field"><span>Fechamento previsto <small className="dateFormatHint">Dia/Mês/Ano · Hora</small></span><BrDateInput withTime value={toDateTimeLocalInput(formState.expectedCloseAt)} onChange={(value) => updateField("expectedCloseAt", fromDateTimeLocalInput(value))} ariaLabel="Fechamento previsto" /></label> : null}
                     <div className="drawerFullField drawerServicesEdit">
                       <span className="fieldTitle">Mapeamento dos serviços</span>
@@ -747,6 +752,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
                     </div>
                     <label className="field drawerFullField"><span>Dor do lead</span><textarea value={formState.pain} onChange={(event) => updateField("pain", event.target.value)} rows={3} /></label>
                     <label className="field drawerFullField"><span>Observação comercial legada</span><textarea value={formState.commercialNotes} onChange={(event) => updateField("commercialNotes", event.target.value)} rows={3} /></label>
+                    <label className="field drawerFullField"><span>Observação</span><textarea value={formState.observation} onChange={(event) => updateField("observation", event.target.value)} rows={3} /></label>
                   </div>
                 </section>
 
@@ -832,12 +838,13 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
             <section className="drawerSection">
               <h3>Informações complementares</h3>
               <div className="drawerInfoGrid">
-                <InfoItem label="Status" value={lead.status} /><InfoItem label="Responsável" value={lead.responsible} /><InfoItem label="SDR RESPONSÁVEL" value={lead.sdrResponsible} /><InfoItem label="Temperatura" value={lead.temperature} /><InfoItem label="Orçamento estimado" value={lead.estimatedBudget} />{currentUser?.role !== "pre_venda" ? <InfoItem label="Fechamento previsto" value={formatDate(lead.expectedCloseAt)} /> : null}
+                <InfoItem label="Status" value={lead.status} /><InfoItem label="Status de pagamento" value={paymentStatusOptions.find((option) => option.value === lead.paymentStatus)?.label || "Não informado"} /><InfoItem label="Responsável" value={lead.responsible} /><InfoItem label="SDR RESPONSÁVEL" value={lead.sdrResponsible} /><InfoItem label="Temperatura" value={lead.temperature} /><InfoItem label="Orçamento estimado" value={lead.estimatedBudget} />{currentUser?.role !== "pre_venda" ? <InfoItem label="Fechamento previsto" value={formatDate(lead.expectedCloseAt)} /> : null}
               </div>
               <ClientIntelligencePanel lead={intelligenceLead} />
               <CommercialRecommendationPanel lead={intelligenceLead} />
               <ServiceStatusList serviceStatusMap={formState.serviceStatusMap} />
               <InfoText label="Dor do lead" value={lead.pain} />
+              <InfoText label="Observação" value={lead.observation} />
             </section>
             {tasksSection}
             {notesSection}

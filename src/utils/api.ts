@@ -213,6 +213,8 @@ export type FetchLeadsParams = {
   temperature?: string;
   responsible?: string;
   source?: string;
+  paymentStatus?: string;
+  observationContains?: string;
   nextStepDateFilter?: string;
   nextStepFrom?: string;
   nextStepTo?: string;
@@ -250,6 +252,7 @@ export type LeadExportFilters = {
   sdrResponsibleUserIds?: string[];
   sdrResponsibleNames?: string[];
   sources?: string[];
+  paymentStatuses?: string[];
   lostReasons?: string[];
   pipelineIds?: string[];
   stageIds?: string[];
@@ -261,6 +264,7 @@ export type LeadExportFilters = {
   serviceStatuses?: string[];
   customFields?: Record<string, string>;
   estimatedBudgetContains?: string;
+  observationContains?: string;
   expectedValueMin?: number | null;
   expectedValueMax?: number | null;
   closedValueMin?: number | null;
@@ -555,6 +559,8 @@ export function normalizeLeadFromApi(lead: Partial<Lead>): Lead {
     isLost: Boolean(lead.isLost || status === "Perdido"),
     lostReason: lead.lostReason || "",
     commercialNotes: lead.commercialNotes || "",
+    paymentStatus: lead.paymentStatus === "pago" || lead.paymentStatus === "pendente" || lead.paymentStatus === "cancelado" ? lead.paymentStatus : "",
+    observation: lead.observation || "",
     status,
     responsible: lead.responsible || "",
     responsibleUserId: lead.responsibleUserId || "",
@@ -628,6 +634,8 @@ function buildQueryString(params: FetchLeadsParams = {}): string {
   if (params.temperature?.trim()) searchParams.set("temperature", params.temperature.trim());
   if (params.responsible?.trim()) searchParams.set("responsible", params.responsible.trim());
   if (params.source?.trim()) searchParams.set("source", params.source.trim());
+  if (params.paymentStatus?.trim()) searchParams.set("paymentStatus", params.paymentStatus.trim());
+  if (params.observationContains?.trim()) searchParams.set("observationContains", params.observationContains.trim());
   if (params.nextStepDateFilter?.trim()) searchParams.set("nextStepDateFilter", params.nextStepDateFilter.trim());
   if (params.nextStepFrom?.trim()) searchParams.set("nextStepFrom", params.nextStepFrom.trim());
   if (params.nextStepTo?.trim()) searchParams.set("nextStepTo", params.nextStepTo.trim());
@@ -861,6 +869,8 @@ function buildKanbanQueryString(filters: KanbanBoardFilters = {}, extra: Record<
   if (filters.temperature?.trim()) params.set("temperature", filters.temperature.trim());
   if (filters.responsible?.trim()) params.set("responsible", filters.responsible.trim());
   if (filters.source?.trim()) params.set("source", filters.source.trim());
+  if (filters.paymentStatus?.trim()) params.set("paymentStatus", filters.paymentStatus.trim());
+  if (filters.observationContains?.trim()) params.set("observationContains", filters.observationContains.trim());
   if (filters.nextStepDateFilter?.trim()) params.set("nextStepDateFilter", filters.nextStepDateFilter.trim());
   if (filters.nextStepFrom?.trim()) params.set("nextStepFrom", filters.nextStepFrom.trim());
   if (filters.nextStepTo?.trim()) params.set("nextStepTo", filters.nextStepTo.trim());
@@ -1724,6 +1734,8 @@ export function leadExportFiltersFromFetchParams(params: FetchLeadsParams = {}):
     temperature: params.temperature,
     responsible: params.responsible,
     source: params.source,
+    paymentStatuses: params.paymentStatus ? [params.paymentStatus] : undefined,
+    observationContains: params.observationContains,
     quickFilter: params.quickFilter,
     dates,
   };

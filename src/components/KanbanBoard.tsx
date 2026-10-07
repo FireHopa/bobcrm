@@ -179,6 +179,7 @@ const KanbanCardItem = memo(function KanbanCardItem({
       <div className="kanbanCardBadges">
         <span className={`badge ${getPriorityClass(scores.priority)}`}>Prioridade {scores.priority}</span>
         {lead.temperature ? <span className="badge badgeGray">{lead.temperature}</span> : null}
+        {lead.paymentStatus ? <span className={`badge ${lead.paymentStatus === "pago" ? "badgeGreen" : lead.paymentStatus === "pendente" ? "badgeYellow" : "badgeRed"}`}>{lead.paymentStatus === "pago" ? "Pago" : lead.paymentStatus === "pendente" ? "Pendente" : "Cancelado"}</span> : null}
       </div>
 
       <p className="kanbanCardNextAction" title={plan.nextAction}>{plan.offer || plan.nextAction}</p>
@@ -398,6 +399,9 @@ export const KanbanBoard = memo(function KanbanBoard({
       || filters.status?.trim()
       || filters.temperature?.trim()
       || filters.responsible?.trim()
+      || filters.source?.trim()
+      || filters.paymentStatus?.trim()
+      || filters.observationContains?.trim()
       || (filters.quickFilter?.trim() && filters.quickFilter !== "all"),
   );
 

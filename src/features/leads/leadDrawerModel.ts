@@ -7,6 +7,7 @@ import type {
   LeadStatus,
   LeadTemperature,
   LostReason,
+  PaymentStatus,
   ServiceStatusMap,
 } from "../../types/Lead";
 
@@ -32,6 +33,8 @@ export type LeadDrawerFormState = {
   isLost: boolean;
   lostReason: LostReason;
   commercialNotes: string;
+  paymentStatus: PaymentStatus;
+  observation: string;
   status: LeadStatus;
   responsible: string;
   responsibleUserId: string;
@@ -69,6 +72,13 @@ export const leadStatusOptions: LeadStatus[] = [
 ];
 
 export const leadTemperatureOptions: LeadTemperature[] = ["", "Frio", "Morno", "Quente"];
+
+export const paymentStatusOptions: Array<{ value: PaymentStatus; label: string }> = [
+  { value: "", label: "Selecione" },
+  { value: "pago", label: "Pago" },
+  { value: "pendente", label: "Pendente" },
+  { value: "cancelado", label: "Cancelado" },
+];
 
 export const leadLostReasonOptions: LostReason[] = [
   "",
@@ -111,6 +121,8 @@ export function createLeadDrawerFormState(lead: Lead): LeadDrawerFormState {
     isLost: lead.isLost || lead.status === "Perdido",
     lostReason: lead.lostReason,
     commercialNotes: lead.commercialNotes,
+    paymentStatus: lead.paymentStatus || "",
+    observation: lead.observation || "",
     status: lead.status || "Novo lead",
     responsible: lead.responsible,
     responsibleUserId: lead.responsibleUserId || "",

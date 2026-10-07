@@ -52,6 +52,8 @@ export function migrateLead(lead: Partial<Lead>): Lead {
     isLost: Boolean(lead.isLost || status === "Perdido"),
     lostReason: lead.lostReason || "",
     commercialNotes: lead.commercialNotes || "",
+    paymentStatus: lead.paymentStatus === "pago" || lead.paymentStatus === "pendente" || lead.paymentStatus === "cancelado" ? lead.paymentStatus : "",
+    observation: lead.observation || "",
     status,
     responsible: lead.responsible || "",
     responsibleUserId: lead.responsibleUserId || "",

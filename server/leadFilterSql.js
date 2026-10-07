@@ -3,6 +3,7 @@ const FIELD_STATE_VALUES = new Set(["", "any", "filled", "empty"]);
 const BOOLEAN_FILTER_VALUES = new Set(["", "any", "yes", "no"]);
 const TASK_PRESENCE_VALUES = new Set(["", "any", "has", "none", "pending", "completed", "overdue", "today"]);
 const LEAD_BASES = new Set(["active", "deleted", "archived"]);
+const PAYMENT_STATUS_VALUES = new Set(["pago", "pendente", "cancelado"]);
 
 const LEAD_DATE_COLUMNS = Object.freeze({
   createdAt: "created_at",
@@ -54,7 +55,7 @@ function normalizeChoice(value, allowed, fallback = "") {
 function normalizeFieldStates(value = {}) {
   if (!value || typeof value !== "object") return {};
   const result = {};
-  for (const key of ["responsible", "temperature", "source", "pain", "nextStep", "website", "instagram", "commercialNotes", "email", "phone", "company"]) {
+  for (const key of ["responsible", "temperature", "source", "pain", "nextStep", "website", "instagram", "commercialNotes", "observation", "email", "phone", "company"]) {
     const normalized = normalizeChoice(value[key], FIELD_STATE_VALUES);
     if (normalized && normalized !== "any") result[key] = normalized;
   }
@@ -138,9 +139,12 @@ export function normalizeLeadFilterPayload(value = {}) {
     temperature: cleanText(input.temperature, 40),
     responsible: cleanText(input.responsible, 255),
     source: cleanText(input.source, 120),
+    paymentStatus: normalizeChoice(input.paymentStatus, PAYMENT_STATUS_VALUES),
+    observationContains: cleanText(input.observationContains, 1000),
     quickFilter: cleanText(input.quickFilter, 80),
     statuses: cleanList(input.statuses, 50, 80),
     temperatures: cleanList(input.temperatures, 20, 40),
+    paymentStatuses: cleanList(input.paymentStatuses, 3, 20).filter((item) => PAYMENT_STATUS_VALUES.has(item)),
     responsibleUserIds: cleanList(input.responsibleUserIds),
     responsibleNames: cleanList(input.responsibleNames),
     sdrResponsibleUserIds: cleanList(input.sdrResponsibleUserIds),
@@ -338,6 +342,10 @@ export function addLeadFilterClauses(whereParts, sqlParams, filters = {}, { alia
     whereParts.push(`${prefix}responsible = ?`);
     sqlParams.push(normalized.responsible);
   }
+  if (normalized.paymentStatus) {
+    whereParts.push(`${prefix}payment_status = ?`);
+    sqlParams.push(normalized.paymentStatus);
+  }
   if (normalized.source) {
     whereParts.push(`(${prefix}source = ? OR EXISTS (SELECT 1 FROM lead_external_origins source_filter WHERE source_filter.lead_id = ${leadRef} AND source_filter.provider = 'zape' AND (source_filter.webhook_name = ? OR source_filter.source = ?)))`);
     sqlParams.push(normalized.source, normalized.source, normalized.source);
@@ -345,6 +353,7 @@ export function addLeadFilterClauses(whereParts, sqlParams, filters = {}, { alia
 
   addInFilter(whereParts, sqlParams, `${prefix}status`, normalized.statuses);
   addInFilter(whereParts, sqlParams, `${prefix}temperature`, normalized.temperatures);
+  addInFilter(whereParts, sqlParams, `${prefix}payment_status`, normalized.paymentStatuses);
   if (normalized.responsibleUserIds.length || normalized.responsibleNames.length) {
     const responsibleParts = [];
     if (normalized.responsibleUserIds.length) {
@@ -399,6 +408,7 @@ export function addLeadFilterClauses(whereParts, sqlParams, filters = {}, { alia
     website: `${prefix}website`,
     instagram: `${prefix}instagram`,
     commercialNotes: `${prefix}commercial_notes`,
+    observation: `${prefix}observation`,
     email: `${prefix}email`,
     phone: `${prefix}phone`,
     company: `${prefix}company`,
@@ -425,6 +435,11 @@ export function addLeadFilterClauses(whereParts, sqlParams, filters = {}, { alia
     if (!allowedCustomFields.has(key)) continue;
     whereParts.push(`LOWER(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${prefix}custom_fields, ?)), '')) LIKE ?`);
     sqlParams.push(`$.${JSON.stringify(key)}`, `%${value.toLowerCase()}%`);
+  }
+
+  if (normalized.observationContains) {
+    whereParts.push(`LOWER(COALESCE(${prefix}observation, '')) LIKE ?`);
+    sqlParams.push(`%${normalized.observationContains.toLowerCase()}%`);
   }
 
   if (normalized.estimatedBudgetContains) {

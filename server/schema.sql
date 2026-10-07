@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS leads (
   is_lost INTEGER NOT NULL DEFAULT 0,
   lost_reason TEXT NOT NULL DEFAULT '',
   commercial_notes TEXT DEFAULT '',
+  payment_status TEXT NOT NULL DEFAULT '',
+  observation TEXT DEFAULT '',
   status TEXT NOT NULL DEFAULT 'Novo lead',
   responsible TEXT NOT NULL DEFAULT '',
   temperature TEXT NOT NULL DEFAULT '',

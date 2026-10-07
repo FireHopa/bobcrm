@@ -1,6 +1,6 @@
 import { lazy, memo, Suspense, useEffect, useMemo, useState } from "react";
 import { getClientIntelligence } from "../constants/services";
-import type { Lead, LeadStatus, LeadTemperature } from "../types/Lead";
+import type { Lead, LeadStatus, LeadTemperature, PaymentStatus } from "../types/Lead";
 import { downloadLeadsXlsxExport, leadExportFiltersFromFetchParams, type FetchLeadsParams, type LeadPagination, type LeadSummary } from "../utils/api";
 import { getLeadScores, getRecommendedCommercialPlan, isActiveLead } from "../utils/commercial";
 import { formatDate, formatPhone, isPastDate, isToday } from "../utils/formatters";
@@ -120,6 +120,20 @@ function getTemperatureBadgeClass(temperature: LeadTemperature) {
   if (temperature === "Morno") return "badgeYellow";
   if (temperature === "Frio") return "badgeBlue";
   return "badgeGray";
+}
+
+function getPaymentBadgeClass(paymentStatus: PaymentStatus) {
+  if (paymentStatus === "pago") return "badgeGreen";
+  if (paymentStatus === "pendente") return "badgeYellow";
+  if (paymentStatus === "cancelado") return "badgeRed";
+  return "badgeGray";
+}
+
+function getPaymentStatusLabel(paymentStatus: PaymentStatus) {
+  if (paymentStatus === "pago") return "Pago";
+  if (paymentStatus === "pendente") return "Pendente";
+  if (paymentStatus === "cancelado") return "Cancelado";
+  return "Pagamento não informado";
 }
 
 function getNextStepBadgeClass(date: string) {
@@ -289,6 +303,7 @@ const LeadTableRow = memo(function LeadTableRow({
         <div className="badgeGroup">
           <span className={`badge ${getStatusBadgeClass(status)}`}>{status}</span>
           <span className={`badge ${getTemperatureBadgeClass(lead.temperature)}`}>{lead.temperature || "Temperatura pendente"}</span>
+          <span className={`badge ${getPaymentBadgeClass(lead.paymentStatus)}`}>{getPaymentStatusLabel(lead.paymentStatus)}</span>
         </div>
       </td>
 
@@ -368,6 +383,8 @@ export const LeadTable = memo(function LeadTable({
   const [temperatureFilter, setTemperatureFilter] = useState<LeadTemperature | "">("");
   const [ownerFilter, setOwnerFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState("");
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState<PaymentStatus>("");
+  const [observationFilter, setObservationFilter] = useState("");
   const [nextStepDateFilter, setNextStepDateFilter] = useState<DateFilterPreset>("");
   const [nextStepFrom, setNextStepFrom] = useState("");
   const [nextStepTo, setNextStepTo] = useState("");
@@ -388,6 +405,8 @@ export const LeadTable = memo(function LeadTable({
     temperature: "" as LeadTemperature | "",
     responsible: "",
     source: "",
+    paymentStatus: "",
+    observationContains: "",
     nextStepDateFilter: "", nextStepFrom: "", nextStepTo: "",
     expectedCloseDateFilter: "", expectedCloseFrom: "", expectedCloseTo: "",
     quickFilter: isSalesConsultant ? "all" : (requestedQuickFilter || "all"),
@@ -420,6 +439,8 @@ export const LeadTable = memo(function LeadTable({
         temperature: temperatureFilter,
         responsible: ownerFilter,
         source: sourceFilter,
+        paymentStatus: paymentStatusFilter,
+        observationContains: observationFilter,
         nextStepDateFilter, nextStepFrom, nextStepTo,
         expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo,
         quickFilter: getServerQuickFilter(quickFilter),
@@ -431,7 +452,7 @@ export const LeadTable = memo(function LeadTable({
     }, 350);
 
     return () => window.clearTimeout(timeoutId);
-  }, [onQueryChange, ownerFilter, sourceFilter, nextStepDateFilter, nextStepFrom, nextStepTo, expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo, quickFilter, search, sortBy, sortDirection, statusFilter, temperatureFilter, viewMode]);
+  }, [onQueryChange, ownerFilter, sourceFilter, paymentStatusFilter, observationFilter, nextStepDateFilter, nextStepFrom, nextStepTo, expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo, quickFilter, search, sortBy, sortDirection, statusFilter, temperatureFilter, viewMode]);
 
   useEffect(() => {
     if (viewMode !== "kanban") return;
@@ -443,6 +464,8 @@ export const LeadTable = memo(function LeadTable({
         temperature: temperatureFilter,
         responsible: ownerFilter,
         source: sourceFilter,
+        paymentStatus: paymentStatusFilter,
+        observationContains: observationFilter,
         nextStepDateFilter, nextStepFrom, nextStepTo,
         expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo,
         quickFilter,
@@ -450,7 +473,7 @@ export const LeadTable = memo(function LeadTable({
     }, 180);
 
     return () => window.clearTimeout(timeoutId);
-  }, [ownerFilter, sourceFilter, nextStepDateFilter, nextStepFrom, nextStepTo, expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo, quickFilter, search, statusFilter, temperatureFilter, viewMode]);
+  }, [ownerFilter, sourceFilter, paymentStatusFilter, observationFilter, nextStepDateFilter, nextStepFrom, nextStepTo, expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo, quickFilter, search, statusFilter, temperatureFilter, viewMode]);
 
   const ownerOptions = useMemo(() => {
     if (serverOwnerOptions.length) return serverOwnerOptions.map((owner) => owner.name);
@@ -496,6 +519,8 @@ export const LeadTable = memo(function LeadTable({
         if (temperatureFilter && lead.temperature !== temperatureFilter) return false;
         if (ownerFilter && lead.responsible !== ownerFilter) return false;
         if (sourceFilter && lead.source !== sourceFilter) return false;
+        if (paymentStatusFilter && lead.paymentStatus !== paymentStatusFilter) return false;
+        if (observationFilter.trim() && !lead.observation.toLocaleLowerCase("pt-BR").includes(observationFilter.trim().toLocaleLowerCase("pt-BR"))) return false;
         if (!matchesDatePreset(lead.nextContactAt, nextStepDateFilter, nextStepFrom, nextStepTo)) return false;
         if (!matchesDatePreset(lead.expectedCloseAt, expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo)) return false;
 
@@ -517,6 +542,8 @@ export const LeadTable = memo(function LeadTable({
           lead.pain,
           lead.lostReason,
           lead.commercialNotes,
+          lead.observation,
+          lead.paymentStatus,
           Object.values(lead.customFields || {}).join(" "),
           intelligence.items.map((item) => `${item.label} ${item.value}`).join(" "),
         ].join(" ").toLowerCase();
@@ -528,7 +555,7 @@ export const LeadTable = memo(function LeadTable({
         if (priorityDifference !== 0) return priorityDifference;
         return (b.updatedAt || b.createdAt || "").localeCompare(a.updatedAt || a.createdAt || "");
       });
-  }, [leads, ownerFilter, sourceFilter, nextStepDateFilter, nextStepFrom, nextStepTo, expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo, quickFilter, search, serverMode, statusFilter, temperatureFilter]);
+  }, [leads, ownerFilter, sourceFilter, paymentStatusFilter, observationFilter, nextStepDateFilter, nextStepFrom, nextStepTo, expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo, quickFilter, search, serverMode, statusFilter, temperatureFilter]);
 
   const displayedLeads = useMemo(() => filteredLeads.slice(0, MAX_RENDERED_LEADS), [filteredLeads]);
 
@@ -544,6 +571,8 @@ export const LeadTable = memo(function LeadTable({
       temperature: temperatureFilter,
       responsible: ownerFilter,
       source: sourceFilter,
+      paymentStatus: paymentStatusFilter,
+      observationContains: observationFilter,
       nextStepDateFilter, nextStepFrom, nextStepTo,
       expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo,
       quickFilter: getServerQuickFilter(quickFilter),
@@ -564,6 +593,8 @@ export const LeadTable = memo(function LeadTable({
         temperature: temperatureFilter,
         responsible: ownerFilter,
         source: sourceFilter,
+        paymentStatus: paymentStatusFilter,
+        observationContains: observationFilter,
         nextStepDateFilter,
         nextStepFrom,
         nextStepTo,
@@ -588,6 +619,8 @@ export const LeadTable = memo(function LeadTable({
         temperature: temperatureFilter,
         responsible: ownerFilter,
         source: sourceFilter,
+        paymentStatus: paymentStatusFilter,
+        observationContains: observationFilter,
         nextStepDateFilter, nextStepFrom, nextStepTo,
         expectedCloseDateFilter, expectedCloseFrom, expectedCloseTo,
         quickFilter: getServerQuickFilter(quickFilter),
@@ -694,6 +727,21 @@ export const LeadTable = memo(function LeadTable({
                 <option value="">Todas</option>
                 {sourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}
               </select>
+            </label>
+
+            <label className="compactFilter">
+              <span>Status de pagamento</span>
+              <select value={paymentStatusFilter} onChange={(event) => setPaymentStatusFilter(event.target.value as PaymentStatus)}>
+                <option value="">Todos</option>
+                <option value="pago">Pago</option>
+                <option value="pendente">Pendente</option>
+                <option value="cancelado">Cancelado</option>
+              </select>
+            </label>
+
+            <label className="compactFilter">
+              <span>Observação</span>
+              <input type="search" value={observationFilter} onChange={(event) => setObservationFilter(event.target.value)} placeholder="Filtrar texto da observação" />
             </label>
 
             <div className="compactFilter dateFilterGroup">

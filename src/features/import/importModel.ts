@@ -1,6 +1,6 @@
 import { createEmptyCustomFields } from "../../constants/customFields";
 import { getServiceInterestsFromStatusMap, parseServiceStatusMap } from "../../constants/services";
-import type { Lead, LeadSource, LeadStatus, LeadTemperature, LostReason } from "../../types/Lead";
+import type { Lead, LeadSource, LeadStatus, LeadTemperature, LostReason, PaymentStatus } from "../../types/Lead";
 import type { ImportDeduplicationReport } from "../../utils/commercial";
 import { normalizeWebsite } from "../../utils/formatters";
 
@@ -24,6 +24,8 @@ export type ImportFieldKey =
   | "pain"
   | "lostReason"
   | "commercialNotes"
+  | "paymentStatus"
+  | "observation"
   | "source"
   | "serviceInterests"
   | "advertisesOnGoogle2"
@@ -47,6 +49,8 @@ export const importFields: ImportField[] = [
   { key: "instagram", label: "Instagram", group: "Dados básicos" },
   { key: "siteInput", label: "Coloque seu site → Website", group: "Dados básicos" },
   { key: "commercialNotes", label: "Observação comercial", group: "Dados básicos" },
+  { key: "observation", label: "Observação", group: "Dados básicos" },
+  { key: "paymentStatus", label: "Status de pagamento", group: "Comercial" },
 
   { key: "status", label: "Status do lead", group: "Comercial" },
   { key: "responsible", label: "Responsável legado (não atribui consultor)", group: "Comercial" },
@@ -83,6 +87,8 @@ export const emptyMapping: ImportMapping = {
   pain: "",
   lostReason: "",
   commercialNotes: "",
+  paymentStatus: "",
+  observation: "",
   source: "",
   serviceInterests: "",
   advertisesOnGoogle2: "",
@@ -205,6 +211,14 @@ function normalizeTemperature(value: string): LeadTemperature {
   return "";
 }
 
+function normalizePaymentStatus(value: string): PaymentStatus {
+  const normalized = normalizeSearch(value);
+  if (normalized === "pago" || normalized === "paga") return "pago";
+  if (normalized === "pendente" || normalized.includes("aguardando pagamento")) return "pendente";
+  if (normalized === "cancelado" || normalized === "cancelada") return "cancelado";
+  return "";
+}
+
 function normalizeLostReason(value: string): LostReason {
   const normalized = normalizeSearch(value);
 
@@ -313,7 +327,9 @@ export function suggestMapping(headers: string[]): ImportMapping {
     temperature: ["temperatura", "prioridade"],
     pain: ["dor", "problema", "necessidade", "desafio"],
     lostReason: ["motivo da perda", "motivo perda", "perda"],
-    commercialNotes: ["observacao", "observação", "observacoes", "notas", "comentario", "comentário"],
+    commercialNotes: ["observacao comercial", "observação comercial", "notas comerciais", "comentario comercial", "comentário comercial"],
+    paymentStatus: ["status de pagamento", "pagamento", "payment status"],
+    observation: ["observacao", "observação", "observacoes", "notas gerais", "comentario", "comentário"],
     source: ["origem", "source", "canal"],
     serviceInterests: ["servico", "serviço", "produto", "interesse", "oferta", "solucao", "solução", "quem faz", "responsavel servico"],
     advertisesOnGoogle2: ["ja anuncia no google ads 2", "já anuncia no google ads 2", "anuncia no google ads 2", "google ads 2"],
@@ -428,6 +444,8 @@ export function buildLeadFromRow(row: RawRow, mapping: ImportMapping, bulkDefaul
     isLost,
     lostReason,
     commercialNotes: getCell(row, mapping.commercialNotes),
+    paymentStatus: normalizePaymentStatus(getCell(row, mapping.paymentStatus)),
+    observation: getCell(row, mapping.observation),
     status,
     responsible: "",
     responsibleUserId: "",

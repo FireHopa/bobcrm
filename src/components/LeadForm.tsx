@@ -12,6 +12,7 @@ import type {
   LeadStatus,
   LeadTemperature,
   LostReason,
+  PaymentStatus,
   ServiceInterest,
   ServiceProviderStatus,
   ServiceStatusMap,
@@ -44,6 +45,13 @@ const statusOptions: LeadStatus[] = [
 
 const temperatureOptions: LeadTemperature[] = ["", "Frio", "Morno", "Quente"];
 
+const paymentStatusOptions: Array<{ value: PaymentStatus; label: string }> = [
+  { value: "", label: "Selecione" },
+  { value: "pago", label: "Pago" },
+  { value: "pendente", label: "Pendente" },
+  { value: "cancelado", label: "Cancelado" },
+];
+
 const lostReasonOptions: LostReason[] = [
   "",
   "Sem interesse",
@@ -73,6 +81,8 @@ type FormState = {
   isLost: boolean;
   lostReason: LostReason;
   commercialNotes: string;
+  paymentStatus: PaymentStatus;
+  observation: string;
   status: LeadStatus;
   temperature: LeadTemperature;
   pain: string;
@@ -102,6 +112,8 @@ const initialFormState: FormState = {
   isLost: false,
   lostReason: "",
   commercialNotes: "",
+  paymentStatus: "",
+  observation: "",
   status: "Novo lead",
   temperature: "",
   pain: "",
@@ -247,6 +259,8 @@ export function LeadForm({ onCreateLead }: LeadFormProps) {
       isLost,
       lostReason: isLost ? formState.lostReason : "",
       commercialNotes: formState.commercialNotes.trim(),
+      paymentStatus: formState.paymentStatus,
+      observation: formState.observation.trim(),
       status: isLost ? "Perdido" : formState.status,
       responsible: "",
       responsibleUserId: "",
@@ -343,6 +357,11 @@ export function LeadForm({ onCreateLead }: LeadFormProps) {
                 <textarea placeholder="Ex.: Lead pediu retorno, comparando fornecedores ou trouxe algum contexto importante..." value={formState.commercialNotes} onChange={(event) => updateField("commercialNotes", event.target.value)} rows={4} />
               </label>
 
+              <label className="field">
+                <span>Observação</span>
+                <textarea placeholder="Registre uma observação geral sobre este lead..." value={formState.observation} onChange={(event) => updateField("observation", event.target.value)} rows={4} />
+              </label>
+
               {formState.status === "Perdido" ? (
                 <div className="lostReasonSectionV33 lostReasonSectionV34">
                   <label className="field">
@@ -392,6 +411,13 @@ export function LeadForm({ onCreateLead }: LeadFormProps) {
                   </select>
                 </label>
               </div>
+
+              <label className="field">
+                <span>Status de pagamento</span>
+                <select value={formState.paymentStatus} onChange={(event) => updateField("paymentStatus", event.target.value as PaymentStatus)}>
+                  {paymentStatusOptions.map((option) => <option key={option.value || "empty"} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
 
               <label className="field">
                 <span>Dor do lead</span>

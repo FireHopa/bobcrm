@@ -320,6 +320,8 @@ function mergeLeadData(currentLead: Lead, incomingLead: Lead): Lead {
     isLost,
     lostReason: currentLead.lostReason || incomingLead.lostReason,
     commercialNotes: [currentLead.commercialNotes, incomingLead.commercialNotes].filter(Boolean).join(currentLead.commercialNotes && incomingLead.commercialNotes ? "\n" : ""),
+    paymentStatus: currentLead.paymentStatus || incomingLead.paymentStatus || "",
+    observation: [currentLead.observation, incomingLead.observation].filter(Boolean).join(currentLead.observation && incomingLead.observation ? "\n" : ""),
     status: isLost ? "Perdido" : mergedStatus,
     responsible: currentLead.responsible || incomingLead.responsible,
     temperature: currentLead.temperature || incomingLead.temperature,

@@ -21,6 +21,8 @@ export function leadCursorFilterKey(filters = {}) {
     filters.temperature || "",
     filters.responsible || "",
     filters.source || "",
+    filters.paymentStatus || "",
+    filters.observationContains || "",
     filters.quickFilter || "",
     filters.dates?.nextContactAt?.preset || "",
     filters.dates?.nextContactAt?.from || "",

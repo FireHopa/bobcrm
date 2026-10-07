@@ -85,6 +85,11 @@ export function normalizeBooleanText(value) {
   return ["sim", "s", "yes", "y", "true", "1", "ok", "ativo", "anuncia", "x"].includes(normalized);
 }
 
+function normalizePaymentStatus(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["pago", "pendente", "cancelado"].includes(normalized) ? normalized : "";
+}
+
 export function normalizeLead(lead = {}) {
   const status = lead.status || (lead.isLost ? "Perdido" : "Novo lead");
   const serviceInterests = Array.isArray(lead.serviceInterests) ? lead.serviceInterests : [];
@@ -124,6 +129,8 @@ export function normalizeLead(lead = {}) {
     isLost: Boolean(lead.isLost || status === "Perdido"),
     lostReason: String(lead.lostReason || ""),
     commercialNotes: String(lead.commercialNotes || ""),
+    paymentStatus: normalizePaymentStatus(lead.paymentStatus || lead.payment_status),
+    observation: String(lead.observation || ""),
     status: String(status),
     responsible: String(lead.responsible || ""),
     responsibleUserId: String(lead.responsibleUserId || lead.responsible_user_id || ""),
@@ -177,6 +184,8 @@ export function buildLeadSearchText(lead = {}) {
     normalizedLead.pain,
     normalizedLead.lostReason,
     normalizedLead.commercialNotes,
+    normalizedLead.paymentStatus,
+    normalizedLead.observation,
     (normalizedLead.serviceInterests || []).join(" "),
     serviceStatusText,
     customFieldsText,
@@ -220,6 +229,8 @@ function rowToLeadInput(row = {}) {
     isLost: Boolean(Number(row.is_lost)),
     lostReason: row.lost_reason,
     commercialNotes: row.commercial_notes || "",
+    paymentStatus: row.payment_status || "",
+    observation: row.observation || "",
     status: row.status,
     responsible: row.responsible,
     responsibleUserId: row.responsible_user_id || "",
@@ -281,6 +292,8 @@ export function leadToDbParams(lead, options = {}) {
     normalizedLead.isLost ? 1 : 0,
     normalizedLead.lostReason,
     normalizedLead.commercialNotes,
+    normalizedLead.paymentStatus,
+    normalizedLead.observation,
     normalizedLead.status,
     normalizedLead.responsible,
     normalizedLead.responsibleUserId,

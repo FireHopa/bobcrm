@@ -22,6 +22,8 @@ export type LeadStatus =
 
 export type LeadTemperature = "" | "Frio" | "Morno" | "Quente";
 
+export type PaymentStatus = "" | "pago" | "pendente" | "cancelado";
+
 export type LostReason =
   | ""
   | "Sem interesse"
@@ -81,6 +83,8 @@ export type Lead = {
   isLost: boolean;
   lostReason: LostReason;
   commercialNotes: string;
+  paymentStatus: PaymentStatus;
+  observation: string;
   status: LeadStatus;
   responsible: string;
   responsibleUserId: string;

@@ -34,6 +34,7 @@ const datePresetOptions = [
 const fieldStateLabels: Array<[string, string]> = [
   ["responsible", "Responsável"], ["temperature", "Temperatura"], ["source", "Origem"], ["pain", "Dor"],
   ["nextStep", "Próximo passo"], ["website", "Website"], ["instagram", "Instagram"], ["commercialNotes", "Observação comercial"],
+  ["observation", "Observação"],
   ["email", "E-mail"], ["phone", "Telefone"], ["company", "Empresa"],
 ];
 
@@ -258,10 +259,12 @@ export function LeadExportCenter({ currentUser, users }: LeadExportCenterProps) 
             <label className="field"><span>Base</span><select value={filters.base || "active"} onChange={(event) => patch({ base: event.target.value as LeadExportFilters["base"] })}><option value="active">Leads ativos</option><option value="deleted">Lixeira</option><option value="archived">Arquivo de leads</option></select></label>
             <label className="field exportWideField"><span>Busca geral</span><input value={filters.search || ""} onChange={(event) => patch({ search: event.target.value })} placeholder="Nome, empresa, telefone, e-mail, notas..." /></label>
             <label className="field"><span>Orçamento contém</span><input value={filters.estimatedBudgetContains || ""} onChange={(event) => patch({ estimatedBudgetContains: event.target.value })} /></label>
+            <label className="field"><span>Observação contém</span><input value={filters.observationContains || ""} onChange={(event) => patch({ observationContains: event.target.value })} /></label>
             <label className="field"><span>Filtro comercial rápido</span><select value={filters.quickFilter || ""} onChange={(event) => patch({ quickFilter: event.target.value })}><option value="">Nenhum</option><option value="owner">Sem responsável</option><option value="next">Sem próximo passo</option><option value="lead-priority">Alta prioridade</option><option value="lead-mapping">Precisa mapear</option><option value="agency">Outra agência</option><option value="lead-expansion">Oportunidade de expansão</option><option value="diagnosis">Sem diagnóstico</option><option value="mapping-critical">Mapeamento crítico</option></select></label>
           </div>
           <MultiChecks label="Status" options={leadStatusOptions.map((value) => ({ value, label: value }))} selected={filters.statuses || []} onChange={(statuses) => patch({ statuses })} />
           <MultiChecks label="Temperatura" options={leadTemperatureOptions.filter(Boolean).map((value) => ({ value, label: value }))} selected={filters.temperatures || []} onChange={(temperatures) => patch({ temperatures })} />
+          <MultiChecks label="Status de pagamento" options={[{ value: "pago", label: "Pago" }, { value: "pendente", label: "Pendente" }, { value: "cancelado", label: "Cancelado" }]} selected={filters.paymentStatuses || []} onChange={(paymentStatuses) => patch({ paymentStatuses })} />
           <MultiChecks label="Motivo da perda" options={leadLostReasonOptions.filter(Boolean).map((value) => ({ value, label: value }))} selected={filters.lostReasons || []} onChange={(lostReasons) => patch({ lostReasons })} />
         </details>
 
@@ -384,11 +387,11 @@ export function LeadExportCenter({ currentUser, users }: LeadExportCenterProps) 
         <div className="tableScroller">
           <table className="dataTable exportPreviewTable">
             <thead>
-              <tr><th>Lead</th><th>Empresa</th><th>Status</th><th>Responsável</th><th>Origem</th><th>Funil / etapa</th></tr>
+              <tr><th>Lead</th><th>Empresa</th><th>Status</th><th>Pagamento</th><th>Responsável</th><th>Origem</th><th>Funil / etapa</th></tr>
             </thead>
             <tbody>
-              {(preview?.sample || []).slice(0, 20).map((lead) => <tr key={lead.id}><td><strong>{lead.name || "Sem nome"}</strong><small>{lead.email || lead.phone}</small></td><td>{lead.company || "—"}</td><td>{lead.status || "—"}</td><td>{lead.responsible || "—"}</td><td>{lead.source || "—"}</td><td>{[lead.pipelineName, lead.stageName].filter(Boolean).join(" › ") || "—"}</td></tr>)}
-              {!previewLoading && !preview?.sample?.length ? <tr><td colSpan={6} className="emptyState">Nenhum lead corresponde aos filtros.</td></tr> : null}
+              {(preview?.sample || []).slice(0, 20).map((lead) => <tr key={lead.id}><td><strong>{lead.name || "Sem nome"}</strong><small>{lead.email || lead.phone}</small></td><td>{lead.company || "—"}</td><td>{lead.status || "—"}</td><td>{lead.paymentStatus === "pago" ? "Pago" : lead.paymentStatus === "pendente" ? "Pendente" : lead.paymentStatus === "cancelado" ? "Cancelado" : "—"}</td><td>{lead.responsible || "—"}</td><td>{lead.source || "—"}</td><td>{[lead.pipelineName, lead.stageName].filter(Boolean).join(" › ") || "—"}</td></tr>)}
+              {!previewLoading && !preview?.sample?.length ? <tr><td colSpan={7} className="emptyState">Nenhum lead corresponde aos filtros.</td></tr> : null}
             </tbody>
           </table>
         </div>

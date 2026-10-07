@@ -63,6 +63,7 @@ import { description as leadHandoffAuditMigrationDescription, up as runLeadHando
 import { description as activeCampaignNoteImportMigrationDescription, up as runActiveCampaignNoteImportMigration, version as activeCampaignNoteImportMigrationVersion } from "./migrations/20260908_26_activecampaign_note_import.js";
 import { description as whatsappWebjsMigrationDescription, up as runWhatsappWebjsMigration, version as whatsappWebjsMigrationVersion } from "./migrations/20260910_27_whatsapp_webjs_crm.js";
 import { description as whatsappLeadRoutingMigrationDescription, up as runWhatsappLeadRoutingMigration, version as whatsappLeadRoutingMigrationVersion } from "./migrations/20260911_28_whatsapp_lead_routing.js";
+import { description as paymentFieldsMigrationDescription, up as runPaymentFieldsMigration, version as paymentFieldsMigrationVersion } from "./migrations/20261007_29_payment_status_observation.js";
 import {
   createEncryptedMysqlBackup,
   removeBackupArtifact,
@@ -716,6 +717,8 @@ async function runSchemaMigrations() {
     () => runWhatsappWebjsMigration({ execute }));
   await runVersionedMigration(whatsappLeadRoutingMigrationVersion, whatsappLeadRoutingMigrationDescription,
     () => runWhatsappLeadRoutingMigration({ addColumnIfMissing }));
+  await runVersionedMigration(paymentFieldsMigrationVersion, paymentFieldsMigrationDescription,
+    () => runPaymentFieldsMigration({ addColumnIfMissing, addIndexIfMissing }));
   try {
     await addIndexIfMissing("leads", "ft_leads_search_text", "FULLTEXT INDEX ft_leads_search_text (search_text)");
     leadSearchFullTextEnabled = true;
@@ -1313,6 +1316,8 @@ async function getLeadsPageFromRequest(requestUrl, currentUser) {
     temperature: searchParams.get("temperature") || "",
     responsible: searchParams.get("responsible") || "",
     source: searchParams.get("source") || "",
+    paymentStatus: searchParams.get("paymentStatus") || "",
+    observationContains: searchParams.get("observationContains") || "",
     quickFilter: searchParams.get("quickFilter") || "",
     ...(Object.keys(dates).length ? { dates } : {}),
   };
@@ -1677,6 +1682,8 @@ function getKanbanFiltersFromUrl(requestUrl) {
     temperature: requestUrl.searchParams.get("temperature") || "",
     responsible: requestUrl.searchParams.get("responsible") || "",
     source: requestUrl.searchParams.get("source") || "",
+    paymentStatus: requestUrl.searchParams.get("paymentStatus") || "",
+    observationContains: requestUrl.searchParams.get("observationContains") || "",
     quickFilter: requestUrl.searchParams.get("quickFilter") || "",
     ...(Object.keys(dates).length ? { dates } : {}),
   };
@@ -1962,6 +1969,8 @@ function mergeLeadData(currentLead, incomingLead) {
     isLost,
     lostReason: shouldReplaceValue(currentLead.lostReason, incomingLead.lostReason) ? incomingLead.lostReason : currentLead.lostReason,
     commercialNotes: [currentLead.commercialNotes, incomingLead.commercialNotes].filter(Boolean).join(currentLead.commercialNotes && incomingLead.commercialNotes ? "\n" : ""),
+    paymentStatus: currentLead.paymentStatus || incomingLead.paymentStatus || "",
+    observation: [currentLead.observation, incomingLead.observation].filter(Boolean).join(currentLead.observation && incomingLead.observation ? "\n" : ""),
     status: isLost ? "Perdido" : mergedStatus,
     responsible: shouldReplaceValue(currentLead.responsible, incomingLead.responsible) ? incomingLead.responsible : currentLead.responsible,
     responsibleUserId: shouldReplaceValue(currentLead.responsibleUserId, incomingLead.responsibleUserId) ? incomingLead.responsibleUserId : currentLead.responsibleUserId,
@@ -3191,6 +3200,8 @@ const auditableLeadFields = [
   "isLost",
   "lostReason",
   "commercialNotes",
+  "paymentStatus",
+  "observation",
   "status",
   "responsible",
   "responsibleUserId",
@@ -4092,6 +4103,8 @@ const LEAD_EXPORT_HEADERS = [
   "Nao anuncia",
   "Motivo perda",
   "Observacao comercial",
+  "Status de pagamento",
+  "Observacao",
   "Servicos",
   "Mapa de servicos",
   ...customFieldLabels,
@@ -4137,6 +4150,8 @@ function buildLeadExportRow(row) {
     lead.doesNotAdvertise ? "Sim" : "Não",
     lead.lostReason,
     lead.commercialNotes,
+    lead.paymentStatus,
+    lead.observation,
     (lead.serviceInterests || []).join(" | "),
     JSON.stringify(lead.serviceStatusMap || {}),
     ...customFieldLabels.map((field) => lead.customFields?.[field] || ""),
