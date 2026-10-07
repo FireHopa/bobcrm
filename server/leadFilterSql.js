@@ -320,7 +320,11 @@ function addExternalOriginFilter(whereParts, sqlParams, filter, leadRef) {
 export function addLeadFilterClauses(whereParts, sqlParams, filters = {}, { alias = "", includeRelations = true, customFieldLabels = [] } = {}) {
   const normalized = normalizeLeadFilterPayload(filters);
   const prefix = alias ? `${alias}.` : "";
-  const leadRef = `${prefix}id`;
+  // Quando a consulta externa nao usa alias, `id` dentro dos EXISTS pode ser
+  // resolvido pelo MySQL como o `id` da propria tabela da subquery. Isso quebra
+  // a correlacao (ex.: lead_external_origins.lead_id = lead_external_origins.id)
+  // e fazia filtros de origem detalhada/webhook retornarem zero resultados.
+  const leadRef = alias ? `${alias}.id` : "leads.id";
 
   if (normalized.status) {
     whereParts.push(`${prefix}status = ?`);
