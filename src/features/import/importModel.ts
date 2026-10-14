@@ -107,7 +107,7 @@ export const statusOptions: LeadStatus[] = [
   "Perdido",
 ];
 
-export const temperatureOptions: LeadTemperature[] = ["", "Frio", "Morno", "Quente"];
+export const temperatureOptions: LeadTemperature[] = ["", "Frio", "Morno", "Quente", "Personalizado"];
 
 export const lostReasonOptions: LostReason[] = [
   "",
@@ -207,6 +207,7 @@ function normalizeTemperature(value: string): LeadTemperature {
   if (normalized.includes("quente")) return "Quente";
   if (normalized.includes("morno")) return "Morno";
   if (normalized.includes("frio")) return "Frio";
+  if (normalized.includes("personalizado")) return "Personalizado";
 
   return "";
 }

@@ -708,6 +708,7 @@ export const LeadTable = memo(function LeadTable({
                 <option value="Frio">Frio</option>
                 <option value="Morno">Morno</option>
                 <option value="Quente">Quente</option>
+                <option value="Personalizado">Personalizado</option>
               </select>
             </label>
 

@@ -20,7 +20,7 @@ export type LeadStatus =
   | "Fechado"
   | "Perdido";
 
-export type LeadTemperature = "" | "Frio" | "Morno" | "Quente";
+export type LeadTemperature = "" | "Frio" | "Morno" | "Quente" | "Personalizado";
 
 export type PaymentStatus = "" | "pago" | "pendente" | "cancelado";
 

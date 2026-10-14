@@ -43,7 +43,7 @@ const statusOptions: LeadStatus[] = [
   "Perdido",
 ];
 
-const temperatureOptions: LeadTemperature[] = ["", "Frio", "Morno", "Quente"];
+const temperatureOptions: LeadTemperature[] = ["", "Frio", "Morno", "Quente", "Personalizado"];
 
 const paymentStatusOptions: Array<{ value: PaymentStatus; label: string }> = [
   { value: "", label: "Selecione" },

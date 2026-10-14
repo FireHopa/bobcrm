@@ -71,7 +71,7 @@ export const leadStatusOptions: LeadStatus[] = [
   "Perdido",
 ];
 
-export const leadTemperatureOptions: LeadTemperature[] = ["", "Frio", "Morno", "Quente"];
+export const leadTemperatureOptions: LeadTemperature[] = ["", "Frio", "Morno", "Quente", "Personalizado"];
 
 export const paymentStatusOptions: Array<{ value: PaymentStatus; label: string }> = [
   { value: "", label: "Selecione" },
