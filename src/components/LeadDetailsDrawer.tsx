@@ -29,6 +29,9 @@ import type {
   TaskType,
 } from "../types/Lead";
 import {
+  ApiRequestError,
+  describeApiError,
+  fetchLeadByIdFromServer,
   addLeadNoteOnServer,
   completeTaskOnServer,
   createTaskOnServer,
@@ -45,6 +48,7 @@ import {
 } from "../utils/api";
 import { formatCurrencyBRL, formatDate, formatPhone, normalizeWebsite } from "../utils/formatters";
 import { TaskCompletionDialog, type TaskCompletionPayload } from "./TaskCompletionDialog";
+import { useConfirmationDialog } from "./ConfirmationDialog";
 import { LeadContactMenu, LeadOverflowMenu } from "./LeadActionMenus";
 import { BrDateInput } from "./BrDateInput";
 import {
@@ -68,6 +72,8 @@ import {
   ServiceStatusList,
 } from "../features/leads/LeadDetailsPanels";
 
+
+import { buildLeadDrawerPatch, rebaseLeadDraft, sameValue, leadFieldLabels, type LeadPatch } from "../features/leads/leadEditing";
 
 function toDateTimeLocalInput(value: string): string {
   const normalized = String(value || "").trim();
@@ -97,7 +103,7 @@ type LeadDetailsDrawerProps = {
   mode: DrawerMode;
   onClose: () => void;
   onChangeMode: (mode: DrawerMode) => void;
-  onSaveLead: (lead: Lead) => void;
+  onSaveLead: (patch: LeadPatch) => Promise<Lead>;
   onDeleteLead: (leadId: string) => void;
   currentUser: CRMUser | null;
   assignableUsers: CRMUser[];
@@ -145,11 +151,21 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
   const [selectedStageId, setSelectedStageId] = useState(lead?.pipelineStageId || "");
   const [isMovingStage, setIsMovingStage] = useState(false);
   const [stageError, setStageError] = useState("");
-  const preserveFormAfterStageMoveRef = useRef<{ leadId: string; formState: LeadDrawerFormState } | null>(null);
-  const preserveFormAfterTemperatureUpdateRef = useRef<{ leadId: string; formState: LeadDrawerFormState } | null>(null);
+  const baselineRef = useRef<Lead | null>(lead);
+  const formStateRef = useRef(formState);
+  formStateRef.current = formState;
+  const mutationInFlightRef = useRef(false);
+  const noteInFlightRef = useRef(false);
+  const notesReadVersionRef = useRef(0);
+  const tasksReadVersionRef = useRef(0);
+  const [isSavingLead, setIsSavingLead] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [pendingRemote, setPendingRemote] = useState<Lead | null>(null);
+  const [conflictFields, setConflictFields] = useState<string[]>([]);
   const [isSavingTemperature, setIsSavingTemperature] = useState(false);
   const [temperatureError, setTemperatureError] = useState("");
   const drawerRef = useRef<HTMLElement | null>(null);
+  const { confirm, confirmationDialog } = useConfirmationDialog();
 
   const canEditFull = hasPermission(currentUser, "edit_leads_full");
   const canEditSalesFields = hasPermission(currentUser, "edit_lead_sales_fields");
@@ -165,17 +181,50 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
     && canAssignTasks;
   const isEditing = mode === "edit" && canEditLead;
 
-  useEffect(() => {
-    const preservedForm = lead && preserveFormAfterTemperatureUpdateRef.current?.leadId === lead.id
-      ? preserveFormAfterTemperatureUpdateRef.current.formState
-      : lead && preserveFormAfterStageMoveRef.current?.leadId === lead.id
-        ? preserveFormAfterStageMoveRef.current.formState
-        : null;
-    setFormState(preservedForm || (lead ? createLeadDrawerFormState(lead) : null));
-    if (preservedForm) {
-      preserveFormAfterStageMoveRef.current = null;
-      preserveFormAfterTemperatureUpdateRef.current = null;
+  function receiveFullLead(incoming: Lead) {
+    const baseline = baselineRef.current;
+    const draft = formStateRef.current;
+    if (baseline && baseline.id === incoming.id && draft) {
+      if (baseline.updatedAt && incoming.updatedAt && incoming.updatedAt < baseline.updatedAt) return;
+      const rebased = rebaseLeadDraft(draft, baseline, incoming);
+      if (rebased.conflicts.length) {
+        setPendingRemote(incoming);
+        setConflictFields(rebased.conflicts);
+        return;
+      }
+      baselineRef.current = incoming;
+      formStateRef.current = rebased.draft;
+      setFormState(rebased.draft);
+    } else {
+      baselineRef.current = incoming;
+      const next = createLeadDrawerFormState(incoming);
+      formStateRef.current = next;
+      setFormState(next);
     }
+    setPendingRemote(null);
+    setConflictFields([]);
+    setSelectedStageId(incoming.pipelineStageId || "");
+  }
+
+  function resolveConflict(keepDraft: boolean) {
+    if (!pendingRemote || !baselineRef.current || !formStateRef.current) return;
+    const next = keepDraft
+      ? rebaseLeadDraft(formStateRef.current, baselineRef.current, pendingRemote).draft
+      : createLeadDrawerFormState(pendingRemote);
+    baselineRef.current = pendingRemote;
+    formStateRef.current = next;
+    setFormState(next);
+    setSelectedStageId(pendingRemote.pipelineStageId || "");
+    setPendingRemote(null);
+    setConflictFields([]);
+    setSaveError("");
+  }
+
+  useEffect(() => {
+    if (lead) receiveFullLead(lead);
+  }, [lead]);
+
+  useEffect(() => {
     setFormErrors({});
     setAuditEntries([]);
     setAuditError("");
@@ -201,42 +250,49 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
     setStageError("");
     setIsSavingTemperature(false);
     setTemperatureError("");
+  }, [lead?.id, currentUser?.id, currentUser?.role]);
 
+  // Refresh persisted auxiliary data independently from the unsaved composers.
+  useEffect(() => {
+    let cancelled = false;
     if (!lead) return;
+    const notesRequest = ++notesReadVersionRef.current;
+    const tasksRequest = ++tasksReadVersionRef.current;
 
     fetchLeadExternalOriginsFromServer(lead.id)
-      .then(setExternalOrigins)
-      .catch((error) => setExternalOriginsError(error instanceof Error ? error.message : "Não foi possível carregar as origens automáticas."));
+      .then((value) => { if (!cancelled) setExternalOrigins(value); })
+      .catch((error) => !cancelled && setExternalOriginsError(error instanceof Error ? error.message : "Não foi possível carregar as origens automáticas."));
 
     fetchLeadNotesFromServer(lead.id)
-      .then(setNotes)
-      .catch((error) => setNoteError(error instanceof Error ? error.message : "Não foi possível carregar as notas."));
+      .then((value) => { if (!cancelled && notesRequest === notesReadVersionRef.current) setNotes(value); })
+      .catch((error) => !cancelled && setNoteError(error instanceof Error ? error.message : "Não foi possível carregar as notas."));
 
     fetchTasksFromServer({ bucket: "all", leadId: lead.id, limit: 100 })
-      .then(setTasks)
-      .catch((error) => setTaskError(error instanceof Error ? error.message : "Não foi possível carregar as tarefas."));
+      .then((value) => { if (!cancelled && tasksRequest === tasksReadVersionRef.current) setTasks(value); })
+      .catch((error) => !cancelled && setTaskError(error instanceof Error ? error.message : "Não foi possível carregar as tarefas."));
 
     if (hasPermission(currentUser, "read_audit")) {
       fetchLeadAuditFromServer(lead.id)
-        .then(setAuditEntries)
-        .catch((error) => setAuditError(error instanceof Error ? error.message : "Não foi possível carregar o histórico."));
+        .then((value) => { if (!cancelled) setAuditEntries(value); })
+        .catch((error) => !cancelled && setAuditError(error instanceof Error ? error.message : "Não foi possível carregar o histórico."));
     }
 
     if (currentUser?.role === "consultor_vendas") {
       fetchLeadHandoffOriginFromServer(lead.id)
-        .then(setHandoffOrigin)
-        .catch((error) => setHandoffOriginError(error instanceof Error ? error.message : "Não foi possível identificar a origem do encaminhamento."));
+        .then((value) => { if (!cancelled) setHandoffOrigin(value); })
+        .catch((error) => !cancelled && setHandoffOriginError(error instanceof Error ? error.message : "Não foi possível identificar a origem do encaminhamento."));
     }
 
     if (currentUser?.role === "consultor_vendas" && canMoveLeadStage && lead.pipelineId) {
       fetchKanbanPipelines()
         .then((pipelines) => {
           const currentPipeline = pipelines.find((pipeline) => pipeline.id === lead.pipelineId);
-          setPipelineStages(currentPipeline?.stages || []);
+          if (!cancelled) setPipelineStages(currentPipeline?.stages || []);
         })
-        .catch((error) => setStageError(error instanceof Error ? error.message : "Não foi possível carregar as etapas deste funil."));
+        .catch((error) => !cancelled && setStageError(error instanceof Error ? error.message : "Não foi possível carregar as etapas deste funil."));
     }
-  }, [lead, currentUser]);
+    return () => { cancelled = true; };
+  }, [lead?.id, lead?.updatedAt, lead?.pipelineId, currentUser?.id, currentUser?.role, canMoveLeadStage]);
 
   useEffect(() => {
     if (!lead) return;
@@ -253,6 +309,17 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
       window.setTimeout(() => previousActiveElement?.focus(), 0);
     };
   }, [lead?.id]);
+
+  const hasUnsavedForm = Boolean(formState && baselineRef.current
+    && !sameValue(formState, createLeadDrawerFormState(baselineRef.current)));
+  const hasUnsavedInput = hasUnsavedForm || Boolean(noteBody.trim() || taskTitle.trim() || taskDueAt);
+
+  useEffect(() => {
+    if (!hasUnsavedInput && !isSavingLead && !isSavingTask && !isSavingNote) return;
+    const preventUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", preventUnload);
+    return () => window.removeEventListener("beforeunload", preventUnload);
+  }, [hasUnsavedInput, isSavingLead, isSavingTask, isSavingNote]);
 
   if (!lead || !formState) return null;
 
@@ -355,138 +422,148 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
     });
   }
 
-  function handleSave() {
-    if (!lead || !formState || !canEditLead) return;
-
-    const normalizedIsLost = formState.isLost || formState.status === "Perdido";
-    const errors = validateLeadDrawerForm(formState, canEditFull);
+  async function handleSave() {
+    const base = baselineRef.current;
+    const draft = formStateRef.current;
+    if (!base || !draft || !canEditLead || mutationInFlightRef.current || pendingRemote) return;
+    const errors = validateLeadDrawerForm(draft, canEditFull);
+    if (![draft.name, draft.email, draft.phone].some((value) => value.trim())) {
+      errors.identity = "Informe ao menos nome, e-mail ou telefone.";
+    }
     setFormErrors(errors);
     if (Object.keys(errors).length) return;
-
-    if (!canEditFull) {
-      if (![formState.name, formState.email, formState.phone].some((value) => value.trim())) {
-        setFormErrors((currentErrors) => ({ ...currentErrors, identity: "Informe ao menos nome, e-mail ou telefone." }));
-        return;
-      }
-      onSaveLead({
-        ...lead,
-        name: formState.name.trim(),
-        email: formState.email.trim(),
-        phone: formState.phone.trim(),
-        company: formState.company.trim(),
-        website: normalizeWebsite(formState.website),
-        instagram: formState.instagram.trim(),
-        temperature: formState.temperature,
-        expectedCloseAt: formState.expectedCloseAt,
-      });
+    const patch = buildLeadDrawerPatch(base, draft, canEditFull);
+    if (!Object.keys(patch.changes).length) {
+      onChangeMode("view");
       return;
     }
+    mutationInFlightRef.current = true;
+    setIsSavingLead(true);
+    setSaveError("");
+    try {
+      const savedLead = await onSaveLead(patch);
+      baselineRef.current = savedLead;
+      const savedForm = createLeadDrawerFormState(savedLead);
+      formStateRef.current = savedForm;
+      setFormState(savedForm);
+      setPendingRemote(null);
+      setConflictFields([]);
+      onChangeMode("view");
+    } catch (error) {
+      setSaveError(describeApiError(error, "Nao foi possivel salvar. Seu preenchimento foi mantido."));
+      if (error instanceof ApiRequestError && error.status === 409) {
+        try {
+          const current = await fetchLeadByIdFromServer(base.id);
+          receiveFullLead(current);
+          onKanbanLeadUpdated?.(current);
+        } catch {
+          // Keep the original draft AND the original version if refresh fails.
+        }
+      }
+    } finally {
+      mutationInFlightRef.current = false;
+      setIsSavingLead(false);
+    }
+  }
 
-    const serviceInterests = getServiceInterestsFromStatusMap(formState.serviceStatusMap);
+  async function requestClose() {
+    if (mutationInFlightRef.current || noteInFlightRef.current) return;
+    if (hasUnsavedInput && !await confirm({ title: "Descartar preenchimento?", message: "Ha informacoes ainda nao salvas.", detail: "Fechar o painel descartara esse preenchimento.", confirmLabel: "Descartar e fechar", tone: "danger" })) return;
+    onClose();
+  }
 
-    onSaveLead(getLeadWithSyncedAdvertisingFromServices({
-      ...lead,
-      name: formState.name.trim(),
-      email: formState.email.trim(),
-      phone: formState.phone.trim(),
-      company: formState.company.trim(),
-      website: normalizeWebsite(formState.website),
-      instagram: formState.instagram.trim(),
-      advertisesOnMeta: formState.advertisesOnMeta,
-      advertisesOnGoogle: formState.advertisesOnGoogle,
-      doesNotAdvertiseOnMeta: formState.doesNotAdvertiseOnMeta,
-      doesNotAdvertiseOnGoogle: formState.doesNotAdvertiseOnGoogle,
-      doesNotAdvertise: formState.doesNotAdvertise,
-      lastContactAt: formState.lastContactAt,
-      contactMadeAt: formState.contactMadeAt,
-      nextContactAt: formState.nextContactAt,
-      expectedCloseAt: formState.expectedCloseAt,
-      estimatedBudget: formState.estimatedBudget,
-      isLost: normalizedIsLost,
-      lostReason: formState.lostReason,
-      commercialNotes: formState.commercialNotes.trim(),
-      paymentStatus: formState.paymentStatus,
-      observation: formState.observation.trim(),
-      status: normalizedIsLost ? "Perdido" : formState.status,
-      responsible: formState.responsible.trim(),
-      responsibleUserId: formState.responsibleUserId,
-      temperature: formState.temperature,
-      pain: formState.pain.trim(),
-      source: formState.source,
-      serviceInterests,
-      serviceStatusMap: formState.serviceStatusMap,
-      customFields: normalizeCustomFields(formState.customFields),
-    }));
+  async function cancelEditing() {
+    if (mutationInFlightRef.current) return;
+    if (hasUnsavedForm && !await confirm({ title: "Cancelar edicao?", message: "Descartar as alteracoes nao salvas do cadastro?", confirmLabel: "Descartar alteracoes", tone: "danger" })) return;
+    const current = pendingRemote || baselineRef.current;
+    if (current) {
+      baselineRef.current = current;
+      const next = createLeadDrawerFormState(current);
+      formStateRef.current = next;
+      setFormState(next);
+    }
+    setPendingRemote(null);
+    setConflictFields([]);
+    setSaveError("");
+    setFormErrors({});
+    onChangeMode("view");
   }
 
   async function handleAddNote() {
     const normalizedBody = noteBody.trim();
-    if (!lead || !canAddNote || !normalizedBody || isSavingNote) return;
+    if (!lead || !canAddNote || !normalizedBody || noteInFlightRef.current || isSavingLead) return;
+    noteInFlightRef.current = true;
     setIsSavingNote(true);
     setNoteError("");
     try {
       const createdNote = await addLeadNoteOnServer(lead.id, normalizedBody);
-      setNotes((currentNotes) => [createdNote, ...currentNotes]);
-      setNoteBody("");
+      notesReadVersionRef.current += 1;
+      setNotes((currentNotes) => [createdNote, ...currentNotes.filter((note) => note.id !== createdNote.id)]);
+      setNoteBody((current) => current.trim() === normalizedBody ? "" : current);
     } catch (error) {
       setNoteError(error instanceof Error ? error.message : "Não foi possível registrar a nota.");
     } finally {
+      noteInFlightRef.current = false;
       setIsSavingNote(false);
     }
   }
 
   async function handleConsultantStageChange(targetStageId: string) {
-    if (!lead || !formState || !lead.pipelineId || !canMoveLeadStage || isMovingStage || targetStageId === selectedStageId) return;
+    const base = baselineRef.current;
+    if (!base?.pipelineId || !canMoveLeadStage || mutationInFlightRef.current || pendingRemote || targetStageId === selectedStageId) return;
     const previousStageId = selectedStageId;
+    mutationInFlightRef.current = true;
     setSelectedStageId(targetStageId);
     setIsMovingStage(true);
     setStageError("");
-    preserveFormAfterStageMoveRef.current = { leadId: lead.id, formState: { ...formState } };
-
     try {
       const movedLead = await moveKanbanCard({
-        leadId: lead.id,
-        pipelineId: lead.pipelineId,
+        leadId: base.id,
+        pipelineId: base.pipelineId,
         stageId: targetStageId,
-        expectedUpdatedAt: lead.updatedAt,
+        expectedUpdatedAt: base.updatedAt,
       });
-      setSelectedStageId(movedLead.pipelineStageId || targetStageId);
+      // Rebase against CURRENT typing, never a snapshot captured before the request.
+      receiveFullLead(movedLead);
       onKanbanLeadUpdated?.(movedLead);
-      fetchTasksFromServer({ bucket: "all", leadId: lead.id, limit: 100 })
-        .then(setTasks)
-        .catch(() => undefined);
+
     } catch (error) {
-      preserveFormAfterStageMoveRef.current = null;
       setSelectedStageId(previousStageId);
-      setStageError(error instanceof Error ? error.message : "Não foi possível mover o lead para a etapa selecionada.");
+      setStageError(describeApiError(error, "Nao foi possivel mover o lead."));
+      if (error instanceof ApiRequestError && error.status === 409) {
+        try { const fresh = await fetchLeadByIdFromServer(base.id); receiveFullLead(fresh); onKanbanLeadUpdated?.(fresh); } catch { /* Preserve draft. */ }
+      }
     } finally {
+      mutationInFlightRef.current = false;
       setIsMovingStage(false);
     }
   }
 
   async function handleConsultantTemperatureChange(temperature: LeadTemperature) {
-    if (!lead || !formState || !canEditSalesFields || canEditFull || isSavingTemperature) return;
-    const previousTemperature = formState.temperature;
-    const nextFormState = { ...formState, temperature };
-    setFormState(nextFormState);
+    const base = baselineRef.current;
+    const draft = formStateRef.current;
+    if (!base || !draft || !canEditSalesFields || canEditFull || mutationInFlightRef.current || pendingRemote) return;
+    const previousTemperature = draft.temperature;
+    mutationInFlightRef.current = true;
+    setFormState((current) => current ? { ...current, temperature } : current);
     setIsSavingTemperature(true);
     setTemperatureError("");
-    preserveFormAfterTemperatureUpdateRef.current = { leadId: lead.id, formState: nextFormState };
-
     try {
-      const updatedLead = await updateLeadTemperatureOnServer(lead.id, temperature);
+      const updatedLead = await updateLeadTemperatureOnServer(base.id, temperature);
+      receiveFullLead(updatedLead);
       onKanbanLeadUpdated?.(updatedLead);
     } catch (error) {
-      preserveFormAfterTemperatureUpdateRef.current = null;
-      setFormState((currentState) => currentState ? { ...currentState, temperature: previousTemperature } : currentState);
-      setTemperatureError(error instanceof Error ? error.message : "Não foi possível alterar a temperatura do lead.");
+      setFormState((current) => current ? { ...current, temperature: previousTemperature } : current);
+      setTemperatureError(describeApiError(error, "Nao foi possivel alterar a temperatura."));
     } finally {
+      mutationInFlightRef.current = false;
       setIsSavingTemperature(false);
     }
   }
 
   async function handleCreateTask() {
-    if (!lead || !canManageTasks || !taskTitle.trim() || !taskDueAt || isSavingTask) return;
+    if (!lead || !canManageTasks || !taskTitle.trim() || !taskDueAt || mutationInFlightRef.current) return;
+    mutationInFlightRef.current = true;
     setIsSavingTask(true);
     setTaskError("");
     try {
@@ -498,25 +575,30 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
         type: taskType,
         priority: taskPriority,
       });
+      tasksReadVersionRef.current += 1;
       setTasks((currentTasks) => [
         ...currentTasks.filter((task) => task.id !== createdTask.id),
         createdTask,
       ].sort((a, b) => a.dueAt.localeCompare(b.dueAt)));
-      setTaskTitle("");
-      setTaskDueAt("");
+      setTaskTitle((current) => current === taskTitle ? "" : current);
+      setTaskDueAt((current) => current === taskDueAt ? "" : current);
       onTaskChanged?.();
     } catch (error) {
       setTaskError(error instanceof Error ? error.message : "Não foi possível criar a tarefa.");
     } finally {
+      mutationInFlightRef.current = false;
       setIsSavingTask(false);
     }
   }
 
   async function completeTask(task: CRMTask, payload: TaskCompletionPayload) {
+    if (mutationInFlightRef.current) throw new Error("Aguarde a operacao atual terminar.");
+    mutationInFlightRef.current = true;
     setIsSavingTask(true);
     setTaskError("");
     try {
       const response = await completeTaskOnServer(task.id, payload);
+      tasksReadVersionRef.current += 1;
       setTasks((currentTasks) => {
         const withoutCompleted = currentTasks.map((item) => item.id === task.id ? response.task : item);
         return response.nextTask
@@ -529,6 +611,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
       setTaskError(message);
       throw new Error(message);
     } finally {
+      mutationInFlightRef.current = false;
       setIsSavingTask(false);
     }
   }
@@ -536,7 +619,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
   function handleDrawerKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
     if (event.key === "Escape" && !taskToComplete) {
       event.preventDefault();
-      onClose();
+      requestClose();
       return;
     }
     if (event.key !== "Tab") return;
@@ -627,7 +710,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
           <label className="field"><span>Tipo</span><select value={taskType} onChange={(event) => setTaskType(event.target.value as TaskType)}><option value="follow_up">Follow-up</option><option value="ligacao">Ligação</option><option value="whatsapp">WhatsApp</option><option value="email">E-mail</option><option value="reuniao">Reunião</option><option value="outro">Outro</option></select></label>
           <label className="field"><span>Prioridade</span><select value={taskPriority} onChange={(event) => setTaskPriority(event.target.value as TaskPriority)}><option value="baixa">Baixa</option><option value="normal">Normal</option><option value="alta">Alta</option><option value="urgente">Urgente</option></select></label>
           {canAssignTasks ? <label className="field"><span>Responsável</span><select value={taskResponsibleUserId} onChange={(event) => setTaskResponsibleUserId(event.target.value)} required><option value="">Selecione</option>{assignableUsers.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label> : null}
-          <button className="primaryButton" type="button" onClick={() => void handleCreateTask()} disabled={isSavingTask || !taskTitle.trim() || !taskDueAt}>{isSavingTask ? "Salvando..." : "Criar tarefa"}</button>
+          <button className="primaryButton" type="button" onClick={() => void handleCreateTask()} disabled={isSavingTask || isSavingLead || isSavingTemperature || isMovingStage || !taskTitle.trim() || !taskDueAt}>{isSavingTask ? "Salvando..." : "Criar tarefa"}</button>
         </div>
       ) : null}
       {taskError ? <p className="fieldError">{taskError}</p> : null}
@@ -635,7 +718,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
         {tasks.length ? tasks.map((task) => (
           <article className="drawerTaskItemV42" key={task.id}>
             <div><strong>{task.title}</strong><span>{task.responsibleName || "Sem responsável"} • {task.dueAt ? new Date(task.dueAt.length === 10 ? `${task.dueAt}T12:00:00` : task.dueAt).toLocaleString("pt-BR") : "Sem data"}</span>{task.result ? <small>Resultado: {task.result}</small> : null}</div>
-            <div><span className={`badge ${task.status === "completed" ? "badgeGreen" : task.priority === "urgente" ? "badgeRed" : task.priority === "alta" ? "badgeYellow" : "badgeBlue"}`}>{task.status === "completed" ? "Concluída" : task.priority}</span>{task.status === "pending" ? <button className="secondaryButton" type="button" onClick={() => setTaskToComplete(task)} disabled={isSavingTask}>Concluir</button> : null}</div>
+            <div><span className={`badge ${task.status === "completed" ? "badgeGreen" : task.priority === "urgente" ? "badgeRed" : task.priority === "alta" ? "badgeYellow" : "badgeBlue"}`}>{task.status === "completed" ? "Concluída" : task.priority}</span>{task.status === "pending" ? <button className="secondaryButton" type="button" onClick={() => setTaskToComplete(task)} disabled={isSavingTask || isSavingLead || isSavingTemperature || isMovingStage}>Concluir</button> : null}</div>
           </article>
         )) : <p className="mutedText">Nenhuma tarefa registrada para este lead.</p>}
       </div>
@@ -643,7 +726,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
   );
 
   return (
-    <div className="drawerOverlay" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target && !taskToComplete) onClose(); }}>
+    <div className="drawerOverlay" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target && !taskToComplete) requestClose(); }}>
       <aside ref={drawerRef} className="leadDrawer" role="dialog" aria-modal="true" aria-labelledby="lead-drawer-title" tabIndex={-1} onKeyDown={handleDrawerKeyDown}>
         <header className="leadDrawerHeader">
           <div>
@@ -651,7 +734,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
             <h2 id="lead-drawer-title">{lead.name || lead.phone || "Lead sem nome"}</h2>
             <p>{lead.company || "Empresa não informada"}</p>
           </div>
-          <button className="drawerCloseButton" type="button" onClick={onClose} aria-label="Fechar painel">×</button>
+          <button className="drawerCloseButton" type="button" onClick={requestClose} disabled={isSavingLead || isSavingTemperature || isMovingStage || isSavingTask || isSavingNote} aria-label="Fechar painel">×</button>
         </header>
 
         <div className="drawerQuickStats">
@@ -697,7 +780,15 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
 
         {isEditing ? (
           <form className="drawerEditForm" onSubmit={(event) => event.preventDefault()} noValidate>
-            {Object.keys(formErrors).length ? (
+            <fieldset disabled={isSavingLead} style={{ display: "contents" }}>
+            {saveError ? <div className="formValidationSummary" role="alert"><strong>As alteracoes nao foram confirmadas.</strong><span>{saveError}</span><span>Seu preenchimento foi mantido. Revise e tente salvar novamente.</span></div> : null}
+            {pendingRemote ? <section className="formValidationSummary" role="alert">
+              <strong>Outro salvamento alterou campos que voce esta editando.</strong>
+              <span>Conflitos: {conflictFields.map((key) => leadFieldLabels[key] || key).join(", ")}. Escolha quais valores usar antes de salvar. Manter seu preenchimento substituira esses valores ao salvar novamente.</span>
+              <button type="button" className="secondaryButton" onClick={() => resolveConflict(true)}>Manter meu preenchimento</button>
+              <button type="button" className="secondaryButton" onClick={() => resolveConflict(false)}>Usar valores do servidor</button>
+            </section> : null}
+            {Object.values(formErrors).some(Boolean) ? (
               <div className="formValidationSummary" role="alert">
                 <strong>Revise os campos destacados.</strong>
                 <span>As alterações ainda não foram salvas.</span>
@@ -800,7 +891,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
                     <select
                       value={formState.temperature}
                       onChange={(event) => void handleConsultantTemperatureChange(event.target.value as LeadTemperature)}
-                      disabled={isSavingTemperature}
+                      disabled={isSavingTemperature || isSavingLead || isMovingStage || isSavingTask || Boolean(pendingRemote)}
                     >
                       {leadTemperatureOptions.map((temperature) => <option key={temperature || "empty"} value={temperature}>{temperature || "Selecione"}</option>)}
                     </select>
@@ -811,7 +902,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
                   {canMoveLeadStage && lead.pipelineId ? (
                     <label className="field">
                       <span>Etapa do lead</span>
-                      <select value={selectedStageId} onChange={(event) => void handleConsultantStageChange(event.target.value)} disabled={isMovingStage || !pipelineStages.length}>
+                      <select value={selectedStageId} onChange={(event) => void handleConsultantStageChange(event.target.value)} disabled={isMovingStage || isSavingLead || isSavingTemperature || isSavingTask || Boolean(pendingRemote) || !pipelineStages.length}>
                         {!pipelineStages.length ? <option value={selectedStageId}>{isMovingStage ? "Movendo..." : "Carregando etapas..."}</option> : null}
                         {pipelineStages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
                       </select>
@@ -825,6 +916,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
             )}
             {tasksSection}
             {notesSection}
+            </fieldset>
           </form>
         ) : (
           <div className="drawerViewContent">
@@ -859,7 +951,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
 
         <footer className="leadDrawerFooter">
           {isEditing ? (
-            <><button className="secondaryButton" type="button" onClick={() => onChangeMode("view")}>Cancelar</button><button className="primaryButton" type="button" onClick={handleSave}>Salvar alterações</button></>
+            <><button className="secondaryButton" type="button" onClick={cancelEditing} disabled={isSavingLead || isSavingTemperature || isMovingStage || isSavingTask}>Cancelar</button><button className="primaryButton" type="button" onClick={() => void handleSave()} disabled={isSavingLead || isSavingTemperature || isMovingStage || isSavingTask || Boolean(pendingRemote)}>{isSavingLead ? "Salvando..." : "Salvar alterações"}</button></>
           ) : (
             <>
               <LeadContactMenu
@@ -893,6 +985,7 @@ export const LeadDetailsDrawer = memo(function LeadDetailsDrawer({
         </footer>
       </aside>
 
+      {confirmationDialog}
       <TaskCompletionDialog
         task={taskToComplete}
         onClose={() => setTaskToComplete(null)}

@@ -227,6 +227,7 @@ import {
   getLeadListProjection,
   qualifyLeadFields,
 } from "./domains/leads/leadProjections.js";
+import { prepareLeadPatch } from "./domains/leads/leadPatch.js";
 import { UPSERT_LEAD_SQL } from "./domains/leads/leadPersistenceSql.js";
 import {
   addLeadToImportDuplicateIndex,
@@ -7608,20 +7609,21 @@ async function handleApi(request, response, requestUrl) {
     return;
   }
 
-  if (leadMatch && method === "PUT") {
+  if (leadMatch && (method === "PUT" || method === "PATCH")) {
     requireAnyPermission(currentUser, ["edit_leads_full", "edit_lead_sales_fields"]);
     const leadId = decodeURIComponent(leadMatch[1]);
     const body = await readRequestBody(request);
     const rawLead = body.lead || body;
-    const lead = normalizeLead({ ...rawLead, id: leadId });
-
     const savedLead = await withTransaction(async (client, transactionContext) => {
       await acquireLeadIdentityMutationLock(client, transactionContext);
       const accessContext = await assertLeadAccess(currentUser, leadId, { includeDeleted: true, forUpdate: true }, client);
       const receipt = await claimMutationReceipt({ execute, queryRows, client, actorId: currentUser.id, operation: "lead:update", requestId: body.requestId, resourceId: leadId, nowIso });
       if (receipt.replay) return receipt.response;
       const before = await getLeadById(leadId, { includeDeleted: true }, client);
-      assertResourceFresh(rawLead.updatedAt, before?.updatedAt, "lead");
+      const lead = method === "PATCH"
+        ? prepareLeadPatch(before, body, auditableLeadFields)
+        : normalizeLead({ ...before, ...rawLead, id: leadId });
+      if (method === "PUT") assertResourceFresh(rawLead.updatedAt, before?.updatedAt, "lead");
       const changedFields = getChangedLeadFields(before, lead, auditableLeadFields);
       assertLeadFieldUpdateAllowed(currentUser, changedFields);
       assertAssignmentUsesHandoff({ changedFields, lead });

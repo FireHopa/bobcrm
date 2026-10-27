@@ -1,4 +1,5 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
+import { describeApiError } from "../utils/api";
 import { createEmptyCustomFields } from "../constants/customFields";
 import {
   createEmptyServiceStatusMap,
@@ -91,7 +92,7 @@ type FormState = {
 };
 
 type LeadFormProps = {
-  onCreateLead: (lead: Lead) => void;
+  onCreateLead: (lead: Lead) => Promise<Lead>;
 };
 
 type FormTab = "contact" | "commercial" | "services";
@@ -131,6 +132,11 @@ export function LeadForm({ onCreateLead }: LeadFormProps) {
   const [formState, setFormState] = useState<FormState>(initialFormState);
   const [activeTab, setActiveTab] = useState<FormTab>("contact");
   const [formErrors, setFormErrors] = useState<FormErrors>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const submittingRef = useRef(false);
+  // Retain the exact create payload across retries, including id and createdAt.
+  const pendingCreateRef = useRef<{ fingerprint: string; lead: Lead } | null>(null);
 
   function updateField<Field extends keyof FormState>(field: Field, value: FormState[Field]) {
     setFormState((currentState) => ({
@@ -208,6 +214,9 @@ export function LeadForm({ onCreateLead }: LeadFormProps) {
   }
 
   function resetForm() {
+    if (submittingRef.current) return;
+    pendingCreateRef.current = null;
+    setSubmitError("");
     setFormState(initialFormState);
     setFormErrors({});
     setActiveTab("contact");
@@ -225,8 +234,9 @@ export function LeadForm({ onCreateLead }: LeadFormProps) {
     return errors;
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (submittingRef.current) return;
 
     const errors = validateForm();
     setFormErrors(errors);
@@ -275,8 +285,24 @@ export function LeadForm({ onCreateLead }: LeadFormProps) {
       createdAt: new Date().toISOString(),
     };
 
-    onCreateLead(lead);
-    resetForm();
+    const fingerprint = JSON.stringify(formState);
+    if (pendingCreateRef.current?.fingerprint !== fingerprint) {
+      pendingCreateRef.current = { fingerprint, lead };
+    }
+    submittingRef.current = true;
+    setIsSubmitting(true);
+    setSubmitError("");
+    try {
+      await onCreateLead(pendingCreateRef.current.lead);
+      pendingCreateRef.current = null;
+      submittingRef.current = false;
+      resetForm();
+    } catch (error) {
+      setSubmitError(describeApiError(error, "Nao foi possivel criar o lead. Seu preenchimento foi mantido."));
+    } finally {
+      submittingRef.current = false;
+      setIsSubmitting(false);
+    }
   }
 
   return (
@@ -290,7 +316,9 @@ export function LeadForm({ onCreateLead }: LeadFormProps) {
       </div>
 
       <form onSubmit={handleSubmit} className="leadForm leadFormV33 leadFormV34" noValidate>
-        {Object.keys(formErrors).length ? (
+        <fieldset disabled={isSubmitting} style={{ display: "contents" }}>
+        {submitError ? <div className="formValidationSummary" role="alert"><strong>O cadastro nao foi confirmado.</strong><span>{submitError}</span><span>Os dados foram mantidos para uma nova tentativa.</span></div> : null}
+        {Object.values(formErrors).some(Boolean) ? (
           <div className="formValidationSummary" role="alert">
             <strong>Revise os campos destacados.</strong>
             <span>O lead ainda não foi salvo.</span>
@@ -466,10 +494,11 @@ export function LeadForm({ onCreateLead }: LeadFormProps) {
         </section>
 
         <div className="buttonRow formStickyActionsV33 formStickyActionsV34">
-          <button className="primaryButton" type="submit">Salvar lead</button>
+          <button className="primaryButton" type="submit" disabled={isSubmitting}>{isSubmitting ? "Salvando..." : "Salvar lead"}</button>
           <button className="secondaryButton" type="button" onClick={resetForm}>Limpar</button>
           <button className="ghostButton" type="button" onClick={resetForm}>Cancelar</button>
         </div>
+        </fieldset>
       </form>
     </aside>
   );

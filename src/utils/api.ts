@@ -1073,6 +1073,17 @@ export async function updateLeadOnServer(lead: Lead): Promise<Lead> {
   return normalizeLeadFromApi(savedLead);
 }
 
+export async function patchLeadOnServer(payload: import("../features/leads/leadEditing").LeadPatch): Promise<Lead> {
+  const { id, ...body } = payload;
+  const key = mutationKey("lead:patch", payload);
+  const savedLead = await requestApi<Partial<Lead>>(`/api/leads/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ ...body, requestId: stableMutationId(key) }),
+  });
+  finishMutation(key);
+  return normalizeLeadFromApi(savedLead);
+}
+
 export async function updateLeadTemperatureOnServer(leadId: string, temperature: LeadTemperature): Promise<Lead> {
   const payload = { leadId, temperature };
   const key = mutationKey("lead:temperature", payload);

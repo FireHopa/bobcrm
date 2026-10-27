@@ -25,13 +25,15 @@ import {
   importLeadBatchToServer,
   importLeadsToServer,
   logoutFromServer,
-  updateLeadOnServer,
+  patchLeadOnServer,
+  describeApiError,
   type FetchLeadsParams,
   type LeadFilterOptions,
   type LeadPagination,
   type LeadSummary,
   type OpportunitySummary,
 } from "./utils/api";
+import type { LeadPatch } from "./features/leads/leadEditing";
 import { type ImportDeduplicationReport } from "./utils/commercial";
 import { isPastDate, isToday } from "./utils/formatters";
 import { clearLegacyStoredLeads, getLegacyStoredLeads } from "./utils/storage";
@@ -108,7 +110,7 @@ export default function App() {
   const [leadFilterOptions, setLeadFilterOptions] = useState<LeadFilterOptions>({ owners: [], sources: [] });
   const [assignableUsers, setAssignableUsers] = useState<CRMUser[]>([]);
   const [activeTab, setActiveTab] = useState<ActiveTab>("operation");
-  const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [handoffLead, setHandoffLead] = useState<Lead | null>(null);
   const [drawerMode, setDrawerMode] = useState<DrawerMode>("view");
   const [isLoading, setIsLoading] = useState(true);
@@ -127,10 +129,10 @@ export default function App() {
   const leadListRequestController = useRef<AbortController | null>(null);
   const { confirm, confirmationDialog } = useConfirmationDialog();
 
-  const selectedLead = useMemo(
-    () => leads.find((lead) => lead.id === selectedLeadId) || null,
-    [leads, selectedLeadId],
-  );
+  // Full detail is never sourced from the paginated/list projection.
+  const selectedLeadRef = useRef<Lead | null>(null);
+  const openLeadRequestRef = useRef(0);
+  useEffect(() => { selectedLeadRef.current = selectedLead; }, [selectedLead]);
 
   useEffect(() => {
     leadsRef.current = leads;
@@ -200,7 +202,8 @@ export default function App() {
     setLeads([]);
     setLeadFilterOptions({ owners: [], sources: [] });
     setAssignableUsers([]);
-    setSelectedLeadId(null);
+    openLeadRequestRef.current += 1;
+    setSelectedLead(null);
     setHandoffLead(null);
     setActiveTab("operation");
   }, []);
@@ -254,10 +257,13 @@ export default function App() {
     setLeads((currentLeads) =>
       currentLeads.map((lead) => (lead.id === updatedLead.id ? updatedLead : lead)),
     );
+    setSelectedLead((current) => current?.id === updatedLead.id
+      && (!current.updatedAt || !updatedLead.updatedAt || updatedLead.updatedAt >= current.updatedAt)
+      ? updatedLead : current);
   }, []);
 
   async function createLead(lead: Lead) {
-    if (!hasPermission(currentUser, "create_leads")) return;
+    if (!hasPermission(currentUser, "create_leads")) throw new Error("Sem permissao para criar leads.");
     setIsSaving(true);
     setApiError("");
 
@@ -265,15 +271,18 @@ export default function App() {
       const savedLead = await createLeadOnServer(lead);
       setLeads((currentLeads) => [savedLead, ...currentLeads.filter((currentLead) => currentLead.id !== savedLead.id)]);
       setActiveTab("leads");
-      setSelectedLeadId(savedLead.id);
+      setSelectedLead(savedLead);
       setDrawerMode("view");
       setServerStatus("online");
       setKanbanRefreshVersion((version) => version + 1);
       setOpportunityRefreshVersion((version) => version + 1);
       void refreshLeadSummary();
+      notifyAction("Lead salvo no servidor.");
+      return savedLead;
     } catch (caughtError) {
-      setServerStatus("offline");
-      setApiError(caughtError instanceof Error ? caughtError.message : "Não foi possível salvar o lead no servidor.");
+      setServerStatus(caughtError instanceof ApiRequestError ? "online" : "offline");
+      setApiError(describeApiError(caughtError, "Nao foi possivel salvar o lead no servidor."));
+      throw caughtError;
     } finally {
       setIsSaving(false);
     }
@@ -380,46 +389,48 @@ export default function App() {
     setOpportunityRefreshVersion((version) => version + 1);
   }
 
-  const updateLead = useCallback(async (updatedLead: Lead) => {
-    if (!hasPermission(currentUser, "edit_leads_full") && !hasPermission(currentUser, "edit_lead_sales_fields")) return;
+  const updateLead = useCallback(async (patch: LeadPatch): Promise<Lead> => {
+    if (!hasPermission(currentUser, "edit_leads_full") && !hasPermission(currentUser, "edit_lead_sales_fields")) {
+      throw new Error("Sem permissao para editar este lead.");
+    }
     setIsSaving(true);
     setApiError("");
-    replaceLeadInState(updatedLead);
-
     try {
-      const savedLead = await updateLeadOnServer(updatedLead);
+      const savedLead = await patchLeadOnServer(patch);
       replaceLeadInState(savedLead);
-      setSelectedLeadId(savedLead.id);
-      setDrawerMode("view");
       setServerStatus("online");
       setKanbanRefreshVersion((version) => version + 1);
       setOpportunityRefreshVersion((version) => version + 1);
       void refreshLeadSummary();
+      notifyAction("Alteracoes salvas no servidor.");
+      return savedLead;
     } catch (caughtError) {
-      setServerStatus("offline");
-      setApiError(caughtError instanceof Error ? caughtError.message : "Não foi possível atualizar o lead no servidor.");
-      await loadLeadsFromServer();
+      setServerStatus(caughtError instanceof ApiRequestError ? "online" : "offline");
+      setApiError(describeApiError(caughtError, "Nao foi possivel atualizar o lead no servidor."));
+      // The drawer owns its draft. Do not replace it or clear this error on failure.
+      throw caughtError;
     } finally {
       setIsSaving(false);
     }
-  }, [currentUser, loadLeadsFromServer, refreshLeadSummary, replaceLeadInState]);
+  }, [currentUser, refreshLeadSummary, replaceLeadInState]);
 
   const updateLeadSilently = useCallback(async (updatedLead: Lead) => {
     if (!hasPermission(currentUser, "edit_leads_full")) return;
     setApiError("");
-    replaceLeadInState(updatedLead);
-
     try {
       const currentLead = await fetchLeadByIdFromServer(updatedLead.id);
-      const savedLead = await updateLeadOnServer({
-        ...currentLead,
-        serviceStatusMap: updatedLead.serviceStatusMap,
-        serviceInterests: updatedLead.serviceInterests,
-        advertisesOnMeta: updatedLead.advertisesOnMeta,
-        advertisesOnGoogle: updatedLead.advertisesOnGoogle,
-        doesNotAdvertiseOnMeta: updatedLead.doesNotAdvertiseOnMeta,
-        doesNotAdvertiseOnGoogle: updatedLead.doesNotAdvertiseOnGoogle,
-        doesNotAdvertise: updatedLead.doesNotAdvertise,
+      const savedLead = await patchLeadOnServer({
+        id: currentLead.id,
+        expectedUpdatedAt: currentLead.updatedAt || "",
+        changes: {
+          serviceStatusMap: updatedLead.serviceStatusMap,
+          serviceInterests: updatedLead.serviceInterests,
+          advertisesOnMeta: updatedLead.advertisesOnMeta,
+          advertisesOnGoogle: updatedLead.advertisesOnGoogle,
+          doesNotAdvertiseOnMeta: updatedLead.doesNotAdvertiseOnMeta,
+          doesNotAdvertiseOnGoogle: updatedLead.doesNotAdvertiseOnGoogle,
+          doesNotAdvertise: updatedLead.doesNotAdvertise,
+        },
       });
       replaceLeadInState(savedLead);
       setServerStatus("online");
@@ -427,11 +438,10 @@ export default function App() {
       setOpportunityRefreshVersion((version) => version + 1);
       void refreshLeadSummary();
     } catch (caughtError) {
-      setServerStatus("offline");
-      setApiError(caughtError instanceof Error ? caughtError.message : "Não foi possível salvar a alteração no mapa.");
-      await loadLeadsFromServer();
+      setServerStatus(caughtError instanceof ApiRequestError ? "online" : "offline");
+      setApiError(describeApiError(caughtError, "Nao foi possivel salvar a alteracao no mapa."));
     }
-  }, [currentUser, loadLeadsFromServer, refreshLeadSummary, replaceLeadInState]);
+  }, [currentUser, refreshLeadSummary, replaceLeadInState]);
 
   const deleteLead = useCallback(async (leadId: string) => {
     if (!hasPermission(currentUser, "delete_leads")) {
@@ -453,7 +463,7 @@ export default function App() {
 
     const previousLeads = currentLeads;
     setLeads((loadedLeads) => loadedLeads.filter((lead) => lead.id !== leadId));
-    setSelectedLeadId((currentLeadId) => currentLeadId === leadId ? null : currentLeadId);
+    setSelectedLead((current) => current?.id === leadId ? null : current);
 
     setIsSaving(true);
     setApiError("");
@@ -497,22 +507,24 @@ export default function App() {
   }
 
   const openLead = useCallback(async (leadId: string, mode: DrawerMode) => {
+    const request = ++openLeadRequestRef.current;
     try {
       const lead = await fetchLeadByIdFromServer(leadId);
-      setLeads((currentLeads) => currentLeads.some((currentLead) => currentLead.id === leadId)
-        ? currentLeads.map((currentLead) => currentLead.id === leadId ? lead : currentLead)
+      if (request !== openLeadRequestRef.current) return;
+      setLeads((currentLeads) => currentLeads.some((item) => item.id === leadId)
+        ? currentLeads.map((item) => item.id === leadId ? lead : item)
         : [lead, ...currentLeads]);
+      setSelectedLead(lead);
+      setDrawerMode(mode);
     } catch (caughtError) {
-      setApiError(caughtError instanceof Error ? caughtError.message : "Não foi possível abrir o lead.");
-      return;
+      if (request !== openLeadRequestRef.current) return;
+      setApiError(describeApiError(caughtError, "Nao foi possivel abrir o lead."));
     }
-
-    setSelectedLeadId(leadId);
-    setDrawerMode(mode);
   }, []);
 
   const closeDrawer = useCallback(() => {
-    setSelectedLeadId(null);
+    openLeadRequestRef.current += 1;
+    setSelectedLead(null);
     setDrawerMode("view");
   }, []);
 
@@ -594,7 +606,13 @@ export default function App() {
   const handleOperationalDataChanged = useCallback(() => {
     void loadLeadsFromServer({ includeSummary: false }, { keepScreen: true });
     void refreshLeadSummary();
-  }, [loadLeadsFromServer, refreshLeadSummary]);
+    const opened = selectedLeadRef.current;
+    if (opened) {
+      void fetchLeadByIdFromServer(opened.id).then(replaceLeadInState).catch((error) => {
+        setApiError(describeApiError(error, "Nao foi possivel atualizar o detalhe do lead. Seu rascunho foi mantido."));
+      });
+    }
+  }, [loadLeadsFromServer, refreshLeadSummary, replaceLeadInState]);
 
   const handleRefreshLeads = useCallback(() => (
     loadLeadsFromServer({ includeSummary: false }, { keepScreen: true })
@@ -955,6 +973,7 @@ export default function App() {
           selectedLead ? (
             <Suspense fallback={<div className="syncBar" role="status">Abrindo lead...</div>}>
               <LeadDetailsDrawer
+                key={selectedLead.id}
                 lead={selectedLead}
                 mode={drawerMode}
                 currentUser={currentUser}
